@@ -16,7 +16,18 @@ function resolveSingle(srcUrl, target) {
     return [{ url, type: 'image', filename: id ? `post_${id}` : null }];
   }
 
-  const video = target?.closest('video') || (target?.tagName === 'VIDEO' ? target : null);
+  // If click landed on overlay, find nearest media
+  const nearest = SocialSnag.findNearestMedia(target);
+  if (nearest?.tagName === 'IMG') {
+    const upgraded = upgradeUrl(nearest.src);
+    if (upgraded) {
+      const id = extractPostId();
+      return [{ url: upgraded, type: 'image', filename: id ? `post_${id}` : null }];
+    }
+  }
+
+  const video = nearest?.tagName === 'VIDEO' ? nearest
+    : target?.closest('video') || (target?.tagName === 'VIDEO' ? target : null);
   if (video) {
     const src = video.src || video.querySelector('source')?.src;
     if (src && !src.startsWith('blob:')) {

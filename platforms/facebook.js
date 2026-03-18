@@ -16,6 +16,16 @@ function resolveSingle(srcUrl, target) {
     return [{ url, type: 'image', filename: id ? `photo_${id}` : null }];
   }
 
+  // If click landed on overlay, find nearest media
+  const nearest = SocialSnag.findNearestMedia(target);
+  if (nearest?.tagName === 'IMG') {
+    const upgraded = upgradeUrl(nearest.src);
+    if (upgraded) {
+      const id = extractPhotoId(nearest.src);
+      return [{ url: upgraded, type: 'image', filename: id ? `photo_${id}` : null }];
+    }
+  }
+
   const videoUrl = findVideoUrl(target);
   if (videoUrl) {
     return [{ url: videoUrl, type: 'video', filename: null }];

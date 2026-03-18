@@ -22,12 +22,12 @@ chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.create({
     id: MENU_DOWNLOAD_SINGLE,
     title: 'SocialSnag: Download this (HD)',
-    contexts: ['image', 'video'],
+    contexts: ['page', 'image', 'video', 'link'],
   });
   chrome.contextMenus.create({
     id: MENU_DOWNLOAD_ALL,
     title: 'SocialSnag: Download all from post',
-    contexts: ['image', 'video'],
+    contexts: ['page', 'image', 'video', 'link'],
   });
 });
 

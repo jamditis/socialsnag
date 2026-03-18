@@ -81,4 +81,34 @@ const SocialSnag = {
     const match = url.match(pattern);
     return match ? match[1] : null;
   },
+
+  // Find the nearest media element when the click target isn't an img/video.
+  // Social platforms wrap images in overlay divs, so the actual click often
+  // lands on a transparent div rather than the img itself.
+  findNearestMedia(element) {
+    if (!element) return null;
+
+    // Check if the target itself is media
+    if (element.tagName === 'IMG') return element;
+    if (element.tagName === 'VIDEO') return element;
+
+    // Check children (click on overlay div containing an img)
+    const img = element.querySelector('img');
+    if (img) return img;
+    const video = element.querySelector('video');
+    if (video) return video;
+
+    // Walk up and check siblings/parent containers
+    let el = element;
+    for (let i = 0; i < 5 && el && el !== document.body; i++) {
+      el = el.parentElement;
+      if (!el) break;
+      const nearImg = el.querySelector('img');
+      if (nearImg && nearImg.src && !nearImg.src.startsWith('data:')) return nearImg;
+      const nearVideo = el.querySelector('video');
+      if (nearVideo) return nearVideo;
+    }
+
+    return null;
+  },
 };

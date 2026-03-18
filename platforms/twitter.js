@@ -10,17 +10,34 @@ SocialSnag.registerResolver((message, target) => {
 });
 
 function resolveSingle(srcUrl, target) {
+  // Try the srcUrl from context menu first (works when right-clicking directly on img)
   const url = upgradeImageUrl(srcUrl);
   if (url) {
     const id = extractTweetId(target);
     return [{ url, type: 'image', filename: id ? `tweet_${id}` : null }];
   }
 
+  // If click landed on an overlay div, find the nearest media element
+  const nearestMedia = SocialSnag.findNearestMedia(target);
+  if (nearestMedia) {
+    if (nearestMedia.tagName === 'IMG') {
+      const upgraded = upgradeImageUrl(nearestMedia.src);
+      if (upgraded) {
+        const id = extractTweetId(target);
+        return [{ url: upgraded, type: 'image', filename: id ? `tweet_${id}` : null }];
+      }
+    }
+    if (nearestMedia.tagName === 'VIDEO') {
+      return resolveVideo(target);
+    }
+  }
+
   if (target?.tagName === 'VIDEO' || target?.closest('video')) {
     return resolveVideo(target);
   }
 
-  return [];
+  // Last resort: try to find any media in the parent tweet
+  return resolveAll(target);
 }
 
 function resolveAll(target) {

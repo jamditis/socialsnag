@@ -16,7 +16,18 @@ function resolveSingle(srcUrl, target) {
     return [{ url, type: 'image', filename: shortcode ? `post_${shortcode}` : null }];
   }
 
-  const video = target?.closest('video') || (target?.tagName === 'VIDEO' ? target : null);
+  // If click landed on overlay, find nearest media
+  const nearest = SocialSnag.findNearestMedia(target);
+  if (nearest?.tagName === 'IMG') {
+    const upgraded = upgradeImageUrl(nearest.src, nearest);
+    if (upgraded) {
+      const shortcode = extractShortcode();
+      return [{ url: upgraded, type: 'image', filename: shortcode ? `post_${shortcode}` : null }];
+    }
+  }
+
+  const video = nearest?.tagName === 'VIDEO' ? nearest
+    : target?.closest('video') || (target?.tagName === 'VIDEO' ? target : null);
   if (video) {
     const src = video.src;
     if (src && !src.startsWith('blob:')) {
@@ -25,6 +36,7 @@ function resolveSingle(srcUrl, target) {
     }
   }
 
+  // Fall back to resolveAll
   return [];
 }
 
