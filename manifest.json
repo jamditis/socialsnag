@@ -1,0 +1,81 @@
+{
+  "manifest_version": 3,
+  "name": "SocialSnag",
+  "version": "0.1.0",
+  "description": "Right-click to download full-resolution media from social media.",
+  "author": "Joe Amditis",
+  "permissions": [
+    "contextMenus",
+    "downloads",
+    "activeTab",
+    "webRequest",
+    "storage",
+    "notifications",
+    "scripting"
+  ],
+  "host_permissions": [
+    "*://*.instagram.com/*",
+    "*://*.cdninstagram.com/*",
+    "*://*.twitter.com/*",
+    "*://*.x.com/*",
+    "*://*.twimg.com/*",
+    "*://*.facebook.com/*",
+    "*://*.fbcdn.net/*",
+    "*://*.youtube.com/*",
+    "*://*.ytimg.com/*",
+    "*://*.linkedin.com/*",
+    "*://*.licdn.com/*",
+    "*://*.tiktok.com/*",
+    "*://*.tiktokcdn.com/*",
+    "*://*.tiktokcdn-us.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://*.instagram.com/*"],
+      "js": ["platforms/common.js", "platforms/instagram.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["*://*.twitter.com/*", "*://*.x.com/*"],
+      "js": ["platforms/common.js", "platforms/twitter.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["*://*.facebook.com/*"],
+      "js": ["platforms/common.js", "platforms/facebook.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["*://*.youtube.com/*"],
+      "js": ["platforms/common.js", "platforms/youtube.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["*://*.linkedin.com/*"],
+      "js": ["platforms/common.js", "platforms/linkedin.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["*://*.tiktok.com/*"],
+      "js": ["platforms/common.js", "platforms/tiktok.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "options_page": "options.html",
+  "action": {
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    },
+    "default_title": "SocialSnag settings"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
