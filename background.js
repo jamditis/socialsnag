@@ -31,9 +31,32 @@ chrome.runtime.onInstalled.addListener(() => {
   });
 });
 
+// Detect the platform from a tab URL
+function detectPlatform(url) {
+  if (!url) return null;
+  if (url.includes('instagram.com')) return 'instagram';
+  if (url.includes('twitter.com') || url.includes('x.com')) return 'twitter';
+  if (url.includes('facebook.com')) return 'facebook';
+  if (url.includes('youtube.com')) return 'youtube';
+  if (url.includes('linkedin.com')) return 'linkedin';
+  if (url.includes('tiktok.com')) return 'tiktok';
+  return null;
+}
+
 // Handle context menu clicks
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   const type = info.menuItemId === MENU_DOWNLOAD_SINGLE ? 'single' : 'all';
+
+  const platform = detectPlatform(tab.url);
+  if (!platform) {
+    showNotification('SocialSnag does not support this site.');
+    return;
+  }
+
+  const platformSettings = await chrome.storage.sync.get({ [`platform_${platform}`]: true, showNotifications: true });
+  if (!platformSettings[`platform_${platform}`]) {
+    return;
+  }
 
   try {
     const response = await chrome.tabs.sendMessage(tab.id, {
@@ -48,7 +71,6 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       return;
     }
 
-    const settings = await chrome.storage.sync.get({ showNotifications: true });
     let count = 0;
 
     for (const item of response.urls) {
@@ -56,7 +78,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       count++;
     }
 
-    if (settings.showNotifications) {
+    if (platformSettings.showNotifications) {
       const label = count === 1 ? '1 file' : `${count} files`;
       showNotification(`Downloaded ${label} from ${response.platform}.`);
     }
