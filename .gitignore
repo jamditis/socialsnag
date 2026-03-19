@@ -1,0 +1,23 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+
+# Extension packaging
+*.pem
+*.crx
+*.zip
+
+# Dependencies
+node_modules/
+dist/
+
+# Environment
+.env
+.env.local
