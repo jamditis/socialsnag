@@ -1,6 +1,13 @@
+![Version](https://img.shields.io/badge/version-1.0.0-blue)
+![License](https://img.shields.io/github/license/jamditis/socialsnag)
+![Manifest](https://img.shields.io/badge/manifest-v3-green)
+![Chrome](https://img.shields.io/badge/chrome-116%2B-yellow)
+
 # SocialSnag
 
 Right-click to download full-resolution images and videos from social media.
+
+![SocialSnag](og-image.png)
 
 ## Features
 
