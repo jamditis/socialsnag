@@ -36,7 +36,7 @@ Coming soon.
 
 ## Privacy
 
-All data is stored locally on your device. SocialSnag does not collect analytics, telemetry, or personal information. Nothing is transmitted to external servers. See [PRIVACY.md](PRIVACY.md) for details.
+SocialSnag stores data locally in your browser and has no server component. The extension does not collect analytics, telemetry, or personal information. If you use Chrome sync, your browser may sync extension preferences via Google's servers in accordance with your browser settings. See [PRIVACY.md](PRIVACY.md) for details.
 
 ## License
 

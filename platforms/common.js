@@ -88,15 +88,14 @@ const SocialSnag = {
     'pbs.twimg.com',
     'video.twimg.com',
     'fbcdn.net',
-    'media.licdn.com',
-    'tiktokcdn.com',
-    'tiktokcdn-us.com',
   ],
 
   isAllowedDomain(url) {
     try {
-      const hostname = new URL(url).hostname;
-      return SocialSnag._ALLOWED_DOMAINS.some((d) => hostname.endsWith(d));
+      const hostname = new URL(url).hostname.toLowerCase();
+      return SocialSnag._ALLOWED_DOMAINS.some((d) => {
+        return hostname === d || hostname.endsWith(`.${d}`);
+      });
     } catch (e) {
       return false;
     }

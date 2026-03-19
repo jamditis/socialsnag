@@ -24,9 +24,6 @@ const ALLOWED_DOWNLOAD_DOMAINS = [
   'pbs.twimg.com',
   'video.twimg.com',
   'fbcdn.net',
-  'media.licdn.com',
-  'tiktokcdn.com',
-  'tiktokcdn-us.com',
 ];
 
 // Register context menu items on install
@@ -62,12 +59,25 @@ async function initAdvancedMode() {
 function registerWebRequestListener() {
   if (!chrome.webRequest) return;
   try {
-    chrome.webRequest.onCompleted.addListener(
-      handleWebRequestCompleted,
-      { urls: CDN_PATTERNS, types: ['image', 'media', 'xmlhttprequest'] }
-    );
+    if (!chrome.webRequest.onCompleted.hasListener(handleWebRequestCompleted)) {
+      chrome.webRequest.onCompleted.addListener(
+        handleWebRequestCompleted,
+        { urls: CDN_PATTERNS, types: ['image', 'media', 'xmlhttprequest'] }
+      );
+    }
   } catch (e) {
     console.error('SocialSnag: failed to register webRequest listener:', e);
+  }
+}
+
+function unregisterWebRequestListener() {
+  if (!chrome.webRequest || !chrome.webRequest.onCompleted) return;
+  try {
+    if (chrome.webRequest.onCompleted.hasListener(handleWebRequestCompleted)) {
+      chrome.webRequest.onCompleted.removeListener(handleWebRequestCompleted);
+    }
+  } catch (e) {
+    console.error('SocialSnag: failed to unregister webRequest listener:', e);
   }
 }
 
@@ -162,7 +172,8 @@ async function downloadMedia(item, platform) {
   }
 
   // Validate URL domain
-  if (!ALLOWED_DOWNLOAD_DOMAINS.some((d) => parsed.hostname.endsWith(d))) {
+  const hostname = parsed.hostname.toLowerCase();
+  if (!ALLOWED_DOWNLOAD_DOMAINS.some((d) => hostname === d || hostname.endsWith(`.${d}`))) {
     console.warn('SocialSnag: rejected URL from untrusted domain:', parsed.hostname);
     return null;
   }
@@ -203,8 +214,12 @@ async function downloadMedia(item, platform) {
 
 // Record a successful download to history
 async function recordDownload(item, platform, downloadId) {
+  const rawFilename = item.filename || `${Date.now()}`;
+  const filename = rawFilename
+    .replace(/\.\.[/\\]/g, '')
+    .replace(/[<>:"/\\|?*\x00-\x1f]/g, '_');
   const entry = {
-    filename: item.filename || `${Date.now()}`,
+    filename: filename,
     platform: platform,
     type: item.type || 'image',
     timestamp: Date.now(),
@@ -266,6 +281,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.action === 'enableAdvancedMode') {
     registerWebRequestListener();
+    return;
+  }
+
+  if (message.action === 'disableAdvancedMode') {
+    unregisterWebRequestListener();
     return;
   }
 });

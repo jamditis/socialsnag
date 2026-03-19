@@ -47,6 +47,8 @@ const saveOptions = () => {
     });
   } else {
     settings.advancedMode = false;
+    chrome.runtime.sendMessage({ action: 'disableAdvancedMode' });
+    chrome.permissions.remove({ permissions: ['webRequest'] });
     chrome.storage.sync.set(settings, () => {
       if (chrome.runtime.lastError) {
         showStatus(`Failed to save: ${chrome.runtime.lastError.message}`, 'error');

@@ -14,6 +14,7 @@ const PLATFORM_LABELS = {
 };
 
 document.addEventListener('DOMContentLoaded', async () => {
+  document.querySelector('.version').textContent = `v${chrome.runtime.getManifest().version}`;
   await renderPlatforms();
   await renderHistory();
 

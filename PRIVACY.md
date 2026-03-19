@@ -20,9 +20,7 @@ There are no analytics scripts, no remote logging, and no usage tracking.
 
 ## Where data is stored
 
-All data stays on your device. Download history is stored in Chrome's local storage. Preferences are stored in Chrome's sync storage (synced only between your own Chrome instances, managed by Google — SocialSnag has no server component).
-
-No data leaves your device to any server controlled by SocialSnag.
+User preferences are stored via Chrome's sync storage, which may be synced to Google's servers according to your browser settings. Download history is stored locally and is not synced. SocialSnag has no server component and does not transmit data to any third-party service.
 
 ## Third-party sharing
 
