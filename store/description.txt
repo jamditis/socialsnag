@@ -1,0 +1,19 @@
+SocialSnag adds a right-click context menu to download HD images and videos from your favorite social media platforms.
+
+Supported platforms:
+- Instagram (images, reels, carousels)
+- Twitter / X (images, profile pictures)
+- Facebook (images, videos)
+
+Features:
+- Right-click any image or video to download the full-resolution version
+- "Download all from post" grabs every media item in a carousel or multi-image post
+- Download history in the popup for quick access to recent saves
+- Files organized by platform in your Downloads/SocialSnag/ folder
+- Toggle platforms on or off in settings
+- Optional advanced mode for improved media detection
+
+Privacy:
+SocialSnag stores preferences and download history locally on your device. No data is collected, transmitted, or shared with anyone.
+
+SocialSnag downloads publicly accessible media. Users are responsible for complying with copyright laws and platform terms of service. Do not download content you don't have permission to use.

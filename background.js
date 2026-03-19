@@ -1,20 +1,29 @@
 'use strict';
 
-// Context menu item IDs
 const MENU_DOWNLOAD_SINGLE = 'socialsnag-download-single';
 const MENU_DOWNLOAD_ALL = 'socialsnag-download-all';
 
-// Per-tab captured media from passive webRequest monitoring
-const capturedMedia = new Map();
+// Supported platform URL patterns for context menu visibility
+const SUPPORTED_URL_PATTERNS = [
+  '*://*.instagram.com/*',
+  '*://*.twitter.com/*',
+  '*://*.x.com/*',
+  '*://*.facebook.com/*',
+];
 
-// CDN URL patterns to monitor passively
+// CDN patterns for core platforms only (webRequest monitoring)
 const CDN_PATTERNS = [
   '*://*.cdninstagram.com/*',
   '*://*.twimg.com/*',
   '*://*.fbcdn.net/*',
-  '*://*.licdn.com/*',
-  '*://*.tiktokcdn.com/*',
-  '*://*.tiktokcdn-us.com/*',
+];
+
+// Domain allowlist for download URL validation
+const ALLOWED_DOWNLOAD_DOMAINS = [
+  'cdninstagram.com',
+  'pbs.twimg.com',
+  'video.twimg.com',
+  'fbcdn.net',
 ];
 
 // Register context menu items on install
@@ -23,23 +32,76 @@ chrome.runtime.onInstalled.addListener(() => {
     id: MENU_DOWNLOAD_SINGLE,
     title: 'SocialSnag: Download this (HD)',
     contexts: ['page', 'image', 'video', 'link'],
+    documentUrlPatterns: SUPPORTED_URL_PATTERNS,
   });
   chrome.contextMenus.create({
     id: MENU_DOWNLOAD_ALL,
     title: 'SocialSnag: Download all from post',
     contexts: ['page', 'image', 'video', 'link'],
+    documentUrlPatterns: SUPPORTED_URL_PATTERNS,
   });
 });
 
-// Detect the platform from a tab URL
+// On startup, check if advanced mode is enabled and register webRequest if so
+chrome.runtime.onStartup.addListener(initAdvancedMode);
+chrome.runtime.onInstalled.addListener(initAdvancedMode);
+
+async function initAdvancedMode() {
+  const { advancedMode } = await chrome.storage.sync.get({ advancedMode: false });
+  if (!advancedMode) return;
+
+  const hasPermission = await chrome.permissions.contains({ permissions: ['webRequest'] });
+  if (hasPermission) {
+    registerWebRequestListener();
+  }
+}
+
+function registerWebRequestListener() {
+  if (!chrome.webRequest) return;
+  try {
+    if (!chrome.webRequest.onCompleted.hasListener(handleWebRequestCompleted)) {
+      chrome.webRequest.onCompleted.addListener(
+        handleWebRequestCompleted,
+        { urls: CDN_PATTERNS, types: ['image', 'media', 'xmlhttprequest'] }
+      );
+    }
+  } catch (e) {
+    console.error('SocialSnag: failed to register webRequest listener:', e);
+  }
+}
+
+function unregisterWebRequestListener() {
+  if (!chrome.webRequest || !chrome.webRequest.onCompleted) return;
+  try {
+    if (chrome.webRequest.onCompleted.hasListener(handleWebRequestCompleted)) {
+      chrome.webRequest.onCompleted.removeListener(handleWebRequestCompleted);
+    }
+  } catch (e) {
+    console.error('SocialSnag: failed to unregister webRequest listener:', e);
+  }
+}
+
+async function handleWebRequestCompleted(details) {
+  if (details.tabId < 0) return;
+  const key = `captured_${details.tabId}`;
+  const { [key]: existing } = await chrome.storage.session.get(key);
+  const urls = existing || [];
+  urls.push({
+    url: details.url,
+    type: details.type,
+    timestamp: Date.now(),
+  });
+  // Keep last 50 per tab
+  if (urls.length > 50) urls.splice(0, urls.length - 50);
+  await chrome.storage.session.set({ [key]: urls });
+}
+
+// Detect the platform from a tab URL (core platforms only)
 function detectPlatform(url) {
   if (!url) return null;
   if (url.includes('instagram.com')) return 'instagram';
   if (url.includes('twitter.com') || url.includes('x.com')) return 'twitter';
   if (url.includes('facebook.com')) return 'facebook';
-  if (url.includes('youtube.com')) return 'youtube';
-  if (url.includes('linkedin.com')) return 'linkedin';
-  if (url.includes('tiktok.com')) return 'tiktok';
   return null;
 }
 
@@ -53,10 +115,11 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     return;
   }
 
-  const platformSettings = await chrome.storage.sync.get({ [`platform_${platform}`]: true, showNotifications: true });
-  if (!platformSettings[`platform_${platform}`]) {
-    return;
-  }
+  const platformSettings = await chrome.storage.sync.get({
+    [`platform_${platform}`]: true,
+    showNotifications: true,
+  });
+  if (!platformSettings[`platform_${platform}`]) return;
 
   try {
     const response = await chrome.tabs.sendMessage(tab.id, {
@@ -72,13 +135,15 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     }
 
     let count = 0;
-
     for (const item of response.urls) {
-      await downloadMedia(item, response.platform);
-      count++;
+      const downloadId = await downloadMedia(item, response.platform);
+      if (downloadId) {
+        await recordDownload(item, response.platform, downloadId);
+        count++;
+      }
     }
 
-    if (platformSettings.showNotifications) {
+    if (platformSettings.showNotifications && count > 0) {
       const label = count === 1 ? '1 file' : `${count} files`;
       showNotification(`Downloaded ${label} from ${response.platform}.`);
     }
@@ -88,10 +153,36 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   }
 });
 
-// Download a single media item, with TikTok blob workaround for Referer requirement
+// Validate and download a single media item
 async function downloadMedia(item, platform) {
+  if (!item.url) return null;
+
+  // Validate URL protocol
+  let parsed;
+  try {
+    parsed = new URL(item.url);
+  } catch (e) {
+    console.warn('SocialSnag: rejected invalid URL');
+    return null;
+  }
+
+  if (parsed.protocol !== 'https:') {
+    console.warn('SocialSnag: rejected non-HTTPS URL');
+    return null;
+  }
+
+  // Validate URL domain
+  const hostname = parsed.hostname.toLowerCase();
+  if (!ALLOWED_DOWNLOAD_DOMAINS.some((d) => hostname === d || hostname.endsWith(`.${d}`))) {
+    console.warn('SocialSnag: rejected URL from untrusted domain:', parsed.hostname);
+    return null;
+  }
+
   const ext = guessExtension(item.url, item.type);
-  const filename = item.filename || `${Date.now()}`;
+  const rawFilename = item.filename || `${Date.now()}`;
+  const filename = rawFilename
+    .replace(/\.\.[/\\]/g, '')
+    .replace(/[<>:"/\\|?*\x00-\x1f]/g, '_');
   const path = `SocialSnag/${platform}/${filename}${ext}`;
 
   let downloadUrl = item.url;
@@ -104,18 +195,49 @@ async function downloadMedia(item, platform) {
       const blob = await response.blob();
       downloadUrl = URL.createObjectURL(blob);
     } catch (e) {
-      console.error('SocialSnag: TikTok fetch failed, trying direct download:', e);
+      console.error('SocialSnag: TikTok fetch failed, trying direct:', e);
     }
   }
 
-  return chrome.downloads.download({
-    url: downloadUrl,
-    filename: path,
-    conflictAction: 'uniquify',
-  });
+  try {
+    const downloadId = await chrome.downloads.download({
+      url: downloadUrl,
+      filename: path,
+      conflictAction: 'uniquify',
+    });
+    return downloadId;
+  } catch (e) {
+    console.error('SocialSnag: download failed:', e);
+    return null;
+  }
 }
 
-// Guess a file extension from URL and media type
+// Record a successful download to history
+async function recordDownload(item, platform, downloadId) {
+  const rawFilename = item.filename || `${Date.now()}`;
+  const filename = rawFilename
+    .replace(/\.\.[/\\]/g, '')
+    .replace(/[<>:"/\\|?*\x00-\x1f]/g, '_');
+  const entry = {
+    filename: filename,
+    platform: platform,
+    type: item.type || 'image',
+    timestamp: Date.now(),
+    downloadId: downloadId,
+  };
+
+  const { downloadHistory } = await chrome.storage.local.get({ downloadHistory: [] });
+  downloadHistory.push(entry);
+
+  // Prune to 50 entries max
+  if (downloadHistory.length > 50) {
+    downloadHistory.splice(0, downloadHistory.length - 50);
+  }
+
+  await chrome.storage.local.set({ downloadHistory });
+}
+
+// Guess file extension
 function guessExtension(url, type) {
   if (type === 'video') return '.mp4';
   try {
@@ -139,32 +261,31 @@ function showNotification(message) {
   });
 }
 
-// Passively capture media URLs from CDN requests as they complete
-chrome.webRequest.onCompleted.addListener(
-  (details) => {
-    if (details.tabId < 0) return;
-    if (!capturedMedia.has(details.tabId)) {
-      capturedMedia.set(details.tabId, []);
-    }
-    capturedMedia.get(details.tabId).push({
-      url: details.url,
-      type: details.type,
-      timestamp: Date.now(),
-    });
-  },
-  { urls: CDN_PATTERNS, types: ['image', 'media', 'xmlhttprequest'] }
-);
-
 // Clean up captured media when a tab is closed
-chrome.tabs.onRemoved.addListener((tabId) => {
-  capturedMedia.delete(tabId);
+chrome.tabs.onRemoved.addListener(async (tabId) => {
+  const key = `captured_${tabId}`;
+  await chrome.storage.session.remove(key);
 });
 
 // Respond to content script requests for captured media
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (sender.id !== chrome.runtime.id) return;
+
   if (message.action === 'getCapturedMedia' && sender.tab) {
-    const urls = capturedMedia.get(sender.tab.id) || [];
-    sendResponse({ urls });
+    const key = `captured_${sender.tab.id}`;
+    chrome.storage.session.get(key).then((result) => {
+      sendResponse({ urls: result[key] || [] });
+    });
     return true;
+  }
+
+  if (message.action === 'enableAdvancedMode') {
+    registerWebRequestListener();
+    return;
+  }
+
+  if (message.action === 'disableAdvancedMode') {
+    unregisterWebRequestListener();
+    return;
   }
 });

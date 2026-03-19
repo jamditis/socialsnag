@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <!-- 96x96 artwork centered on 128x128 canvas (16px padding) -->
+  <rect x="16" y="16" width="96" height="96" rx="18" fill="#3b82f6"/>
+  <!-- Download arrow: vertical shaft -->
+  <rect x="57" y="34" width="14" height="30" rx="2" fill="#fff"/>
+  <!-- Download arrow: downward triangle head -->
+  <polygon points="64,82 42,58 86,58" fill="#fff"/>
+  <!-- Download tray: horizontal base line -->
+  <rect x="36" y="90" width="56" height="6" rx="3" fill="#fff"/>
+</svg>

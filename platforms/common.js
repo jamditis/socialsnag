@@ -82,6 +82,40 @@ const SocialSnag = {
     return match ? match[1] : null;
   },
 
+  // Allowlist of CDN domains we trust for downloads
+  _ALLOWED_DOMAINS: [
+    'cdninstagram.com',
+    'pbs.twimg.com',
+    'video.twimg.com',
+    'fbcdn.net',
+  ],
+
+  isAllowedDomain(url) {
+    try {
+      const hostname = new URL(url).hostname.toLowerCase();
+      return SocialSnag._ALLOWED_DOMAINS.some((d) => {
+        return hostname === d || hostname.endsWith(`.${d}`);
+      });
+    } catch (e) {
+      return false;
+    }
+  },
+
+  isHttps(url) {
+    try {
+      return new URL(url).protocol === 'https:';
+    } catch (e) {
+      return false;
+    }
+  },
+
+  sanitizeFilename(name) {
+    if (!name) return null;
+    return name
+      .replace(/\.\.[/\\]/g, '')
+      .replace(/[<>:"/\\|?*\x00-\x1f]/g, '_');
+  },
+
   // Find the nearest media element when the click target isn't an img/video.
   // Social platforms wrap images in overlay divs, so the actual click often
   // lands on a transparent div rather than the img itself.
