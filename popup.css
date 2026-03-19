@@ -1,0 +1,185 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  width: 360px;
+  min-height: 200px;
+  background: #050a18;
+  color: #e5e7eb;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 13px;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid rgba(255,255,255,0.1);
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.header img { width: 20px; height: 20px; }
+
+.header h1 {
+  font-size: 15px;
+  font-weight: 600;
+  color: #fff;
+}
+
+.header .version {
+  font-size: 11px;
+  color: #6b7280;
+}
+
+.platforms {
+  padding: 10px 16px;
+  border-bottom: 1px solid rgba(255,255,255,0.1);
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.platform-badge {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 12px;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.1);
+  cursor: pointer;
+  font-size: 12px;
+  transition: background 0.15s;
+}
+
+.platform-badge:hover {
+  background: rgba(255,255,255,0.1);
+}
+
+.platform-badge .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #22c55e;
+}
+
+.platform-badge.disabled .dot {
+  background: #4b5563;
+}
+
+.platform-badge.disabled {
+  opacity: 0.5;
+}
+
+.history-section {
+  padding: 10px 16px 6px;
+}
+
+.history-section h2 {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #6b7280;
+  margin-bottom: 8px;
+}
+
+.history-list {
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.history-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.history-item:hover {
+  background: rgba(255,255,255,0.05);
+}
+
+.history-item .platform-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  color: #fff;
+  flex-shrink: 0;
+}
+
+.history-item .platform-icon.instagram { background: linear-gradient(135deg, #f58529, #dd2a7b, #8134af); }
+.history-item .platform-icon.twitter { background: #1d9bf0; }
+.history-item .platform-icon.facebook { background: #1877f2; }
+
+.history-item .details {
+  flex: 1;
+  min-width: 0;
+}
+
+.history-item .filename {
+  color: #f9fafb;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.history-item .meta {
+  color: #6b7280;
+  font-size: 11px;
+}
+
+.history-item .time {
+  color: #6b7280;
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.empty-state {
+  text-align: center;
+  padding: 30px 16px;
+  color: #6b7280;
+}
+
+.empty-state p {
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.footer {
+  display: flex;
+  justify-content: space-between;
+  padding: 10px 16px;
+  border-top: 1px solid rgba(255,255,255,0.1);
+}
+
+.footer button {
+  background: none;
+  border: none;
+  color: #3b82f6;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 4px 0;
+}
+
+.footer button:hover {
+  color: #60a5fa;
+}
+
+.not-found {
+  opacity: 0.5;
+  text-decoration: line-through;
+}
