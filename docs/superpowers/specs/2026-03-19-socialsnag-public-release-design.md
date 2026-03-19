@@ -49,6 +49,20 @@ LinkedIn and TikTok code remains in the repo under `platforms/`. They are not in
 
 YouTube is fully removed from the manifest (no optional support) to avoid any CWS red flags.
 
+### Code changes for platform scoping
+
+The following existing code references all 6 platforms and must be updated:
+
+| File | What to change |
+|------|---------------|
+| `background.js` `detectPlatform()` | Remove youtube, linkedin, tiktok cases. Only return 'instagram', 'twitter', 'facebook' (plus linkedin/tiktok if dynamically enabled) |
+| `background.js` `CDN_PATTERNS` | Remove linkedin/tiktok CDN patterns from the static array. These move to dynamic registration when advanced mode + optional platform is enabled |
+| `options.js` `PLATFORMS` array | Remove youtube. Keep linkedin/tiktok but render them differently (grayed out with "developer mode" note) |
+| `manifest.json` `content_scripts` | Remove youtube, linkedin, tiktok entries. Only instagram, twitter, facebook remain as static content scripts |
+| `manifest.json` `host_permissions` | Remove youtube/ytimg patterns entirely. Move linkedin/tiktok patterns to `optional_host_permissions` |
+
+The YouTube, LinkedIn, and TikTok `.js` files in `platforms/` stay in the repo unchanged — they're just not referenced by the manifest.
+
 ---
 
 ## 2. Permission architecture
@@ -114,6 +128,25 @@ All three launch platforms are declared in `host_permissions` for static content
 
 **webRequest:** Toggled via "advanced mode" in settings. When enabled, passively captures CDN URLs as a fallback for lazy-loaded or carousel media that DOM scraping misses. The CWS review team scrutinizes this permission heavily, so making it optional reduces friction.
 
+### webRequest dynamic registration pattern
+
+Since `webRequest` is an optional permission, `chrome.webRequest` is undefined until granted. The background service worker must:
+
+1. On startup, check `chrome.storage.local` for `advancedMode: true`
+2. If true, call `chrome.permissions.contains({ permissions: ['webRequest'] })` to verify the permission is still granted
+3. Only if both conditions are true, register the `webRequest.onCompleted` listener
+4. When the user toggles advanced mode ON in settings: request the permission via `chrome.permissions.request()`, then register the listener
+5. When toggled OFF: the listener is removed on next service worker restart (no explicit removal API needed in MV3 since the worker restarts frequently)
+6. All `chrome.webRequest` usage must be guarded — never call it at module-level scope
+
+### Service worker lifecycle and captured media
+
+MV3 service workers go idle after ~30 seconds of inactivity, which wipes in-memory state. The current `capturedMedia` Map is in-memory only. To make the webRequest capture feature reliable:
+
+- Use `chrome.storage.session` (MV3-only) instead of an in-memory Map for captured media URLs
+- `chrome.storage.session` persists for the browser session but not across browser restarts
+- This survives service worker restarts while still being ephemeral
+
 ### Removed permissions
 
 - webRequest removed from core (moved to optional)
@@ -150,11 +183,17 @@ All three launch platforms are declared in `host_permissions` for static content
 ### Behavior
 
 - **Platform badges:** Green dot = enabled, gray = disabled. Clicking a badge toggles the platform (same as options page).
-- **Download history:** Last 20 entries from `chrome.storage.local`. Each entry shows filename, platform, relative timestamp. Clicking an entry calls `chrome.downloads.show(downloadId)` to reveal the file.
+- **Download history:** Last 20 entries from `chrome.storage.local`. Each entry shows platform icon, filename, relative timestamp. Clicking an entry calls `chrome.downloads.show(downloadId)` to reveal the file. If the file no longer exists or the downloadId is stale, show a "file not found" state and offer to remove the entry.
 - **Clear history:** Removes all entries from storage.
 - **Settings link:** Opens the options page in a new tab.
 
 ### Storage schema
+
+**Two storage areas, used for different purposes:**
+- `chrome.storage.sync` — user preferences (enabled platforms, notification toggle, advanced mode). Syncs across devices via Chrome account.
+- `chrome.storage.local` — download history. Device-specific, not synced.
+
+The popup reads from both: `sync` for platform status badges, `local` for history list.
 
 Download history stored in `chrome.storage.local` under key `downloadHistory`:
 
@@ -171,9 +210,13 @@ Download history stored in `chrome.storage.local` under key `downloadHistory`:
 ]
 ```
 
-- Max 50 entries. When exceeded, oldest entries are pruned.
+- Max 50 entries. Pruning happens on every write — after appending a new entry, if length > 50, remove the oldest entries.
 - Popup displays the most recent 20.
 - Background service worker writes entries after each successful download.
+
+### Thumbnails
+
+Download history entries use a **platform icon** (small colored dot/icon per platform) rather than image thumbnails. Storing thumbnail URLs is unreliable (CDN URLs expire), and generating thumbnails locally adds complexity without proportional value. The platform icon + filename + timestamp provide enough context to identify each download.
 
 ### New files
 
@@ -244,7 +287,9 @@ Reject any download URL that is not HTTPS. Social media CDNs all serve over HTTP
 
 ### Message validation
 
-In the background service worker, verify that messages come from the extension itself by checking `sender.id === chrome.runtime.id` on all incoming messages.
+**Background service worker (receives messages from content scripts):** Verify `sender.id === chrome.runtime.id` on all incoming messages. This ensures only our own content scripts can trigger downloads or request captured media.
+
+**Content scripts (receive messages from background via `chrome.tabs.sendMessage`):** No sender validation needed. In MV3, `chrome.tabs.sendMessage` is extension-internal — only the extension's own background/popup can send messages to its content scripts. Web pages cannot inject messages into this channel.
 
 ### DOM rendering safety
 
@@ -253,6 +298,20 @@ All text rendered in popup and options pages uses `textContent`, never `innerHTM
 ### No remote code execution
 
 All logic is bundled in the extension package. No external script tags, no dynamic code construction or evaluation. The MV3 Content Security Policy enforces this, and the codebase already complies.
+
+### Context menu visibility
+
+Add `documentUrlPatterns` to both context menu items so they only appear on supported sites:
+
+```json
+["*://*.instagram.com/*", "*://*.twitter.com/*", "*://*.x.com/*", "*://*.facebook.com/*"]
+```
+
+This prevents the "Download HD" menu from appearing on unsupported sites (confusing for users, and CWS reviewers notice).
+
+### Content script isolation
+
+All content scripts run in the default ISOLATED world. This is correct for DOM scraping — content scripts can read DOM elements and `<script>` tag text content (used by Instagram's JSON extraction) without needing MAIN world access. No change needed.
 
 ---
 
@@ -264,7 +323,8 @@ All logic is bundled in the extension package. No external script tags, no dynam
 2. Add "advanced mode" toggle for webRequest permission (with explanation of what it does)
 3. Add privacy policy link pointing to PRIVACY.md on GitHub
 4. Platform toggles: Instagram, Twitter/X, Facebook remain as checkboxes. YouTube removed. LinkedIn and TikTok shown as "available in developer mode" with a note.
-5. Visual refresh to match popup styling
+5. Visual refresh to match popup styling — extract inline styles to `options.css` for consistency with `popup.css`
+6. Migrate from `options_page` to `options_ui` in manifest: `"options_ui": { "page": "options.html", "open_in_tab": true }` (MV3 convention)
 
 ### Copyright disclaimer text
 
@@ -283,7 +343,16 @@ SocialSnag downloads publicly accessible media. Users are responsible for comply
 | .gitignore | OS files, editor files, *.pem, .env, node_modules/, dist/ |
 | PRIVACY.md | Full privacy policy (see section 8) |
 | CHANGELOG.md | Version history, starting at 1.0.0 for public release |
-| .github/copilot-instructions.md | Context for Copilot code review |
+| .github/copilot-instructions.md | Context for Copilot code review (see below) |
+
+### Copilot instructions content
+
+The `.github/copilot-instructions.md` should describe:
+- Extension architecture: background service worker + per-platform content scripts + shared common.js
+- Message passing pattern: background sends `resolve` to content script, content script returns `{ urls, platform }`
+- Platform resolver pattern: each platform calls `SocialSnag.init()` then `SocialSnag.registerResolver()`
+- URL upgrade pattern: each platform has a function that rewrites CDN URLs to full-resolution
+- Key review flags: innerHTML usage (XSS risk), URL validation bypass, new host_permissions additions, permission creep
 
 ### GitHub repo changes
 
@@ -311,8 +380,9 @@ Hosted at PRIVACY.md in the repo root and linked from:
 2. **What data is NOT collected:** No browsing history, no personal information, no analytics, no telemetry, no tracking.
 3. **Where data is stored:** Locally on the user's device via Chrome's storage API. No data leaves the device.
 4. **Third-party sharing:** None. No data is transmitted to external servers.
-5. **User control:** Users can clear download history from the popup. Uninstalling the extension deletes all stored data.
-6. **Contact:** Joe Amditis email or GitHub issues link.
+5. **activeTab behavior:** Page content is accessed only when the user initiates a right-click action. Only media URLs are extracted — no page content is stored, logged, or transmitted.
+6. **User control:** Users can clear download history from the popup. Uninstalling the extension deletes all stored data.
+7. **Contact:** Joe Amditis email or GitHub issues link.
 
 ### CWS data disclosure
 
@@ -353,7 +423,7 @@ SocialSnag stores preferences and download history locally on your device. No da
 
 SocialSnag downloads publicly accessible media. Users are responsible for complying with copyright laws and platform terms of service. Do not download content you don't have permission to use.
 
-**Category:** Photos
+**Category:** Productivity (better fit for a download tool than "Photos", which implies editing/management)
 
 ### Visual assets
 
@@ -397,7 +467,8 @@ socialsnag/
     youtube.js        (unchanged - excluded from manifest)
   background.js       (updated - download history, URL validation, message validation, optional webRequest/platform injection)
   manifest.json       (updated - permissions, popup, version bump, optional_permissions)
-  options.html        (updated - disclaimer, advanced mode, privacy link)
+  options.html        (updated - disclaimer, advanced mode, privacy link, external CSS)
+  options.css         (new - extracted from inline styles in options.html)
   options.js          (updated - advanced mode toggle, dynamic permission request)
   popup.html          (new)
   popup.js            (new)
