@@ -1,3 +1,4 @@
+// TODO: convert to ESM imports when re-enabling this platform
 // SocialSnag — LinkedIn content script
 
 SocialSnag.init('linkedin');
