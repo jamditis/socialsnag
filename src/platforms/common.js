@@ -6,6 +6,8 @@ export const ALLOWED_DOMAINS = [
   'pbs.twimg.com',
   'video.twimg.com',
   'fbcdn.net',
+  'cdn.bsky.app',
+  'video.bsky.app',
 ];
 
 export function isAllowedDomain(url) {

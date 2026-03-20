@@ -5,25 +5,42 @@
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
-  <div class="header">
-    <div class="header-left">
-      <img src="icons/icon48.png" alt="">
+  <header class="header">
+    <div class="brand">
+      <svg class="logo" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <rect width="32" height="32" rx="8" fill="#3b82f6"/>
+        <path d="M10 22V14l6-4 6 4v8" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M16 10v12" stroke="#fff" stroke-width="2.5" stroke-linecap="round"/>
+        <path d="M12 16l4-4 4 4" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
       <h1>SocialSnag</h1>
     </div>
     <span class="version"></span>
-  </div>
+  </header>
 
-  <div class="platforms" id="platforms"></div>
+  <main>
+    <div class="status-section">
+      <div class="status-grid" id="status-grid"></div>
+    </div>
 
-  <div class="history-section">
-    <h2>Recent downloads</h2>
-    <div class="history-list" id="history-list"></div>
-  </div>
+    <div class="history-section">
+      <div class="section-header">
+        <h2>Recent downloads</h2>
+        <button id="clear-history">Clear</button>
+      </div>
+      <div class="history-list" id="history-list"></div>
+    </div>
+  </main>
 
-  <div class="footer">
-    <button id="btn-settings">Settings</button>
-    <button id="btn-clear">Clear history</button>
-  </div>
+  <footer class="footer">
+    <button id="open-settings" class="settings-btn">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="3"/>
+        <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 01-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/>
+      </svg>
+      Settings
+    </button>
+  </footer>
 
   <script src="popup.js"></script>
 </body>

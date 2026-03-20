@@ -62,7 +62,6 @@
             overflow-x: hidden;
         }
 
-        /* --- Grain texture overlay --- */
         body::after {
             content: '';
             position: fixed;
@@ -73,7 +72,6 @@
             background: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.75' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.025'/%3E%3C/svg%3E");
         }
 
-        /* --- Background glow --- */
         .glow-orb {
             position: absolute;
             border-radius: 50%;
@@ -82,7 +80,11 @@
             z-index: 0;
         }
 
-        /* --- Layout --- */
+        @keyframes floatGlow {
+            0%, 100% { transform: translateY(-50%) translateX(0) scale(1); }
+            50% { transform: translateY(-45%) translateX(-30px) scale(1.05); }
+        }
+
         .container {
             max-width: 1120px;
             margin: 0 auto;
@@ -97,9 +99,7 @@
         a { color: var(--blue); text-decoration: none; }
         a:hover { color: var(--blue-bright); }
 
-        /* ======================
-           NAVIGATION
-           ====================== */
+        /* Navigation */
         nav {
             position: fixed;
             top: 0;
@@ -177,9 +177,7 @@
             color: var(--text-white);
         }
 
-        /* ======================
-           HERO
-           ====================== */
+        /* Hero */
         .hero {
             padding: 140px 0 100px;
             min-height: 90vh;
@@ -246,7 +244,6 @@
             background: var(--green);
         }
 
-        /* --- Hero background glow --- */
         .hero .glow-orb {
             width: 500px;
             height: 500px;
@@ -254,11 +251,10 @@
             right: -100px;
             top: 50%;
             transform: translateY(-50%);
+            animation: floatGlow 15s ease-in-out infinite;
         }
 
-        /* ======================
-           ANIMATED DEMO
-           ====================== */
+        /* Demo window */
         .demo-window {
             width: 100%;
             max-width: 440px;
@@ -313,7 +309,6 @@
             min-height: 320px;
         }
 
-        /* --- Fake social post --- */
         .demo-post {
             border-radius: 10px;
             overflow: hidden;
@@ -362,7 +357,6 @@
             stroke-width: 1.8;
         }
 
-        /* --- Context menu (animated) --- */
         .demo-ctx {
             position: absolute;
             top: 140px;
@@ -398,7 +392,7 @@
             animation: itemHighlight 8s ease infinite;
         }
 
-        .demo-ctx-snag svg {
+        .demo-ctx-snag svg, .demo-ctx-snag-all svg {
             width: 14px;
             height: 14px;
         }
@@ -408,12 +402,6 @@
             font-size: 12px;
         }
 
-        .demo-ctx-snag-all svg {
-            width: 14px;
-            height: 14px;
-        }
-
-        /* --- Download notification (animated) --- */
         .demo-notif {
             position: absolute;
             bottom: 16px;
@@ -440,7 +428,6 @@
             stroke-width: 2;
         }
 
-        /* --- Cursor (animated) --- */
         .demo-cursor {
             position: absolute;
             top: 180px;
@@ -455,7 +442,6 @@
             filter: drop-shadow(0 2px 4px rgba(0,0,0,0.5));
         }
 
-        /* --- Demo keyframes --- */
         @keyframes ctxMenu {
             0%, 22% { opacity: 0; transform: translateY(6px) scale(0.97); }
             28%, 64% { opacity: 1; transform: translateY(0) scale(1); }
@@ -486,9 +472,7 @@
             100%     { opacity: 0; transform: translate(30px, -40px); }
         }
 
-        /* ======================
-           HOW IT WORKS
-           ====================== */
+        /* How it works */
         .how {
             padding: 100px 0;
             background: var(--bg-surface);
@@ -559,9 +543,7 @@
             height: 40px;
         }
 
-        /* ======================
-           PLATFORMS
-           ====================== */
+        /* Platforms */
         .platforms-section {
             padding: 100px 0;
         }
@@ -585,6 +567,8 @@
         }
 
         .platform-card {
+            position: relative;
+            overflow: hidden;
             padding: 28px 24px;
             background: var(--bg-card);
             border: 1px solid var(--border);
@@ -593,34 +577,46 @@
             transition: border-color 0.2s, box-shadow 0.2s, transform 0.2s;
         }
 
+        .platform-card::after {
+            content: '';
+            position: absolute;
+            bottom: -20px;
+            right: -20px;
+            width: 140px;
+            height: 140px;
+            opacity: 0.03;
+            background-size: contain;
+            background-repeat: no-repeat;
+            pointer-events: none;
+            transition: opacity 0.3s, transform 0.3s;
+        }
+
         .platform-card:hover {
             transform: translateY(-2px);
             box-shadow: 0 8px 32px -8px rgba(0, 0, 0, 0.4);
         }
-
-        .platform-card.instagram {
-            border-left-color: #e1306c;
+        .platform-card:hover::after {
+            opacity: 0.06;
+            transform: scale(1.05);
         }
 
-        .platform-card.instagram:hover {
-            box-shadow: 0 8px 32px -8px rgba(225, 48, 108, 0.15);
+        .platform-card.instagram { border-left-color: #e1306c; }
+        .platform-card.instagram::after {
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='white'%3E%3Cpath d='M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zm0-2.163c-3.259 0-3.667.014-4.947.072-4.358.2-6.78 2.618-6.98 6.98-.059 1.281-.073 1.689-.073 4.948 0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98 1.281.058 1.689.072 4.948.072 3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98-1.281-.059-1.69-.073-4.949-.073zm0 5.838c-3.403 0-6.162 2.759-6.162 6.162s2.759 6.163 6.162 6.163 6.162-2.759 6.162-6.163c0-3.403-2.759-6.162-6.162-6.162zm0 10.162c-2.209 0-4-1.79-4-4 0-2.209 1.791-4 4-4s4 1.791 4 4c0 2.21-1.791 4-4 4zm6.406-11.845c-.796 0-1.441.645-1.441 1.44s.645 1.44 1.441 1.44c.795 0 1.439-.645 1.439-1.44s-.644-1.44-1.439-1.44z'/%3E%3C/svg%3E");
         }
+        .platform-card.instagram:hover { box-shadow: 0 8px 32px -8px rgba(225, 48, 108, 0.15); }
 
-        .platform-card.twitter {
-            border-left-color: #1d9bf0;
+        .platform-card.twitter { border-left-color: #1d9bf0; }
+        .platform-card.twitter::after {
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='white'%3E%3Cpath d='M23.953 4.57a10 10 0 01-2.825.775 4.958 4.958 0 002.163-2.723c-.951.555-2.005.959-3.127 1.184a4.92 4.92 0 00-8.384 4.482C7.69 8.095 4.067 6.13 1.64 3.162a4.822 4.822 0 00-.666 2.475c0 1.71.87 3.213 2.188 4.096a4.904 4.904 0 01-2.228-.616v.06a4.923 4.923 0 003.946 4.827 4.996 4.996 0 01-2.212.085 4.936 4.936 0 004.604 3.417 9.867 9.867 0 01-6.102 2.105c-.39 0-.779-.023-1.17-.067a13.995 13.995 0 007.557 2.209c9.053 0 13.998-7.496 13.998-13.985 0-.21 0-.42-.015-.63A9.935 9.935 0 0024 4.59z'/%3E%3C/svg%3E");
         }
+        .platform-card.twitter:hover { box-shadow: 0 8px 32px -8px rgba(29, 155, 240, 0.15); }
 
-        .platform-card.twitter:hover {
-            box-shadow: 0 8px 32px -8px rgba(29, 155, 240, 0.15);
+        .platform-card.facebook { border-left-color: #1877f2; }
+        .platform-card.facebook::after {
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='white'%3E%3Cpath d='M22.675 0H1.325C.593 0 0 .593 0 1.325v21.351C0 23.407.593 24 1.325 24H12.82v-9.294H9.692v-3.622h3.128V8.413c0-3.1 1.893-4.788 4.659-4.788 1.325 0 2.463.099 2.795.143v3.24l-1.918.001c-1.504 0-1.795.715-1.795 1.763v2.313h3.587l-.467 3.622h-3.12V24h6.116c.73 0 1.323-.593 1.323-1.325V1.325C24 .593 23.407 0 22.675 0z'/%3E%3C/svg%3E");
         }
-
-        .platform-card.facebook {
-            border-left-color: #1877f2;
-        }
-
-        .platform-card.facebook:hover {
-            box-shadow: 0 8px 32px -8px rgba(24, 119, 242, 0.15);
-        }
+        .platform-card.facebook:hover { box-shadow: 0 8px 32px -8px rgba(24, 119, 242, 0.15); }
 
         .platform-card h3 {
             font-family: var(--font-display);
@@ -628,17 +624,19 @@
             font-size: 18px;
             color: var(--text-white);
             margin-bottom: 8px;
+            position: relative;
+            z-index: 2;
         }
 
         .platform-card p {
             font-size: 14px;
             line-height: 1.6;
             color: var(--text);
+            position: relative;
+            z-index: 2;
         }
 
-        /* ======================
-           FEATURES
-           ====================== */
+        /* Features bento grid */
         .features-section {
             padding: 100px 0;
             background: var(--bg-surface);
@@ -658,38 +656,66 @@
 
         .feature-grid {
             display: grid;
-            grid-template-columns: repeat(3, 1fr);
+            grid-template-columns: repeat(6, 1fr);
             gap: 20px;
-            max-width: 900px;
+            max-width: 960px;
             margin: 0 auto;
         }
 
         .feature {
-            padding: 24px;
+            padding: 28px;
             background: var(--bg-card);
             border: 1px solid var(--border);
-            border-radius: 12px;
-            transition: border-color 0.2s;
+            border-radius: 16px;
+            transition: border-color 0.2s, background-color 0.2s;
+            display: flex;
+            flex-direction: column;
+            justify-content: flex-start;
         }
 
         .feature:hover {
             border-color: var(--border-hover);
+            background: rgba(255, 255, 255, 0.02);
+        }
+
+        .feature.span-3 { grid-column: span 3; }
+        .feature.span-2 { grid-column: span 2; }
+        .feature.span-6 {
+            grid-column: span 6;
+            flex-direction: row;
+            align-items: center;
+            gap: 32px;
         }
 
         .feature-icon {
-            width: 40px;
-            height: 40px;
+            width: 48px;
+            height: 48px;
             display: flex;
             align-items: center;
             justify-content: center;
             background: var(--blue-dim);
-            border-radius: 10px;
-            margin-bottom: 16px;
+            border-radius: 12px;
+            margin-bottom: 20px;
+            flex-shrink: 0;
+        }
+
+        .feature.span-6 .feature-icon {
+            margin-bottom: 0;
+            width: 64px;
+            height: 64px;
+            border-radius: 16px;
+            background: rgba(34, 197, 94, 0.1);
+        }
+
+        .feature.span-6 .feature-icon svg {
+            stroke: var(--green);
+            width: 28px;
+            height: 28px;
         }
 
         .feature-icon svg {
-            width: 20px;
-            height: 20px;
+            width: 24px;
+            height: 24px;
             stroke: var(--blue);
             fill: none;
             stroke-width: 2;
@@ -700,20 +726,20 @@
         .feature h3 {
             font-family: var(--font-display);
             font-weight: 600;
-            font-size: 15px;
+            font-size: 18px;
             color: var(--text-white);
-            margin-bottom: 6px;
+            margin-bottom: 8px;
         }
 
+        .feature.span-6 h3 { font-size: 22px; }
+
         .feature p {
-            font-size: 13px;
+            font-size: 14px;
             line-height: 1.6;
             color: var(--text);
         }
 
-        /* ======================
-           PRIVACY
-           ====================== */
+        /* Privacy */
         .privacy-section {
             padding: 80px 0;
             text-align: center;
@@ -765,9 +791,7 @@
             font-weight: 500;
         }
 
-        /* ======================
-           INSTALL
-           ====================== */
+        /* Install */
         .install-section {
             padding: 100px 0;
             background: var(--bg-surface);
@@ -799,9 +823,9 @@
 
         .install-grid {
             display: grid;
-            grid-template-columns: 1fr 1fr;
+            grid-template-columns: 1fr 1.2fr;
             gap: 24px;
-            max-width: 800px;
+            max-width: 900px;
             margin: 0 auto;
             position: relative;
             z-index: 1;
@@ -836,6 +860,37 @@
             font-size: 14px;
         }
 
+        .terminal-window {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .terminal-header {
+            background: var(--bg-elevated);
+            padding: 12px 16px;
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .terminal-title {
+            font-family: 'SF Mono', 'Fira Code', monospace;
+            font-size: 12px;
+            color: var(--text);
+            margin: 0 auto;
+            transform: translateX(-26px);
+        }
+
+        .terminal-body {
+            padding: 24px 32px;
+            flex: 1;
+        }
+
         .install-steps {
             list-style: none;
             counter-reset: install-step;
@@ -844,12 +899,14 @@
         .install-steps li {
             counter-increment: install-step;
             display: flex;
-            gap: 12px;
-            margin-bottom: 14px;
+            gap: 16px;
+            margin-bottom: 18px;
             font-size: 14px;
             color: var(--text);
             line-height: 1.6;
         }
+
+        .install-steps li:last-child { margin-bottom: 0; }
 
         .install-steps li::before {
             content: counter(install-step);
@@ -868,18 +925,19 @@
         }
 
         .install-steps code {
-            display: inline-block;
-            padding: 2px 8px;
-            background: rgba(255, 255, 255, 0.06);
-            border-radius: 4px;
+            display: block;
+            margin-top: 6px;
+            padding: 8px 12px;
+            background: rgba(0, 0, 0, 0.4);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            border-radius: 6px;
             font-family: 'SF Mono', 'Fira Code', monospace;
             font-size: 12px;
             color: var(--text-bright);
+            word-break: break-all;
         }
 
-        /* ======================
-           FOOTER
-           ====================== */
+        /* Footer */
         footer {
             padding: 40px 0;
             border-top: 1px solid var(--border);
@@ -910,9 +968,7 @@
 
         .footer-links a:hover { color: var(--text-bright); }
 
-        /* ======================
-           RESPONSIVE
-           ====================== */
+        /* Responsive */
         @media (max-width: 900px) {
             .hero .container {
                 grid-template-columns: 1fr;
@@ -932,7 +988,10 @@
             .step-arrow { display: none; }
 
             .platform-cards { grid-template-columns: 1fr; }
-            .feature-grid { grid-template-columns: 1fr 1fr; }
+
+            .feature.span-3, .feature.span-2, .feature.span-6 { grid-column: span 6; }
+            .feature.span-6 { flex-direction: column; align-items: flex-start; gap: 20px;}
+
             .install-grid { grid-template-columns: 1fr; }
         }
 
@@ -941,8 +1000,6 @@
             .hero-text h1 { font-size: 36px; }
 
             .nav-links a:not(.btn-install) { display: none; }
-
-            .feature-grid { grid-template-columns: 1fr; }
 
             .demo-window { max-width: 100%; }
             .demo-content { padding: 14px; min-height: 280px; }
@@ -964,7 +1021,8 @@
             .demo-ctx,
             .demo-ctx-snag,
             .demo-notif,
-            .demo-cursor {
+            .demo-cursor,
+            .hero .glow-orb {
                 animation: none;
             }
 
@@ -980,7 +1038,6 @@
 </head>
 <body>
 
-    <!-- ========== NAVIGATION ========== -->
     <nav>
         <div class="nav-inner">
             <a class="nav-brand" href="#">
@@ -1000,7 +1057,6 @@
         </div>
     </nav>
 
-    <!-- ========== HERO ========== -->
     <section class="hero">
         <div class="glow-orb"></div>
         <div class="container">
@@ -1021,7 +1077,6 @@
                         <div class="demo-url">instagram.com/p/Cx7mK...</div>
                     </div>
                     <div class="demo-content">
-                        <!-- Fake social post -->
                         <div class="demo-post">
                             <div class="demo-post-header">
                                 <div class="demo-avatar"></div>
@@ -1035,7 +1090,6 @@
                             </div>
                         </div>
 
-                        <!-- Context menu -->
                         <div class="demo-ctx">
                             <div class="demo-ctx-item">Open image in new tab</div>
                             <div class="demo-ctx-item">Copy image address</div>
@@ -1060,13 +1114,11 @@
                             </div>
                         </div>
 
-                        <!-- Download notification -->
                         <div class="demo-notif">
                             <svg viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg>
                             photo_2048x2048.jpg saved
                         </div>
 
-                        <!-- Cursor -->
                         <div class="demo-cursor">
                             <svg viewBox="0 0 20 24" fill="none">
                                 <path d="M2 1L2 17L6.5 12.5L10.5 21L12.5 20L8.5 11L14.5 11L2 1Z" fill="white" stroke="#1e293b" stroke-width="1.2"/>
@@ -1078,7 +1130,6 @@
         </div>
     </section>
 
-    <!-- ========== HOW IT WORKS ========== -->
     <section class="how" id="how">
         <div class="container">
             <h2>Three clicks, full resolution</h2>
@@ -1108,7 +1159,6 @@
         </div>
     </section>
 
-    <!-- ========== PLATFORMS ========== -->
     <section class="platforms-section" id="platforms">
         <div class="container">
             <h2>Works where you scroll</h2>
@@ -1129,58 +1179,58 @@
         </div>
     </section>
 
-    <!-- ========== FEATURES ========== -->
     <section class="features-section">
         <div class="container">
             <h2>What you get</h2>
             <div class="feature-grid">
-                <div class="feature">
+                <div class="feature span-3">
                     <div class="feature-icon">
                         <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M12 16V8M8 12l4-4 4 4"/></svg>
                     </div>
                     <h3>HD quality</h3>
-                    <p>Rewrites CDN URLs to fetch the highest available resolution, not the compressed preview.</p>
+                    <p>Rewrites CDN URLs to fetch the highest available resolution, bypassing standard front-end media compression.</p>
                 </div>
-                <div class="feature">
+                <div class="feature span-3">
                     <div class="feature-icon">
                         <svg viewBox="0 0 24 24"><rect x="6" y="6" width="15" height="15" rx="2"/><path d="M3 18V5a2 2 0 012-2h13"/></svg>
                     </div>
                     <h3>Multi-image posts</h3>
-                    <p>Download every image from a carousel or gallery in one click. No swiping through one at a time.</p>
+                    <p>Download every image from a carousel or gallery in one click. No swiping through one at a time to grab everything.</p>
                 </div>
-                <div class="feature">
+                <div class="feature span-2">
                     <div class="feature-icon">
                         <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>
                     </div>
                     <h3>Download history</h3>
-                    <p>Quick access to recent downloads from the popup. See what you grabbed and when.</p>
+                    <p>Quick access to recent downloads directly from the extension popup.</p>
                 </div>
-                <div class="feature">
+                <div class="feature span-2">
                     <div class="feature-icon">
                         <svg viewBox="0 0 24 24"><path d="M3 7v11a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg>
                     </div>
                     <h3>Organized folders</h3>
-                    <p>Files saved to SocialSnag/instagram/, SocialSnag/twitter/, etc. Sorted automatically.</p>
+                    <p>Files are automatically sorted into SocialSnag/twitter/ and other dedicated folders.</p>
                 </div>
-                <div class="feature">
+                <div class="feature span-2">
                     <div class="feature-icon">
                         <svg viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="10" rx="5"/><circle cx="17" cy="12" r="3" fill="var(--blue)"/></svg>
                     </div>
                     <h3>Platform toggles</h3>
-                    <p>Turn individual platforms on or off. Only activate what you use.</p>
+                    <p>Turn individual platforms on or off from the options menu at any time.</p>
                 </div>
-                <div class="feature">
+                <div class="feature span-6">
                     <div class="feature-icon">
-                        <svg viewBox="0 0 24 24"><path d="M12 3l8 4v5c0 5-3.5 9.5-8 11-4.5-1.5-8-6-8-11V7l8-4z"/><path d="M9 12l2 2 4-4"/></svg>
+                        <svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
                     </div>
-                    <h3>Zero tracking</h3>
-                    <p>No analytics, no telemetry, no server. Your browsing data stays on your device.</p>
+                    <div>
+                        <h3>Zero tracking</h3>
+                        <p>No analytics, no telemetry, no servers. Your browsing data stays on your device. All scraping and formatting runs locally inside your browser, meaning SocialSnag can't track what you download.</p>
+                    </div>
                 </div>
             </div>
         </div>
     </section>
 
-    <!-- ========== PRIVACY ========== -->
     <section class="privacy-section">
         <div class="container">
             <div class="privacy-icon">
@@ -1192,7 +1242,6 @@
         </div>
     </section>
 
-    <!-- ========== INSTALL ========== -->
     <section class="install-section" id="install">
         <div class="glow-orb"></div>
         <div class="container">
@@ -1202,21 +1251,31 @@
                     <h3>Chrome Web Store</h3>
                     <p>Submission pending. Check back soon.</p>
                 </div>
-                <div class="install-card">
-                    <h3>Developer mode</h3>
-                    <ol class="install-steps">
-                        <li>Clone the repo: <code>git clone https://github.com/jamditis/socialsnag.git</code></li>
-                        <li>Open <code>chrome://extensions</code> in Chrome</li>
-                        <li>Toggle on <strong style="color: var(--text-bright);">Developer mode</strong> in the top right</li>
-                        <li>Click <strong style="color: var(--text-bright);">Load unpacked</strong> and select the folder</li>
-                        <li>Right-click any image on a supported site</li>
-                    </ol>
+
+                <div class="terminal-window">
+                    <div class="terminal-header">
+                        <div class="demo-dots"><span></span><span></span><span></span></div>
+                        <div class="terminal-title">~/developer-mode</div>
+                    </div>
+                    <div class="terminal-body">
+                        <ol class="install-steps">
+                            <li>
+                                <div>
+                                    Clone and build
+                                    <code>git clone https://github.com/jamditis/socialsnag.git && cd socialsnag && npm install && npm run build</code>
+                                </div>
+                            </li>
+                            <li>Open <code>chrome://extensions</code> in your browser</li>
+                            <li>Toggle on <strong style="color: var(--text-bright);">Developer mode</strong> in the top right</li>
+                            <li>Click <strong style="color: var(--text-bright);">Load unpacked</strong> and select the <code>dist/</code> folder</li>
+                        </ol>
+                    </div>
                 </div>
+
             </div>
         </div>
     </section>
 
-    <!-- ========== FOOTER ========== -->
     <footer>
         <div class="container">
             <p>MIT license. Made by Joe Amditis.</p>

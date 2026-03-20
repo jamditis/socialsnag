@@ -12,6 +12,7 @@ const entryPoints = [
   { in: 'src/platforms/instagram.js', out: 'platforms/instagram' },
   { in: 'src/platforms/twitter.js', out: 'platforms/twitter' },
   { in: 'src/platforms/facebook.js', out: 'platforms/facebook' },
+  { in: 'src/platforms/bluesky.js', out: 'platforms/bluesky' },
   { in: 'src/popup.js', out: 'popup' },
   { in: 'src/options.js', out: 'options' },
 ];
@@ -26,6 +27,7 @@ await esbuild.build({
 });
 
 cpSync('icons', 'dist/icons', { recursive: true });
+cpSync('src/fonts', 'dist/fonts', { recursive: true });
 cpSync('src/popup.html', 'dist/popup.html');
 cpSync('src/popup.css', 'dist/popup.css');
 cpSync('src/options.html', 'dist/options.html');

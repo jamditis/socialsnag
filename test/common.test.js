@@ -9,12 +9,14 @@ import {
 } from '../src/platforms/common.js';
 
 describe('ALLOWED_DOMAINS', () => {
-  it('contains 4 expected CDN domains', () => {
-    expect(ALLOWED_DOMAINS).toHaveLength(4);
+  it('contains 6 expected CDN domains', () => {
+    expect(ALLOWED_DOMAINS).toHaveLength(6);
     expect(ALLOWED_DOMAINS).toContain('cdninstagram.com');
     expect(ALLOWED_DOMAINS).toContain('pbs.twimg.com');
     expect(ALLOWED_DOMAINS).toContain('video.twimg.com');
     expect(ALLOWED_DOMAINS).toContain('fbcdn.net');
+    expect(ALLOWED_DOMAINS).toContain('cdn.bsky.app');
+    expect(ALLOWED_DOMAINS).toContain('video.bsky.app');
   });
 });
 

@@ -1,48 +1,31 @@
 'use strict';
 
 if (typeof document !== 'undefined') {
-  const PLATFORMS = ['instagram', 'twitter', 'facebook'];
+  const PLATFORMS = ['instagram', 'twitter', 'facebook', 'bluesky'];
 
-  const showStatus = (message, type) => {
-    const status = document.getElementById('status');
-    status.textContent = message;
-    status.className = type;
-    status.style.opacity = 1;
-    setTimeout(() => { status.style.opacity = 0; }, 2000);
-  };
-
-  const saveOptions = () => {
-    const settings = {
-      showNotifications: document.getElementById('showNotifications').checked,
-    };
+  const saveSettings = () => {
+    // Don't touch showNotifications — no UI toggle for it, preserve whatever the user has
+    const settings = {};
 
     PLATFORMS.forEach((p) => {
-      settings[`platform_${p}`] = document.getElementById(`platform-${p}`).checked;
+      settings[`platform_${p}`] = document.getElementById(`${p}-toggle`).checked;
     });
 
-    const advancedCheckbox = document.getElementById('advancedMode');
+    const advancedCheckbox = document.getElementById('advanced-toggle');
 
     if (advancedCheckbox.checked) {
       chrome.permissions.request({ permissions: ['webRequest'] }, (granted) => {
         if (granted) {
           settings.advancedMode = true;
           chrome.storage.sync.set(settings, () => {
-            if (chrome.runtime.lastError) {
-              showStatus(`Failed to save: ${chrome.runtime.lastError.message}`, 'error');
-              return;
-            }
-            chrome.runtime.sendMessage({ action: 'enableAdvancedMode' });
-            showStatus('Settings saved.', 'success');
+            if (chrome.runtime.lastError) console.error('SocialSnag: save failed:', chrome.runtime.lastError.message);
           });
+          chrome.runtime.sendMessage({ action: 'enableAdvancedMode' });
         } else {
           advancedCheckbox.checked = false;
           settings.advancedMode = false;
           chrome.storage.sync.set(settings, () => {
-            if (chrome.runtime.lastError) {
-              showStatus(`Failed to save: ${chrome.runtime.lastError.message}`, 'error');
-              return;
-            }
-            showStatus('Permission denied. Advanced mode disabled.', 'error');
+            if (chrome.runtime.lastError) console.error('SocialSnag: save failed:', chrome.runtime.lastError.message);
           });
         }
       });
@@ -51,11 +34,7 @@ if (typeof document !== 'undefined') {
       chrome.runtime.sendMessage({ action: 'disableAdvancedMode' });
       chrome.permissions.remove({ permissions: ['webRequest'] });
       chrome.storage.sync.set(settings, () => {
-        if (chrome.runtime.lastError) {
-          showStatus(`Failed to save: ${chrome.runtime.lastError.message}`, 'error');
-          return;
-        }
-        showStatus('Settings saved.', 'success');
+        if (chrome.runtime.lastError) console.error('SocialSnag: save failed:', chrome.runtime.lastError.message);
       });
     }
   };
@@ -68,14 +47,19 @@ if (typeof document !== 'undefined') {
     PLATFORMS.forEach((p) => { defaults[`platform_${p}`] = true; });
 
     chrome.storage.sync.get(defaults, (items) => {
-      document.getElementById('showNotifications').checked = items.showNotifications;
-      document.getElementById('advancedMode').checked = items.advancedMode;
+      document.getElementById('advanced-toggle').checked = items.advancedMode;
       PLATFORMS.forEach((p) => {
-        document.getElementById(`platform-${p}`).checked = items[`platform_${p}`];
+        document.getElementById(`${p}-toggle`).checked = items[`platform_${p}`];
       });
     });
   };
 
-  document.addEventListener('DOMContentLoaded', restoreOptions);
-  document.getElementById('save').addEventListener('click', saveOptions);
+  document.addEventListener('DOMContentLoaded', () => {
+    restoreOptions();
+
+    PLATFORMS.forEach((p) => {
+      document.getElementById(`${p}-toggle`).addEventListener('change', saveSettings);
+    });
+    document.getElementById('advanced-toggle').addEventListener('change', saveSettings);
+  });
 }

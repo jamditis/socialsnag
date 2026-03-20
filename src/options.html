@@ -1,65 +1,102 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SocialSnag settings</title>
-    <link rel="stylesheet" href="options.css">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SocialSnag settings</title>
+  <link rel="stylesheet" href="options.css">
 </head>
 <body>
-    <div class="container">
-        <h1>SocialSnag settings</h1>
-        <p>Configure which platforms are enabled and how downloads behave.</p>
+  <div class="glow-orb"></div>
 
-        <h2>Enabled platforms</h2>
+  <div class="container">
+    <header class="header">
+      <svg class="logo" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <rect width="32" height="32" rx="8" fill="#3b82f6"/>
+        <path d="M10 22V14l6-4 6 4v8" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M16 10v12" stroke="#fff" stroke-width="2.5" stroke-linecap="round"/>
+        <path d="M12 16l4-4 4 4" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <h1>SocialSnag settings</h1>
+    </header>
 
-        <div class="option-group">
-            <input type="checkbox" id="platform-instagram" checked>
-            <label for="platform-instagram">Instagram</label>
+    <main>
+      <section class="settings-card">
+        <h2>Platform support</h2>
+        <div class="toggle-list">
+          <div class="toggle-row">
+            <span class="toggle-label">Instagram</span>
+            <label class="toggle-switch">
+              <input type="checkbox" id="instagram-toggle" checked>
+              <span class="slider"></span>
+            </label>
+          </div>
+          <div class="toggle-row">
+            <span class="toggle-label">Twitter / X</span>
+            <label class="toggle-switch">
+              <input type="checkbox" id="twitter-toggle" checked>
+              <span class="slider"></span>
+            </label>
+          </div>
+          <div class="toggle-row">
+            <span class="toggle-label">Facebook</span>
+            <label class="toggle-switch">
+              <input type="checkbox" id="facebook-toggle" checked>
+              <span class="slider"></span>
+            </label>
+          </div>
+          <div class="toggle-row">
+            <span class="toggle-label">Bluesky</span>
+            <label class="toggle-switch">
+              <input type="checkbox" id="bluesky-toggle" checked>
+              <span class="slider"></span>
+            </label>
+          </div>
         </div>
-        <div class="option-group">
-            <input type="checkbox" id="platform-twitter" checked>
-            <label for="platform-twitter">Twitter / X</label>
-        </div>
-        <div class="option-group">
-            <input type="checkbox" id="platform-facebook" checked>
-            <label for="platform-facebook">Facebook</label>
-        </div>
-        <div class="option-group">
-            <input type="checkbox" id="platform-linkedin" disabled>
-            <label for="platform-linkedin" class="disabled">LinkedIn</label>
-            <p class="section-note">Available in developer mode only</p>
-        </div>
-        <div class="option-group">
-            <input type="checkbox" id="platform-tiktok" disabled>
-            <label for="platform-tiktok" class="disabled">TikTok</label>
-            <p class="section-note">Available in developer mode only</p>
-        </div>
+      </section>
 
-        <h2>Notifications</h2>
-        <div class="option-group">
-            <input type="checkbox" id="showNotifications" checked>
-            <label for="showNotifications">Show download notifications</label>
-        </div>
-
-        <h2>Advanced</h2>
-        <div class="advanced-section">
-            <div class="option-group">
-                <input type="checkbox" id="advancedMode">
-                <label for="advancedMode">Advanced media detection</label>
-                <p class="description">Uses additional browser APIs to detect media that isn't visible in the page. May trigger extra permission prompts.</p>
+      <section class="settings-card">
+        <h2>Advanced modes</h2>
+        <div class="toggle-list">
+          <div class="toggle-row">
+            <div>
+              <span class="toggle-label">Deep scan (webRequest)</span>
+              <p class="toggle-description">Uses additional browser APIs to detect media that is not visible in the page. May trigger extra permission prompts.</p>
             </div>
+            <label class="toggle-switch">
+              <input type="checkbox" id="advanced-toggle">
+              <span class="slider"></span>
+            </label>
+          </div>
+          <div class="toggle-row disabled-row">
+            <div>
+              <span class="toggle-label">LinkedIn &amp; TikTok</span>
+              <p class="toggle-description">Coming soon</p>
+            </div>
+            <label class="toggle-switch">
+              <input type="checkbox" disabled>
+              <span class="slider"></span>
+            </label>
+          </div>
         </div>
+      </section>
 
-        <button id="save">Save settings</button>
-        <div id="status"></div>
-
-        <div class="disclaimer">
-            SocialSnag downloads publicly accessible media. Users are responsible for complying with copyright laws and platform terms of service in their jurisdiction. Do not download content you don't have permission to use.
-            <br>
-            <a class="privacy-link" href="https://github.com/jamditis/socialsnag/blob/HEAD/PRIVACY.md" target="_blank" rel="noopener noreferrer">Privacy policy</a>
+      <section class="settings-card">
+        <h2>About and privacy</h2>
+        <div class="info-card">
+          <p>SocialSnag downloads publicly accessible media from supported platforms. No data is collected or transmitted.</p>
+          <div class="disclaimer">
+            Users are responsible for complying with copyright laws and platform terms of service in their jurisdiction. Do not download content you do not have permission to use.
+          </div>
+          <div class="links">
+            <a href="https://github.com/jamditis/socialsnag" target="_blank" rel="noopener noreferrer">GitHub</a>
+            <a href="https://github.com/jamditis/socialsnag/blob/HEAD/PRIVACY.md" target="_blank" rel="noopener noreferrer">Privacy policy</a>
+          </div>
         </div>
-    </div>
-    <script src="options.js"></script>
+      </section>
+    </main>
+  </div>
+
+  <script src="options.js"></script>
 </body>
 </html>
