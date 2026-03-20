@@ -41,7 +41,8 @@ export function extractId(url, pattern) {
 
 export function findPostContainer(element, selectors) {
   let el = element;
-  while (el && el !== document.body) {
+  const body = globalThis.document?.body;
+  while (el && el !== body) {
     for (const selector of selectors) {
       if (el.matches(selector)) return el;
     }
@@ -86,7 +87,8 @@ export function findNearestMedia(element) {
 
   // Walk up and check siblings/parent containers
   let el = element;
-  for (let i = 0; i < 5 && el && el !== document.body; i++) {
+  const body = globalThis.document?.body;
+  for (let i = 0; i < 5 && el && el !== body; i++) {
     el = el.parentElement;
     if (!el) break;
     const nearImg = el.querySelector('img');
