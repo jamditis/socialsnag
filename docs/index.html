@@ -828,8 +828,8 @@
         }
 
         .install-grid {
-            display: grid;
-            grid-template-columns: 1fr 1.2fr;
+            display: flex;
+            flex-direction: column;
             gap: 24px;
             max-width: 900px;
             margin: 0 auto;
@@ -854,11 +854,9 @@
 
         .install-card.cws-pending {
             display: flex;
-            flex-direction: column;
+            flex-direction: row;
             align-items: center;
-            justify-content: center;
-            text-align: center;
-            gap: 20px;
+            gap: 24px;
             border-color: var(--border-hover);
         }
 
@@ -904,11 +902,20 @@
             50% { opacity: 0.4; }
         }
 
+        .cws-text {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .cws-text h3 {
+            margin-bottom: 0;
+        }
+
         .install-card.cws-pending p {
             color: var(--text);
             font-size: 14px;
             line-height: 1.6;
-            max-width: 280px;
         }
 
         .terminal-window {
@@ -1043,7 +1050,8 @@
             .feature.span-3, .feature.span-2, .feature.span-6 { grid-column: span 6; }
             .feature.span-6 { flex-direction: column; align-items: flex-start; gap: 20px;}
 
-            .install-grid { grid-template-columns: 1fr; }
+            .install-card.cws-pending { flex-direction: column; text-align: center; }
+            .cws-status { align-self: center; }
         }
 
         @media (max-width: 600px) {
@@ -1312,12 +1320,14 @@
                             <path d="M20 16l-2.9 7" stroke="#ef4444" stroke-width="2" stroke-linecap="round"/>
                         </svg>
                     </div>
-                    <h3>Chrome Web Store</h3>
+                    <div class="cws-text">
+                        <h3>Chrome Web Store</h3>
+                        <p>v1.1.0 submitted. Will be published automatically once approved by the Chrome Web Store team.</p>
+                    </div>
                     <div class="cws-status">
                         <span class="cws-status-dot"></span>
                         Pending review
                     </div>
-                    <p>v1.1.0 submitted. Will be published automatically once approved by the Chrome Web Store team.</p>
                 </div>
 
                 <div class="terminal-window">
