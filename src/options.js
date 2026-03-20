@@ -4,12 +4,14 @@ if (typeof document !== 'undefined') {
   const PLATFORMS = ['instagram', 'twitter', 'facebook', 'bluesky'];
 
   const saveSettings = () => {
-    // Don't touch showNotifications — no UI toggle for it, preserve whatever the user has
     const settings = {};
 
     PLATFORMS.forEach((p) => {
       settings[`platform_${p}`] = document.getElementById(`${p}-toggle`).checked;
     });
+
+    settings.showNotifications = document.getElementById('notifications-toggle').checked;
+    settings.downloadPath = document.getElementById('download-path').value.trim() || 'SocialSnag/{platform}';
 
     const advancedCheckbox = document.getElementById('advanced-toggle');
 
@@ -43,17 +45,30 @@ if (typeof document !== 'undefined') {
     const defaults = {
       showNotifications: true,
       advancedMode: false,
+      downloadPath: 'SocialSnag/{platform}',
     };
     PLATFORMS.forEach((p) => { defaults[`platform_${p}`] = true; });
 
     chrome.storage.sync.get(defaults, (items) => {
       document.getElementById('advanced-toggle').checked = items.advancedMode;
+      document.getElementById('notifications-toggle').checked = items.showNotifications;
+      document.getElementById('download-path').value = items.downloadPath;
       PLATFORMS.forEach((p) => {
         document.getElementById(`${p}-toggle`).checked = items[`platform_${p}`];
       });
+      updatePathPreview();
     });
   };
 
+  function updatePathPreview() {
+    const pathInput = document.getElementById('download-path');
+    const preview = document.getElementById('path-preview');
+    const val = pathInput.value.trim() || 'SocialSnag/{platform}';
+    const example = val.replace(/\{platform\}/g, 'twitter');
+    preview.textContent = `Downloads / ${example.replace(/[/\\]/g, ' / ')} / photo.jpg`;
+  }
+
+  let pathDebounce = null;
   document.addEventListener('DOMContentLoaded', () => {
     restoreOptions();
 
@@ -61,5 +76,14 @@ if (typeof document !== 'undefined') {
       document.getElementById(`${p}-toggle`).addEventListener('change', saveSettings);
     });
     document.getElementById('advanced-toggle').addEventListener('change', saveSettings);
+    document.getElementById('notifications-toggle').addEventListener('change', saveSettings);
+    document.getElementById('download-path').addEventListener('input', () => {
+      updatePathPreview();
+      clearTimeout(pathDebounce);
+      pathDebounce = setTimeout(saveSettings, 500);
+    });
+    document.getElementById('open-downloads').addEventListener('click', () => {
+      chrome.downloads.showDefaultFolder();
+    });
   });
 }

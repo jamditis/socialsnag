@@ -56,6 +56,30 @@
       </section>
 
       <section class="settings-card">
+        <h2>Downloads</h2>
+        <div class="toggle-list">
+          <div class="toggle-row" style="flex-direction: column; align-items: stretch;">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <span class="toggle-label">Download folder</span>
+              <button id="open-downloads" class="small-btn" title="Open Downloads folder">Open folder</button>
+            </div>
+            <p class="toggle-description">Subfolder inside your browser's Downloads directory. Use <code>{platform}</code> to auto-sort by platform.</p>
+            <input type="text" id="download-path" class="text-input" value="SocialSnag/{platform}" spellcheck="false">
+            <p class="path-preview" id="path-preview">Downloads / SocialSnag / twitter / photo.jpg</p>
+          </div>
+          <div class="toggle-row">
+            <div>
+              <span class="toggle-label">Show download notifications</span>
+            </div>
+            <label class="toggle-switch">
+              <input type="checkbox" id="notifications-toggle" checked>
+              <span class="slider"></span>
+            </label>
+          </div>
+        </div>
+      </section>
+
+      <section class="settings-card">
         <h2>Advanced modes</h2>
         <div class="toggle-list">
           <div class="toggle-row">
@@ -90,7 +114,7 @@
           </div>
           <div class="links">
             <a href="https://github.com/jamditis/socialsnag" target="_blank" rel="noopener noreferrer">GitHub</a>
-            <a href="https://github.com/jamditis/socialsnag/blob/HEAD/PRIVACY.md" target="_blank" rel="noopener noreferrer">Privacy policy</a>
+            <a href="https://jamditis.github.io/socialsnag/privacy.html" target="_blank" rel="noopener noreferrer">Privacy policy</a>
           </div>
         </div>
       </section>

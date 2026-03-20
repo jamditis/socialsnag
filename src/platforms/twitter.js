@@ -42,7 +42,28 @@ function extractTweetId(target) {
   return null;
 }
 
+function tweetHasVideo(target) {
+  const tweet = findPostContainer(target, [
+    'article[data-testid="tweet"]',
+    'article[role="article"]',
+  ]);
+  if (!tweet) return false;
+  return tweet.querySelector('video') || tweet.querySelector('[data-testid="videoComponent"]');
+}
+
 function resolveSingle(srcUrl, target) {
+  // Check if this tweet contains a video — if so, prioritize video download
+  // (Twitter blocks right-click on videos, so users right-click the tweet text instead)
+  if (tweetHasVideo(target)) {
+    const id = extractTweetId(target);
+    // If srcUrl is just a profile pic or empty, go straight to video
+    const isProfilePic = srcUrl && srcUrl.includes('/profile_images/');
+    const isMediaImage = srcUrl && srcUrl.includes('/media/');
+    if (!isMediaImage || isProfilePic || !srcUrl) {
+      return resolveVideo(target);
+    }
+  }
+
   // Try the srcUrl from context menu first (works when right-clicking directly on img)
   const url = upgradeImageUrl(srcUrl);
   if (url) {
@@ -56,16 +77,19 @@ function resolveSingle(srcUrl, target) {
     if (nearestMedia.tagName === 'IMG') {
       const upgraded = upgradeImageUrl(nearestMedia.src);
       if (upgraded) {
-        const id = extractTweetId(target);
-        return [{ url: upgraded, type: 'image', filename: id ? `tweet_${id}` : null }];
+        // Don't return a profile pic if the tweet has a video
+        if (!tweetHasVideo(target) || !upgraded.includes('/profile_images/')) {
+          const id = extractTweetId(target);
+          return [{ url: upgraded, type: 'image', filename: id ? `tweet_${id}` : null }];
+        }
       }
     }
-    if (nearestMedia.tagName === 'VIDEO') {
+    if (nearestMedia.tagName === 'VIDEO' || nearestMedia.closest?.('[data-testid="videoComponent"]')) {
       return resolveVideo(target);
     }
   }
 
-  if (target?.tagName === 'VIDEO' || target?.closest('video')) {
+  if (target?.tagName === 'VIDEO' || target?.closest('video') || target?.closest('[data-testid="videoComponent"]')) {
     return resolveVideo(target);
   }
 
@@ -100,13 +124,21 @@ function resolveAll(target) {
   return items.length > 0 ? items : resolveSingle(target?.src || '', target);
 }
 
-async function resolveVideo() {
+async function resolveVideo(target) {
+  // First try webRequest captures (advanced mode)
   const captured = await getCapturedMedia();
   const mp4s = filterCapturedVideos(captured);
 
   if (mp4s.length > 0) {
     return [{ url: mp4s[0].url, type: 'video', filename: null }];
   }
+
+  // Fall back to API lookup via background script
+  const tweetId = extractTweetId(target) || window.location.pathname.match(/\/status\/(\d+)/)?.[1];
+  if (tweetId) {
+    return [{ type: 'video', filename: `tweet_${tweetId}`, tweetId, needsVideoLookup: true }];
+  }
+
   return [];
 }
 

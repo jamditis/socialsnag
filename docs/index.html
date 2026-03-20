@@ -4,10 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SocialSnag — Right-click to download HD social media</title>
-    <meta name="description" content="Chrome extension for downloading full-resolution images and videos from Instagram, Twitter/X, and Facebook. Right-click, download, done.">
+    <meta name="description" content="Chrome extension for downloading full-resolution images and videos from Instagram, Twitter/X, Facebook, and Bluesky. Right-click, download, done.">
 
     <meta property="og:title" content="SocialSnag — Right-click to download HD social media">
-    <meta property="og:description" content="Chrome extension for downloading full-resolution images and videos from Instagram, Twitter/X, and Facebook.">
+    <meta property="og:description" content="Chrome extension for downloading full-resolution images and videos from Instagram, Twitter/X, Facebook, and Bluesky.">
     <meta property="og:type" content="website">
     <meta property="og:url" content="https://jamditis.github.io/socialsnag/">
     <meta property="og:image" content="https://jamditis.github.io/socialsnag/og-image.png">
@@ -15,7 +15,7 @@
     <meta property="og:image:height" content="630">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="SocialSnag — Right-click to download HD social media">
-    <meta name="twitter:description" content="Chrome extension for downloading full-resolution images and videos from Instagram, Twitter/X, and Facebook.">
+    <meta name="twitter:description" content="Chrome extension for downloading full-resolution images and videos from Instagram, Twitter/X, Facebook, and Bluesky.">
     <meta name="twitter:image" content="https://jamditis.github.io/socialsnag/og-image.png">
 
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 128 128'%3E%3Crect x='16' y='16' width='96' height='96' rx='18' fill='%233b82f6'/%3E%3Crect x='57' y='34' width='14' height='30' rx='2' fill='%23fff'/%3E%3Cpolygon points='64,82 42,58 86,58' fill='%23fff'/%3E%3Crect x='36' y='90' width='56' height='6' rx='3' fill='%23fff'/%3E%3C/svg%3E">
@@ -560,7 +560,7 @@
 
         .platform-cards {
             display: grid;
-            grid-template-columns: repeat(3, 1fr);
+            grid-template-columns: repeat(2, 1fr);
             gap: 20px;
             max-width: 900px;
             margin: 0 auto;
@@ -617,6 +617,12 @@
             background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='white'%3E%3Cpath d='M22.675 0H1.325C.593 0 0 .593 0 1.325v21.351C0 23.407.593 24 1.325 24H12.82v-9.294H9.692v-3.622h3.128V8.413c0-3.1 1.893-4.788 4.659-4.788 1.325 0 2.463.099 2.795.143v3.24l-1.918.001c-1.504 0-1.795.715-1.795 1.763v2.313h3.587l-.467 3.622h-3.12V24h6.116c.73 0 1.323-.593 1.323-1.325V1.325C24 .593 23.407 0 22.675 0z'/%3E%3C/svg%3E");
         }
         .platform-card.facebook:hover { box-shadow: 0 8px 32px -8px rgba(24, 119, 242, 0.15); }
+
+        .platform-card.bluesky { border-left-color: #0085ff; }
+        .platform-card.bluesky::after {
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='white'%3E%3Cpath d='M12 3C9.5 5 5 8.5 5 12a4 4 0 004.5 4c1 0 1.8-.4 2.5-1-.7.6-1.5 1-2.5 1A4 4 0 015 12c0-3.5 4.5-7 7-9zm0 0c2.5 2 7 5.5 7 9a4 4 0 01-4.5 4c-1 0-1.8-.4-2.5-1 .7.6 1.5 1 2.5 1A4 4 0 0019 12c0-3.5-4.5-7-7-9z'/%3E%3C/svg%3E");
+        }
+        .platform-card.bluesky:hover { box-shadow: 0 8px 32px -8px rgba(0, 133, 255, 0.15); }
 
         .platform-card h3 {
             font-family: var(--font-display);
@@ -1175,6 +1181,10 @@
                     <h3>Facebook</h3>
                     <p>Images and videos from posts and pages. Grabs the highest quality version available on the CDN.</p>
                 </div>
+                <div class="platform-card bluesky">
+                    <h3>Bluesky</h3>
+                    <p>Images from posts at full resolution. Extracts the original upload from the AT Protocol CDN.</p>
+                </div>
             </div>
         </div>
     </section>
@@ -1238,7 +1248,7 @@
             </div>
             <h2>No tracking. No servers. No nonsense.</h2>
             <p>SocialSnag has no backend, no analytics, and no data collection servers. All media processing happens in your browser, and settings are stored using the browser's built-in extension storage. If you have browser sync enabled, your browser may sync those settings via its own cloud services — controlled by your browser account, not SocialSnag.</p>
-            <a href="https://github.com/jamditis/socialsnag/blob/HEAD/PRIVACY.md">Read the full privacy policy</a>
+            <a href="privacy.html">Read the full privacy policy</a>
         </div>
     </section>
 
@@ -1281,7 +1291,7 @@
             <p>MIT license. Made by Joe Amditis.</p>
             <div class="footer-links">
                 <a href="https://github.com/jamditis/socialsnag">GitHub</a>
-                <a href="https://github.com/jamditis/socialsnag/blob/HEAD/PRIVACY.md">Privacy</a>
+                <a href="privacy.html">Privacy</a>
                 <a href="https://github.com/jamditis/socialsnag/blob/HEAD/LICENSE">License</a>
             </div>
         </div>

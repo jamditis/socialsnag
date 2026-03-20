@@ -130,6 +130,12 @@ function resolveSingle(srcUrl, target, pathname) {
       const shortcode = extractShortcode(pathname);
       return [{ url: cdnUrl, type: 'video', filename: shortcode ? `reel_${shortcode}` : null }];
     }
+
+    // Fall back to API lookup via background script
+    const shortcode = extractShortcode(pathname);
+    if (shortcode) {
+      return [{ type: 'video', filename: shortcode ? `reel_${shortcode}` : null, shortcode, needsVideoLookup: true }];
+    }
   }
 
   // Fall back to resolveAll
@@ -183,6 +189,16 @@ function collectMediaFromContainer(container, shortcode) {
           url: cdnUrl,
           type: 'video',
           filename: shortcode ? `post_${shortcode}_${index}` : null,
+        });
+        index++;
+      } else if (shortcode && !usedVideoUrls.has('api:' + shortcode)) {
+        // Fall back to API lookup
+        usedVideoUrls.add('api:' + shortcode);
+        items.push({
+          type: 'video',
+          filename: shortcode ? `reel_${shortcode}` : null,
+          shortcode,
+          needsVideoLookup: true,
         });
         index++;
       }
