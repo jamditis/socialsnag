@@ -1,13 +1,57 @@
 // SocialSnag — Facebook content script
 
-SocialSnag.init('facebook');
+import { findNearestMedia, findPostContainer, getCapturedMedia } from './common.js';
 
-SocialSnag.registerResolver(async (message, target) => {
-  if (message.type === 'single') {
-    return resolveSingle(message.srcUrl, target);
+// --- Pure functions (exported for testing) ---
+
+export function upgradeUrl(url) {
+  if (!url || !url.includes('fbcdn.net')) return null;
+  // Try removing size constraints from path
+  let upgraded = url.replace(/\/[sp]\d+x\d+\//, '/');
+  return upgraded;
+}
+
+export function extractPhotoId(url) {
+  if (!url) return null;
+  const match = url.match(/\/(\d{10,})/);
+  return match ? match[1] : null;
+}
+
+export function extractVideoUrlFromScripts(scriptTexts) {
+  for (const text of scriptTexts) {
+    if (text.includes('playable_url_quality_hd')) {
+      const match = text.match(/"playable_url_quality_hd":"(https?:[^"]+)"/);
+      if (match) {
+        return match[1].replace(/\\\//g, '/');
+      }
+    }
+    if (text.includes('playable_url')) {
+      const match = text.match(/"playable_url":"(https?:[^"]+)"/);
+      if (match) {
+        return match[1].replace(/\\\//g, '/');
+      }
+    }
   }
-  return resolveAll(target);
-});
+  return null;
+}
+
+// --- Browser wiring (not exported) ---
+
+function findVideoUrl(target) {
+  const container = target?.closest('[role="article"]') || target?.parentElement;
+  if (!container) return null;
+
+  const video = container.querySelector('video');
+  if (video) {
+    const src = video.src || video.querySelector('source')?.src;
+    if (src && !src.startsWith('blob:')) return src;
+  }
+
+  // Try to find playable_url in page scripts
+  const scripts = document.querySelectorAll('script');
+  const scriptTexts = Array.from(scripts).map((s) => s.textContent);
+  return extractVideoUrlFromScripts(scriptTexts);
+}
 
 function resolveSingle(srcUrl, target) {
   const url = upgradeUrl(srcUrl);
@@ -17,7 +61,7 @@ function resolveSingle(srcUrl, target) {
   }
 
   // If click landed on overlay, find nearest media
-  const nearest = SocialSnag.findNearestMedia(target);
+  const nearest = findNearestMedia(target);
   if (nearest?.tagName === 'IMG') {
     const upgraded = upgradeUrl(nearest.src);
     if (upgraded) {
@@ -35,7 +79,7 @@ function resolveSingle(srcUrl, target) {
 }
 
 async function resolveAll(target) {
-  const post = SocialSnag.findPostContainer(target, [
+  const post = findPostContainer(target, [
     '[role="article"]',
     '[data-pagelet*="FeedUnit"]',
     '[data-pagelet*="ProfileTimeline"]',
@@ -63,7 +107,7 @@ async function resolveAll(target) {
 
   // Fall back to webRequest captures if DOM is sparse
   if (items.length === 0) {
-    const captured = await SocialSnag.getCapturedMedia();
+    const captured = await getCapturedMedia();
     const fbImages = captured
       .filter((c) => c.url.includes('fbcdn.net') && c.type === 'image')
       .slice(-5);
@@ -81,46 +125,36 @@ async function resolveAll(target) {
   return items.length > 0 ? items : resolveSingle(target?.src || '', target);
 }
 
-function upgradeUrl(url) {
-  if (!url || !url.includes('fbcdn.net')) return null;
-  // Try removing size constraints from path
-  let upgraded = url.replace(/\/[sp]\d+x\d+\//, '/');
-  return upgraded;
+function initContentScript() {
+  let _lastTarget = null;
+
+  // Track right-click target
+  document.addEventListener('contextmenu', (e) => {
+    _lastTarget = e.target;
+  }, true);
+
+  // Listen for resolve requests from background
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message.action === 'resolve') {
+      const target = _lastTarget;
+
+      const handler = message.type === 'single'
+        ? resolveSingle(message.srcUrl, target)
+        : resolveAll(target);
+
+      Promise.resolve(handler)
+        .then((urls) => {
+          sendResponse({ urls: urls || [], platform: 'facebook' });
+        })
+        .catch((err) => {
+          console.error('SocialSnag facebook error:', err);
+          sendResponse({ urls: [], platform: 'facebook' });
+        });
+      return true;
+    }
+  });
 }
 
-function extractPhotoId(url) {
-  if (!url) return null;
-  const match = url.match(/\/(\d{10,})/);
-  return match ? match[1] : null;
-}
-
-function findVideoUrl(target) {
-  const container = target?.closest('[role="article"]') || target?.parentElement;
-  if (!container) return null;
-
-  const video = container.querySelector('video');
-  if (video) {
-    const src = video.src || video.querySelector('source')?.src;
-    if (src && !src.startsWith('blob:')) return src;
-  }
-
-  // Try to find playable_url in page scripts
-  const scripts = document.querySelectorAll('script');
-  for (const script of scripts) {
-    const text = script.textContent;
-    if (text.includes('playable_url_quality_hd')) {
-      const match = text.match(/"playable_url_quality_hd":"(https?:[^"]+)"/);
-      if (match) {
-        return match[1].replace(/\\\//g, '/');
-      }
-    }
-    if (text.includes('playable_url')) {
-      const match = text.match(/"playable_url":"(https?:[^"]+)"/);
-      if (match) {
-        return match[1].replace(/\\\//g, '/');
-      }
-    }
-  }
-
-  return null;
+if (typeof document !== 'undefined' && typeof chrome !== 'undefined' && chrome.runtime?.id) {
+  initContentScript();
 }
