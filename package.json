@@ -1,0 +1,19 @@
+{
+  "name": "socialsnag",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.js",
+    "build:zip": "node build.js --zip",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint src/"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.0",
+    "vitest": "^3.0.0",
+    "eslint": "^9.0.0",
+    "@eslint/js": "^9.0.0"
+  }
+}
