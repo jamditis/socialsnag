@@ -59,9 +59,18 @@ if (typeof document !== 'undefined') {
     });
   };
 
+  function updatePathPreview() {
+    const pathInput = document.getElementById('download-path');
+    const preview = document.getElementById('path-preview');
+    const val = pathInput.value.trim() || 'SocialSnag/{platform}';
+    const example = val.replace(/\{platform\}/g, 'twitter');
+    preview.textContent = `Downloads / ${example.replace(/[/\\]/g, ' / ')} / photo.jpg`;
+  }
+
   let pathDebounce = null;
   document.addEventListener('DOMContentLoaded', () => {
     restoreOptions();
+    setTimeout(updatePathPreview, 100);
 
     PLATFORMS.forEach((p) => {
       document.getElementById(`${p}-toggle`).addEventListener('change', saveSettings);
@@ -69,8 +78,12 @@ if (typeof document !== 'undefined') {
     document.getElementById('advanced-toggle').addEventListener('change', saveSettings);
     document.getElementById('notifications-toggle').addEventListener('change', saveSettings);
     document.getElementById('download-path').addEventListener('input', () => {
+      updatePathPreview();
       clearTimeout(pathDebounce);
       pathDebounce = setTimeout(saveSettings, 500);
+    });
+    document.getElementById('open-downloads').addEventListener('click', () => {
+      chrome.downloads.showDefaultFolder();
     });
   });
 }
