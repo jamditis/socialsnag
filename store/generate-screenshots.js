@@ -1,3 +1,4 @@
+// Requires browsers installed separately: npx playwright install chromium
 import { chromium } from 'playwright-core';
 import { mkdirSync, writeFileSync, unlinkSync } from 'fs';
 import { join, resolve } from 'path';

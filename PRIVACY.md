@@ -2,7 +2,7 @@
 
 *Last updated: 2026-03-20*
 
-SocialSnag is a browser extension that downloads media from Instagram, Twitter/X, Facebook, and Bluesky. It is designed to keep your data on your device and nowhere else.
+SocialSnag is a browser extension that downloads media from Instagram, Twitter/X, Facebook, and Bluesky. It stores preferences and history locally. When downloading video, the extension contacts the platform's own API to resolve the download URL -- no third-party services are involved.
 
 ## What data is collected
 

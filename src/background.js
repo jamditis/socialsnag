@@ -75,13 +75,18 @@ export function validateDownloadUrl(url) {
 // Build sanitized download path
 export function sanitizeDownloadPath(rawFilename, platform, ext, downloadPath) {
   const filename = rawFilename
+    .replace(/^[A-Za-z]:/, '')
     .replace(/\.\.[/\\]/g, '')
+    .replace(/(^|[/\\])\.\.[/\\]?/g, '$1')
     .replace(/[<>:"/\\|?*\x00-\x1f]/g, '_');
   const folder = (downloadPath || 'SocialSnag/{platform}')
     .replace(/\{platform\}/g, platform)
+    .replace(/^[A-Za-z]:/, '')
     .replace(/\.\.[/\\]/g, '')
+    .replace(/(^|[/\\])\.\.[/\\]?/g, '$1')
     .replace(/[<>:"|?*\x00-\x1f]/g, '_');
-  return `${folder}/${filename}${ext}`;
+  const normalizedFolder = folder.replace(/^[\\/]+/, '').replace(/[\\/]+$/, '');
+  return normalizedFolder + '/' + filename + ext;
 }
 
 // --- Browser wiring (not exported) ---
@@ -158,11 +163,9 @@ async function handleWebRequestCompleted(details) {
 
 // Handle context menu clicks
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
-  console.log('SocialSnag: context menu clicked', info.menuItemId, tab.url);
   const type = info.menuItemId === MENU_DOWNLOAD_SINGLE ? 'single' : 'all';
 
   const platform = detectPlatform(tab.url);
-  console.log('SocialSnag: detected platform:', platform);
   if (!platform) {
     showNotification('SocialSnag does not support this site.');
     return;
@@ -181,8 +184,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     let response;
 
     if (apiResult) {
-      // API found a video — download it directly
-      console.log('SocialSnag: API resolved video for', platform);
+      // API found a video — use it directly
       response = { urls: [apiResult], platform };
     } else {
       // No video via API — use content script for images
@@ -236,7 +238,9 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       }
     } else {
       console.warn('SocialSnag: all download attempts failed for', response.urls);
-      showNotification('SocialSnag: download failed. Check the browser console for details.');
+      if (platformSettings.showNotifications) {
+        showNotification('SocialSnag: download failed. Check the browser console for details.');
+      }
     }
   } catch (error) {
     console.error('SocialSnag error:', error);
@@ -275,7 +279,6 @@ async function resolveViaApi(platform, pageUrl) {
 // --- API-based video resolvers ---
 
 async function resolveTwitterVideo(tweetId) {
-  console.log('SocialSnag: resolving Twitter video for tweet', tweetId);
   try {
     const resp = await fetch(
       `https://cdn.syndication.twimg.com/tweet-result?id=${tweetId}&token=0`
@@ -297,7 +300,6 @@ async function resolveTwitterVideo(tweetId) {
       .sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
 
     if (mp4s.length > 0) {
-      console.log('SocialSnag: found Twitter video URL, bitrate:', mp4s[0].bitrate);
       return mp4s[0].url;
     }
     console.warn('SocialSnag: no MP4 variants in syndication response');
@@ -318,10 +320,8 @@ function shortcodeToMediaId(shortcode) {
 }
 
 async function resolveInstagramVideo(shortcode) {
-  console.log('SocialSnag: resolving Instagram video for', shortcode);
   try {
     const mediaId = shortcodeToMediaId(shortcode);
-    console.log('SocialSnag: converted shortcode to media ID:', mediaId);
 
     const resp = await fetch(
       `https://i.instagram.com/api/v1/media/${mediaId}/info/`,
@@ -347,7 +347,6 @@ async function resolveInstagramVideo(shortcode) {
     if (media.video_versions?.length > 0) {
       // Sort by width (largest first) and return best quality
       const best = media.video_versions.sort((a, b) => (b.width || 0) - (a.width || 0))[0];
-      console.log('SocialSnag: found Instagram video URL, width:', best.width);
       return best.url;
     }
 
@@ -371,7 +370,6 @@ async function resolveInstagramVideo(shortcode) {
 async function downloadMedia(item, platform) {
   // Handle API-based video lookups
   if (item.needsVideoLookup) {
-    console.log('SocialSnag: API lookup for', item.tweetId ? `tweet ${item.tweetId}` : `IG ${item.shortcode}`);
     let resolvedUrl = null;
 
     if (item.tweetId) {
@@ -385,7 +383,6 @@ async function downloadMedia(item, platform) {
       return null;
     }
 
-    console.log('SocialSnag: resolved video URL, starting download');
     item = { ...item, url: resolvedUrl, needsVideoLookup: false };
   }
 

@@ -78,7 +78,7 @@ function resolveSingle(srcUrl, target) {
       const upgraded = upgradeImageUrl(nearestMedia.src);
       if (upgraded) {
         // Don't return a profile pic if the tweet has a video
-        if (!upgraded.includes('/profile_images/')) {
+        if (!tweetHasVideo(target) || !upgraded.includes('/profile_images/')) {
           const id = extractTweetId(target);
           return [{ url: upgraded, type: 'image', filename: id ? `tweet_${id}` : null }];
         }

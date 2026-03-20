@@ -301,7 +301,7 @@
         <h2>Data stored on your device</h2>
         <p>SocialSnag stores the following data locally using Chrome's built-in storage APIs:</p>
         <ul>
-            <li><strong>Preferences</strong> (<code>chrome.storage.sync</code>): Which platforms are enabled, notification settings, and the advanced mode toggle. These sync across your Chrome instances if you have Chrome sync turned on.</li>
+            <li><strong>Preferences</strong> (<code>chrome.storage.sync</code>): Which platforms are enabled, notification settings, download path, and the advanced mode toggle. These sync across your Chrome instances if you have Chrome sync turned on.</li>
             <li><strong>Download history</strong> (<code>chrome.storage.local</code>): Filenames, platform names, and timestamps for recent downloads (up to 50 entries). This stays on your device and is never transmitted. Download history does not contain media URLs.</li>
         </ul>
 
@@ -312,7 +312,7 @@
             </thead>
             <tbody>
                 <tr><td>contextMenus</td><td>Adds "Download this (HD)" and "Download all from post" to the right-click menu</td></tr>
-                <tr><td>downloads</td><td>Saves media files to your Downloads/SocialSnag/ folder</td></tr>
+                <tr><td>downloads</td><td>Saves media files to your downloads folder (default: Downloads/SocialSnag/{platform}/, customizable in settings)</td></tr>
                 <tr><td>activeTab</td><td>Accesses the current tab to find media URLs when you right-click</td></tr>
                 <tr><td>storage</td><td>Stores your preferences and download history locally</td></tr>
                 <tr><td>notifications</td><td>Shows a notification when a download completes (can be disabled in settings)</td></tr>
@@ -326,7 +326,7 @@
         <p>LinkedIn and TikTok host permissions are optional and only requested if you enable those platforms.</p>
 
         <h2>Third-party services</h2>
-        <p>SocialSnag does not communicate with any external servers, APIs, or analytics services. All processing happens locally in your browser.</p>
+        <p>SocialSnag does not use any third-party analytics, tracking, or data-collection services. When you download a video, the extension may contact the social platform's own public API (for example, Twitter's syndication API or Instagram's media API) to resolve the video URL. These requests go directly to the platform you are already browsing -- no intermediary servers are involved.</p>
 
         <h2>User control</h2>
         <ul>

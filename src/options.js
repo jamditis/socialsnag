@@ -56,6 +56,7 @@ if (typeof document !== 'undefined') {
       PLATFORMS.forEach((p) => {
         document.getElementById(`${p}-toggle`).checked = items[`platform_${p}`];
       });
+      updatePathPreview();
     });
   };
 
@@ -70,7 +71,6 @@ if (typeof document !== 'undefined') {
   let pathDebounce = null;
   document.addEventListener('DOMContentLoaded', () => {
     restoreOptions();
-    setTimeout(updatePathPreview, 100);
 
     PLATFORMS.forEach((p) => {
       document.getElementById(`${p}-toggle`).addEventListener('change', saveSettings);

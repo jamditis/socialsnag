@@ -1,5 +1,5 @@
 import * as esbuild from 'esbuild';
-import { cpSync, mkdirSync, readFileSync, writeFileSync, rmSync, readdirSync, unlinkSync } from 'fs';
+import { cpSync, mkdirSync, readFileSync, writeFileSync, rmSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { execFileSync } from 'child_process';
 
@@ -39,7 +39,7 @@ function removeDesktopIni(dir) {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const full = join(dir, entry.name);
     if (entry.isDirectory()) removeDesktopIni(full);
-    else if (entry.name.toLowerCase() === 'desktop.ini') unlinkSync(full);
+    else if (entry.name.toLowerCase() === 'desktop.ini') rmSync(full, { force: true });
   }
 }
 removeDesktopIni('dist');
