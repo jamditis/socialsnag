@@ -1,5 +1,6 @@
 import * as esbuild from 'esbuild';
-import { cpSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'fs';
+import { cpSync, mkdirSync, readFileSync, writeFileSync, rmSync, readdirSync, unlinkSync } from 'fs';
+import { join } from 'path';
 import { execFileSync } from 'child_process';
 
 const isZip = process.argv.includes('--zip');
@@ -32,6 +33,16 @@ cpSync('src/popup.html', 'dist/popup.html');
 cpSync('src/popup.css', 'dist/popup.css');
 cpSync('src/options.html', 'dist/options.html');
 cpSync('src/options.css', 'dist/options.css');
+
+// Remove desktop.ini files that Windows creates in copied directories
+function removeDesktopIni(dir) {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) removeDesktopIni(full);
+    else if (entry.name.toLowerCase() === 'desktop.ini') unlinkSync(full);
+  }
+}
+removeDesktopIni('dist');
 
 const manifest = JSON.parse(readFileSync('manifest.json', 'utf8'));
 manifest.content_scripts = manifest.content_scripts.map((cs) => ({
