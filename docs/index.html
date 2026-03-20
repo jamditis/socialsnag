@@ -957,6 +957,25 @@
             .how, .features-section, .install-section { padding: 60px 0; }
             .platforms-section { padding: 60px 0; }
         }
+
+        @media (prefers-reduced-motion: reduce) {
+            html { scroll-behavior: auto; }
+
+            .demo-ctx,
+            .demo-ctx-snag,
+            .demo-notif,
+            .demo-cursor {
+                animation: none;
+            }
+
+            .demo-ctx { opacity: 1; transform: none; }
+            .demo-ctx-snag { background: var(--blue-dim); }
+            .demo-notif { opacity: 1; transform: none; }
+            .demo-cursor { opacity: 1; transform: none; }
+
+            .platform-card { transition: none; }
+            .feature { transition: none; }
+        }
     </style>
 </head>
 <body>
@@ -1168,7 +1187,7 @@
                 <svg viewBox="0 0 24 24"><path d="M12 2L4 6v5c0 5.55 3.84 10.74 8 12 4.16-1.26 8-6.45 8-12V6l-8-4z"/><path d="M9 12l2 2 4-4"/></svg>
             </div>
             <h2>No tracking. No servers. No nonsense.</h2>
-            <p>Everything stays on your device. There is no backend, no analytics, no data collection. Not even a server to phone home to. SocialSnag is just code running in your browser.</p>
+            <p>SocialSnag has no backend, no analytics, and no data collection servers. All media processing happens in your browser, and settings are stored using the browser's built-in extension storage. If you have browser sync enabled, your browser may sync those settings via its own cloud services — controlled by your browser account, not SocialSnag.</p>
             <a href="https://github.com/jamditis/socialsnag/blob/HEAD/PRIVACY.md">Read the full privacy policy</a>
         </div>
     </section>
