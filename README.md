@@ -1,7 +1,8 @@
-![Version](https://img.shields.io/badge/version-1.0.0-blue)
+![Version](https://img.shields.io/badge/version-1.1.0-blue)
 ![License](https://img.shields.io/github/license/jamditis/socialsnag)
 ![Manifest](https://img.shields.io/badge/manifest-v3-green)
 ![Chrome](https://img.shields.io/badge/chrome-116%2B-yellow)
+![CWS](https://img.shields.io/badge/CWS-pending%20review-orange)
 
 # SocialSnag
 
@@ -16,31 +17,36 @@ Right-click to download full-resolution images and videos from social media.
 - **Right-click download** — context menu on any supported page, no copy-pasting URLs
 - **HD quality** — rewrites CDN URLs to fetch the highest available resolution
 - **Multi-image posts** — download all media from a carousel or gallery in one click
+- **Video downloads** — Instagram reels and Twitter/X videos via platform API resolution
 - **Download history** — track recent downloads from the popup
 - **Organized folders** — files saved to `SocialSnag/<platform>/` automatically
-- **Platform toggles** — enable or disable individual platforms from the popup or options page
+- **Platform toggles** — enable or disable individual platforms from settings
+- **Configurable download path** — choose where files are saved within your Downloads folder
 
 ## Supported platforms
 
-- Instagram
-- Twitter/X
-- Facebook
+- Instagram (images, reels, carousels)
+- Twitter/X (images, profile pictures, videos)
+- Facebook (images, videos)
+- Bluesky (images)
 
 ## Install
 
 ### Chrome Web Store
 
-Coming soon.
+SocialSnag v1.1.0 has been submitted to the Chrome Web Store and is pending review. Once approved, it will be published automatically.
 
 ### Developer mode
 
-1. Clone this repo:
+1. Clone and build:
    ```
    git clone https://github.com/jamditis/socialsnag.git
+   cd socialsnag
+   npm install && npm run build
    ```
-2. Open `chrome://extensions` in Chrome
+2. Open `chrome://extensions` in your browser
 3. Enable **Developer mode** (toggle in the top right)
-4. Click **Load unpacked** and select the cloned `socialsnag` folder
+4. Click **Load unpacked** and select the `dist/` folder
 5. Navigate to a supported site and right-click any image or video
 
 ## Privacy

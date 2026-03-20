@@ -143,12 +143,16 @@ This works without advanced mode (webRequest) enabled.
 - Dark-themed popup and options UI with bundled fonts
 - CWS screenshots, promo tile, landing page
 - GitHub releases: v1.0.0, v1.1.0
+- Twitter/X video downloads via syndication API (background script, no webRequest needed)
+- Instagram video downloads via media API with shortcode-to-mediaId conversion
+- Configurable download folder path in settings
+- CWS submission completed 2026-03-20 — pending review, auto-publish enabled
+- Extension ID: `llbpeneloehnlaomolbalbmhjncpmnfa`
 
-### Pending (requires Joe on legion2025)
-- CWS submission: upload `socialsnag-1.1.0.zip` (on legion at `D:\socialsnag\`)
+### Pending
+- CWS review approval (submitted 2026-03-20)
 - Upload social preview image in GitHub Settings > General > Social preview
 
 ### Future work
-- Twitter video extraction from page scripts (currently requires advanced mode/webRequest)
 - LinkedIn/TikTok ESM conversion and re-evaluation after CWS approval
 - Automated E2E tests with Playwright
