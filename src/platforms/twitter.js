@@ -100,7 +100,7 @@ function resolveAll(target) {
   return items.length > 0 ? items : resolveSingle(target?.src || '', target);
 }
 
-async function resolveVideo(target) {
+async function resolveVideo() {
   const captured = await getCapturedMedia();
   const mp4s = filterCapturedVideos(captured);
 
