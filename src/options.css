@@ -203,6 +203,24 @@ main {
   opacity: 0.4;
 }
 
+.text-input {
+  width: 100%;
+  margin-top: 8px;
+  padding: 10px 12px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-main);
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.text-input:focus {
+  border-color: var(--blue);
+}
+
 .info-card {
   color: var(--text-muted);
   font-size: 13px;

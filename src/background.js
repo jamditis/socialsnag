@@ -73,11 +73,15 @@ export function validateDownloadUrl(url) {
 }
 
 // Build sanitized download path
-export function sanitizeDownloadPath(rawFilename, platform, ext) {
+export function sanitizeDownloadPath(rawFilename, platform, ext, downloadPath) {
   const filename = rawFilename
     .replace(/\.\.[/\\]/g, '')
     .replace(/[<>:"/\\|?*\x00-\x1f]/g, '_');
-  return `SocialSnag/${platform}/${filename}${ext}`;
+  const folder = (downloadPath || 'SocialSnag/{platform}')
+    .replace(/\{platform\}/g, platform)
+    .replace(/\.\.[/\\]/g, '')
+    .replace(/[<>:"|?*\x00-\x1f]/g, '_');
+  return `${folder}/${filename}${ext}`;
 }
 
 // --- Browser wiring (not exported) ---
@@ -154,9 +158,11 @@ async function handleWebRequestCompleted(details) {
 
 // Handle context menu clicks
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
+  console.log('SocialSnag: context menu clicked', info.menuItemId, tab.url);
   const type = info.menuItemId === MENU_DOWNLOAD_SINGLE ? 'single' : 'all';
 
   const platform = detectPlatform(tab.url);
+  console.log('SocialSnag: detected platform:', platform);
   if (!platform) {
     showNotification('SocialSnag does not support this site.');
     return;
@@ -169,12 +175,45 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   if (!platformSettings[`platform_${platform}`]) return;
 
   try {
-    const response = await chrome.tabs.sendMessage(tab.id, {
-      action: 'resolve',
-      type: type,
-      srcUrl: info.srcUrl || '',
-      pageUrl: info.pageUrl || tab.url,
-    });
+    // Try API-based video resolution FIRST (works without content script)
+    const pageUrl = info.pageUrl || tab.url;
+    const apiResult = await resolveViaApi(platform, pageUrl);
+    let response;
+
+    if (apiResult) {
+      // API found a video — download it directly
+      console.log('SocialSnag: API resolved video for', platform);
+      response = { urls: [apiResult], platform };
+    } else {
+      // No video via API — use content script for images
+      try {
+        response = await chrome.tabs.sendMessage(tab.id, {
+          action: 'resolve',
+          type: type,
+          srcUrl: info.srcUrl || '',
+          pageUrl: pageUrl,
+        });
+      } catch (sendErr) {
+        console.warn('SocialSnag: content script unavailable:', sendErr.message);
+        // Try injecting content script on demand
+        try {
+          await chrome.scripting.executeScript({
+            target: { tabId: tab.id },
+            files: [`platforms/${platform}.js`],
+          });
+          await new Promise((r) => setTimeout(r, 150));
+          response = await chrome.tabs.sendMessage(tab.id, {
+            action: 'resolve',
+            type: type,
+            srcUrl: info.srcUrl || '',
+            pageUrl: pageUrl,
+          });
+        } catch (injectErr) {
+          showNotification('SocialSnag: could not connect to page. Try refreshing.');
+          return;
+        }
+      }
+    }
 
     if (!response || !response.urls || response.urls.length === 0) {
       showNotification('Could not find downloadable media on this element.');
@@ -190,9 +229,14 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       }
     }
 
-    if (platformSettings.showNotifications && count > 0) {
-      const label = count === 1 ? '1 file' : `${count} files`;
-      showNotification(`Downloaded ${label} from ${response.platform}.`);
+    if (count > 0) {
+      if (platformSettings.showNotifications) {
+        const label = count === 1 ? '1 file' : `${count} files`;
+        showNotification(`Downloaded ${label} from ${response.platform}.`);
+      }
+    } else {
+      console.warn('SocialSnag: all download attempts failed for', response.urls);
+      showNotification('SocialSnag: download failed. Check the browser console for details.');
     }
   } catch (error) {
     console.error('SocialSnag error:', error);
@@ -200,14 +244,46 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   }
 });
 
+// --- Background-only fallback resolver (no content script needed) ---
+
+async function resolveViaApi(platform, pageUrl) {
+  if (platform === 'twitter') {
+    const match = pageUrl.match(/\/status\/(\d+)/);
+    if (match) {
+      const tweetId = match[1];
+      const videoUrl = await resolveTwitterVideo(tweetId);
+      if (videoUrl) {
+        return { url: videoUrl, type: 'video', filename: `tweet_${tweetId}`, needsVideoLookup: false };
+      }
+    }
+  }
+
+  if (platform === 'instagram') {
+    const match = pageUrl.match(/\/(p|reel|tv)\/([A-Za-z0-9_-]+)/);
+    if (match) {
+      const shortcode = match[2];
+      const videoUrl = await resolveInstagramVideo(shortcode);
+      if (videoUrl) {
+        return { url: videoUrl, type: 'video', filename: `reel_${shortcode}`, needsVideoLookup: false };
+      }
+    }
+  }
+
+  return null;
+}
+
 // --- API-based video resolvers ---
 
 async function resolveTwitterVideo(tweetId) {
+  console.log('SocialSnag: resolving Twitter video for tweet', tweetId);
   try {
     const resp = await fetch(
       `https://cdn.syndication.twimg.com/tweet-result?id=${tweetId}&token=0`
     );
-    if (!resp.ok) return null;
+    if (!resp.ok) {
+      console.warn('SocialSnag: syndication API returned', resp.status);
+      return null;
+    }
     const data = await resp.json();
 
     // Find video media in mediaDetails
@@ -220,32 +296,68 @@ async function resolveTwitterVideo(tweetId) {
       .filter((v) => v.content_type === 'video/mp4' && v.url)
       .sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
 
-    return mp4s.length > 0 ? mp4s[0].url : null;
+    if (mp4s.length > 0) {
+      console.log('SocialSnag: found Twitter video URL, bitrate:', mp4s[0].bitrate);
+      return mp4s[0].url;
+    }
+    console.warn('SocialSnag: no MP4 variants in syndication response');
+    return null;
   } catch (e) {
     console.error('SocialSnag: Twitter video API failed:', e);
     return null;
   }
 }
 
+function shortcodeToMediaId(shortcode) {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+  let id = BigInt(0);
+  for (const char of shortcode) {
+    id = id * BigInt(64) + BigInt(alphabet.indexOf(char));
+  }
+  return id.toString();
+}
+
 async function resolveInstagramVideo(shortcode) {
+  console.log('SocialSnag: resolving Instagram video for', shortcode);
   try {
+    const mediaId = shortcodeToMediaId(shortcode);
+    console.log('SocialSnag: converted shortcode to media ID:', mediaId);
+
     const resp = await fetch(
-      `https://www.instagram.com/p/${shortcode}/?__a=1&__d=dis`,
-      { credentials: 'include' }
+      `https://i.instagram.com/api/v1/media/${mediaId}/info/`,
+      {
+        headers: {
+          'x-ig-app-id': '936619743392459',
+        },
+        credentials: 'include',
+      }
     );
-    if (!resp.ok) return null;
+    if (!resp.ok) {
+      console.warn('SocialSnag: Instagram API returned', resp.status);
+      return null;
+    }
     const data = await resp.json();
 
-    const item = data.graphql?.shortcode_media || data.items?.[0];
-    if (!item) return null;
+    const items = data.items || [];
+    if (items.length === 0) return null;
 
-    // Direct video URL
-    if (item.video_url) return item.video_url;
+    const media = items[0];
 
-    // Carousel: find first video
-    const edges = item.edge_sidecar_to_children?.edges || [];
-    for (const edge of edges) {
-      if (edge.node?.video_url) return edge.node.video_url;
+    // Direct video
+    if (media.video_versions?.length > 0) {
+      // Sort by width (largest first) and return best quality
+      const best = media.video_versions.sort((a, b) => (b.width || 0) - (a.width || 0))[0];
+      console.log('SocialSnag: found Instagram video URL, width:', best.width);
+      return best.url;
+    }
+
+    // Carousel: find first video in carousel_media
+    const carouselMedia = media.carousel_media || [];
+    for (const cm of carouselMedia) {
+      if (cm.video_versions?.length > 0) {
+        const best = cm.video_versions.sort((a, b) => (b.width || 0) - (a.width || 0))[0];
+        return best.url;
+      }
     }
 
     return null;
@@ -259,6 +371,7 @@ async function resolveInstagramVideo(shortcode) {
 async function downloadMedia(item, platform) {
   // Handle API-based video lookups
   if (item.needsVideoLookup) {
+    console.log('SocialSnag: API lookup for', item.tweetId ? `tweet ${item.tweetId}` : `IG ${item.shortcode}`);
     let resolvedUrl = null;
 
     if (item.tweetId) {
@@ -272,6 +385,7 @@ async function downloadMedia(item, platform) {
       return null;
     }
 
+    console.log('SocialSnag: resolved video URL, starting download');
     item = { ...item, url: resolvedUrl, needsVideoLookup: false };
   }
 
@@ -281,9 +395,10 @@ async function downloadMedia(item, platform) {
     return null;
   }
 
+  const { downloadPath } = await chrome.storage.sync.get({ downloadPath: 'SocialSnag/{platform}' });
   const ext = guessExtension(item.url, item.type);
   const rawFilename = item.filename || `${Date.now()}`;
-  const path = sanitizeDownloadPath(rawFilename, platform, ext);
+  const path = sanitizeDownloadPath(rawFilename, platform, ext, downloadPath);
 
   let downloadUrl = item.url;
 
