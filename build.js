@@ -26,6 +26,7 @@ await esbuild.build({
 });
 
 cpSync('icons', 'dist/icons', { recursive: true });
+cpSync('src/fonts', 'dist/fonts', { recursive: true });
 cpSync('src/popup.html', 'dist/popup.html');
 cpSync('src/popup.css', 'dist/popup.css');
 cpSync('src/options.html', 'dist/options.html');
