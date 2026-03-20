@@ -1,5 +1,7 @@
 'use strict';
 
+import { ALLOWED_DOMAINS } from './platforms/common.js';
+
 const MENU_DOWNLOAD_SINGLE = 'socialsnag-download-single';
 const MENU_DOWNLOAD_ALL = 'socialsnag-download-all';
 
@@ -18,13 +20,63 @@ const CDN_PATTERNS = [
   '*://*.fbcdn.net/*',
 ];
 
-// Domain allowlist for download URL validation
-const ALLOWED_DOWNLOAD_DOMAINS = [
-  'cdninstagram.com',
-  'pbs.twimg.com',
-  'video.twimg.com',
-  'fbcdn.net',
-];
+// --- Pure functions (exported for testing) ---
+
+// Detect the platform from a tab URL (core platforms only)
+export function detectPlatform(url) {
+  if (!url) return null;
+  if (url.includes('instagram.com')) return 'instagram';
+  if (url.includes('twitter.com') || url.includes('x.com')) return 'twitter';
+  if (url.includes('facebook.com')) return 'facebook';
+  return null;
+}
+
+// Guess file extension
+export function guessExtension(url, type) {
+  if (type === 'video') return '.mp4';
+  try {
+    const u = new URL(url);
+    const format = u.searchParams.get('format');
+    if (format) return `.${format}`;
+    const path = u.pathname;
+    const match = path.match(/\.(jpg|jpeg|png|webp|gif|mp4|mov)(\?|$)/i);
+    if (match) return `.${match[1].toLowerCase()}`;
+  } catch (e) { /* ignore */ }
+  return '.jpg';
+}
+
+// Validate a download URL against HTTPS + domain allowlist
+export function validateDownloadUrl(url) {
+  if (!url) return { valid: false, reason: 'empty URL' };
+
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch (e) {
+    return { valid: false, reason: 'invalid URL' };
+  }
+
+  if (parsed.protocol !== 'https:') {
+    return { valid: false, reason: 'non-HTTPS URL' };
+  }
+
+  const hostname = parsed.hostname.toLowerCase();
+  if (!ALLOWED_DOMAINS.some((d) => hostname === d || hostname.endsWith(`.${d}`))) {
+    return { valid: false, reason: `untrusted domain: ${parsed.hostname}` };
+  }
+
+  return { valid: true };
+}
+
+// Build sanitized download path
+export function sanitizeDownloadPath(rawFilename, platform, ext) {
+  const filename = rawFilename
+    .replace(/\.\.[/\\]/g, '')
+    .replace(/[<>:"/\\|?*\x00-\x1f]/g, '_');
+  return `SocialSnag/${platform}/${filename}${ext}`;
+}
+
+// --- Browser wiring (not exported) ---
 
 // Register context menu items on install
 chrome.runtime.onInstalled.addListener(() => {
@@ -96,15 +148,6 @@ async function handleWebRequestCompleted(details) {
   await chrome.storage.session.set({ [key]: urls });
 }
 
-// Detect the platform from a tab URL (core platforms only)
-function detectPlatform(url) {
-  if (!url) return null;
-  if (url.includes('instagram.com')) return 'instagram';
-  if (url.includes('twitter.com') || url.includes('x.com')) return 'twitter';
-  if (url.includes('facebook.com')) return 'facebook';
-  return null;
-}
-
 // Handle context menu clicks
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   const type = info.menuItemId === MENU_DOWNLOAD_SINGLE ? 'single' : 'all';
@@ -155,35 +198,15 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 
 // Validate and download a single media item
 async function downloadMedia(item, platform) {
-  if (!item.url) return null;
-
-  // Validate URL protocol
-  let parsed;
-  try {
-    parsed = new URL(item.url);
-  } catch (e) {
-    console.warn('SocialSnag: rejected invalid URL');
-    return null;
-  }
-
-  if (parsed.protocol !== 'https:') {
-    console.warn('SocialSnag: rejected non-HTTPS URL');
-    return null;
-  }
-
-  // Validate URL domain
-  const hostname = parsed.hostname.toLowerCase();
-  if (!ALLOWED_DOWNLOAD_DOMAINS.some((d) => hostname === d || hostname.endsWith(`.${d}`))) {
-    console.warn('SocialSnag: rejected URL from untrusted domain:', parsed.hostname);
+  const validation = validateDownloadUrl(item.url);
+  if (!validation.valid) {
+    console.warn(`SocialSnag: rejected ${validation.reason}`);
     return null;
   }
 
   const ext = guessExtension(item.url, item.type);
   const rawFilename = item.filename || `${Date.now()}`;
-  const filename = rawFilename
-    .replace(/\.\.[/\\]/g, '')
-    .replace(/[<>:"/\\|?*\x00-\x1f]/g, '_');
-  const path = `SocialSnag/${platform}/${filename}${ext}`;
+  const path = sanitizeDownloadPath(rawFilename, platform, ext);
 
   let downloadUrl = item.url;
 
@@ -235,20 +258,6 @@ async function recordDownload(item, platform, downloadId) {
   }
 
   await chrome.storage.local.set({ downloadHistory });
-}
-
-// Guess file extension
-function guessExtension(url, type) {
-  if (type === 'video') return '.mp4';
-  try {
-    const u = new URL(url);
-    const format = u.searchParams.get('format');
-    if (format) return `.${format}`;
-    const path = u.pathname;
-    const match = path.match(/\.(jpg|jpeg|png|webp|gif|mp4|mov)(\?|$)/i);
-    if (match) return `.${match[1].toLowerCase()}`;
-  } catch (e) { /* ignore */ }
-  return '.jpg';
 }
 
 // Show a browser notification
