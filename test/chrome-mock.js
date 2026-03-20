@@ -23,6 +23,19 @@ function createStorageArea() {
   };
 }
 
+function createEventTarget() {
+  const listeners = [];
+  return {
+    addListener: (fn) => { listeners.push(fn); },
+    removeListener: (fn) => {
+      const idx = listeners.indexOf(fn);
+      if (idx >= 0) listeners.splice(idx, 1);
+    },
+    hasListener: (fn) => listeners.includes(fn),
+    _listeners: listeners,
+  };
+}
+
 globalThis.chrome = {
   storage: {
     sync: createStorageArea(),
@@ -35,8 +48,33 @@ globalThis.chrome = {
     sendMessage: (_msg, callback) => {
       if (callback) callback({ urls: [] });
     },
+    onInstalled: createEventTarget(),
+    onStartup: createEventTarget(),
+    onMessage: createEventTarget(),
+    openOptionsPage: () => {},
+  },
+  contextMenus: {
+    create: () => {},
+    onClicked: createEventTarget(),
+  },
+  tabs: {
+    sendMessage: async () => ({}),
+    onRemoved: createEventTarget(),
+  },
+  downloads: {
+    download: async () => 1,
+    show: () => {},
   },
   notifications: {
     create: () => {},
+  },
+  permissions: {
+    contains: async () => false,
+  },
+  webRequest: {
+    onCompleted: createEventTarget(),
+  },
+  scripting: {
+    executeScript: async () => [],
   },
 };
