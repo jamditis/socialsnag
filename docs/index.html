@@ -430,8 +430,8 @@
 
         .demo-cursor {
             position: absolute;
-            top: 180px;
-            right: 100px;
+            top: 238px;
+            right: 120px;
             z-index: 10;
             animation: cursorMove 8s ease infinite;
         }
@@ -443,14 +443,14 @@
         }
 
         @keyframes ctxMenu {
-            0%, 22% { opacity: 0; transform: translateY(6px) scale(0.97); }
-            28%, 64% { opacity: 1; transform: translateY(0) scale(1); }
+            0%, 30% { opacity: 0; transform: translateY(6px) scale(0.97); }
+            36%, 64% { opacity: 1; transform: translateY(0) scale(1); }
             70%, 100% { opacity: 0; transform: translateY(6px) scale(0.97); }
         }
 
         @keyframes itemHighlight {
-            0%, 36% { background: transparent; }
-            42%, 56% { background: var(--blue-dim); }
+            0%, 42% { background: transparent; }
+            48%, 56% { background: var(--blue-dim); }
             62%, 100% { background: transparent; }
         }
 
@@ -462,8 +462,8 @@
 
         @keyframes cursorMove {
             0%       { opacity: 0; transform: translate(30px, -40px); }
-            14%      { opacity: 0; transform: translate(30px, -40px); }
-            22%      { opacity: 1; transform: translate(0, 0); }
+            10%      { opacity: 0; transform: translate(30px, -40px); }
+            20%      { opacity: 1; transform: translate(0, 0); }
             25%      { transform: translate(0, 0) scale(1); }
             27%      { transform: translate(0, 0) scale(0.82); }
             29%      { transform: translate(0, 0) scale(1); }
@@ -1064,6 +1064,7 @@
             .demo-content { padding: 14px; min-height: 280px; }
             .demo-post-image { height: 140px; }
             .demo-ctx { right: 14px; width: 190px; }
+            .demo-cursor { top: 234px; right: 55px; }
 
             footer .container {
                 flex-direction: column;
