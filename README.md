@@ -7,6 +7,8 @@
 
 Right-click to download full-resolution images and videos from social media.
 
+**[View the landing page](https://jamditis.github.io/socialsnag/)**
+
 ![SocialSnag](og-image.png)
 
 ## Features
@@ -43,7 +45,7 @@ Coming soon.
 
 ## Privacy
 
-SocialSnag stores data locally in your browser and has no server component. The extension does not collect analytics, telemetry, or personal information. If you use Chrome sync, your browser may sync extension preferences via Google's servers in accordance with your browser settings. See [PRIVACY.md](PRIVACY.md) for details.
+SocialSnag stores data locally in your browser and has no server component. The extension does not collect analytics, telemetry, or personal information. See [PRIVACY.md](PRIVACY.md) for details.
 
 ## License
 
