@@ -18,6 +18,7 @@ function initPopup() {
     { id: 'instagram', label: 'Instagram' },
     { id: 'twitter', label: 'Twitter/X' },
     { id: 'facebook', label: 'Facebook' },
+    { id: 'bluesky', label: 'Bluesky' },
   ];
 
   function svgEl(tag, attrs, children) {
@@ -47,6 +48,12 @@ function initPopup() {
     if (platform === 'facebook') {
       return svgEl('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': '2' }, [
         svgEl('path', { d: 'M18 2h-3a5 5 0 00-5 5v3H7v4h3v8h4v-8h3l1-4h-4V7a1 1 0 011-1h3z' }),
+      ]);
+    }
+    if (platform === 'bluesky') {
+      return svgEl('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': '2' }, [
+        svgEl('path', { d: 'M12 3C9.5 5 5 8.5 5 12a4 4 0 004.5 4c1 0 1.8-.4 2.5-1-.7.6-1.5 1-2.5 1A4 4 0 015 12c0-3.5 4.5-7 7-9z', fill: 'currentColor', stroke: 'none' }),
+        svgEl('path', { d: 'M12 3c2.5 2 7 5.5 7 9a4 4 0 01-4.5 4c-1 0-1.8-.4-2.5-1 .7.6 1.5 1 2.5 1A4 4 0 0019 12c0-3.5-4.5-7-7-9z', fill: 'currentColor', stroke: 'none' }),
       ]);
     }
     return null;

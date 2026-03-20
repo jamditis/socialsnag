@@ -11,6 +11,7 @@ const SUPPORTED_URL_PATTERNS = [
   '*://*.twitter.com/*',
   '*://*.x.com/*',
   '*://*.facebook.com/*',
+  '*://*.bsky.app/*',
 ];
 
 // CDN patterns for core platforms only (webRequest monitoring)
@@ -18,6 +19,8 @@ const CDN_PATTERNS = [
   '*://*.cdninstagram.com/*',
   '*://*.twimg.com/*',
   '*://*.fbcdn.net/*',
+  '*://cdn.bsky.app/*',
+  '*://video.bsky.app/*',
 ];
 
 // --- Pure functions (exported for testing) ---
@@ -28,6 +31,7 @@ export function detectPlatform(url) {
   if (url.includes('instagram.com')) return 'instagram';
   if (url.includes('twitter.com') || url.includes('x.com')) return 'twitter';
   if (url.includes('facebook.com')) return 'facebook';
+  if (url.includes('bsky.app')) return 'bluesky';
   return null;
 }
 
