@@ -51,7 +51,7 @@ SocialSnag v1.1.0 has been submitted to the Chrome Web Store and is pending revi
 
 ## Privacy
 
-SocialSnag stores data locally in your browser and has no custom server component. Some non-sensitive settings (like platform toggles and advanced mode) use Chrome's sync storage and may be synced via Google if Chrome Sync is enabled in your browser. The extension does not collect analytics, telemetry, or personal information. See [PRIVACY.md](PRIVACY.md) for details.
+SocialSnag stores data locally in your browser and has no custom server component. Some non-sensitive settings (like platform toggles and advanced mode) use Chrome's sync storage and may be synced via Google if Chrome Sync is enabled in your browser. The extension does not collect analytics, telemetry, or personal information. See the [privacy policy](https://jamditis.github.io/socialsnag/privacy.html) for details.
 
 ## License
 
