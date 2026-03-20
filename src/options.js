@@ -17,19 +17,25 @@ if (typeof document !== 'undefined') {
       chrome.permissions.request({ permissions: ['webRequest'] }, (granted) => {
         if (granted) {
           settings.advancedMode = true;
-          chrome.storage.sync.set(settings);
+          chrome.storage.sync.set(settings, () => {
+            if (chrome.runtime.lastError) console.error('SocialSnag: save failed:', chrome.runtime.lastError.message);
+          });
           chrome.runtime.sendMessage({ action: 'enableAdvancedMode' });
         } else {
           advancedCheckbox.checked = false;
           settings.advancedMode = false;
-          chrome.storage.sync.set(settings);
+          chrome.storage.sync.set(settings, () => {
+            if (chrome.runtime.lastError) console.error('SocialSnag: save failed:', chrome.runtime.lastError.message);
+          });
         }
       });
     } else {
       settings.advancedMode = false;
       chrome.runtime.sendMessage({ action: 'disableAdvancedMode' });
       chrome.permissions.remove({ permissions: ['webRequest'] });
-      chrome.storage.sync.set(settings);
+      chrome.storage.sync.set(settings, () => {
+        if (chrome.runtime.lastError) console.error('SocialSnag: save failed:', chrome.runtime.lastError.message);
+      });
     }
   };
 

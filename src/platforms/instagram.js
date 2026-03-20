@@ -161,19 +161,24 @@ function collectMediaFromContainer(container, shortcode) {
     return _cachedScriptTexts;
   }
 
+  const usedVideoUrls = new Set();
   container.querySelectorAll('video').forEach((video) => {
     const src = video.src;
     if (src && !src.startsWith('blob:')) {
-      items.push({
-        url: src,
-        type: 'video',
-        filename: shortcode ? `post_${shortcode}_${index}` : null,
-      });
-      index++;
+      if (!usedVideoUrls.has(src)) {
+        usedVideoUrls.add(src);
+        items.push({
+          url: src,
+          type: 'video',
+          filename: shortcode ? `post_${shortcode}_${index}` : null,
+        });
+        index++;
+      }
     } else if (src && src.startsWith('blob:')) {
       // blob: URL — try to extract real CDN URL from page scripts
       const cdnUrl = extractVideoUrlFromScripts(getScriptTexts());
-      if (cdnUrl) {
+      if (cdnUrl && !usedVideoUrls.has(cdnUrl)) {
+        usedVideoUrls.add(cdnUrl);
         items.push({
           url: cdnUrl,
           type: 'video',
