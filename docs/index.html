@@ -1,0 +1,1232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SocialSnag — Right-click to download HD social media</title>
+    <meta name="description" content="Chrome extension for downloading full-resolution images and videos from Instagram, Twitter/X, and Facebook. Right-click, download, done.">
+
+    <meta property="og:title" content="SocialSnag — Right-click to download HD social media">
+    <meta property="og:description" content="Chrome extension for downloading full-resolution images and videos from Instagram, Twitter/X, and Facebook.">
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://jamditis.github.io/socialsnag/">
+    <meta property="og:image" content="https://jamditis.github.io/socialsnag/og-image.png">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="SocialSnag — Right-click to download HD social media">
+    <meta name="twitter:description" content="Chrome extension for downloading full-resolution images and videos from Instagram, Twitter/X, and Facebook.">
+    <meta name="twitter:image" content="https://jamditis.github.io/socialsnag/og-image.png">
+
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 128 128'%3E%3Crect x='16' y='16' width='96' height='96' rx='18' fill='%233b82f6'/%3E%3Crect x='57' y='34' width='14' height='30' rx='2' fill='%23fff'/%3E%3Cpolygon points='64,82 42,58 86,58' fill='%23fff'/%3E%3Crect x='36' y='90' width='56' height='6' rx='3' fill='%23fff'/%3E%3C/svg%3E">
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=Outfit:wght@300;400;500;600&display=swap" rel="stylesheet">
+
+    <style>
+        :root {
+            --bg-deep: #04060c;
+            --bg-surface: #080c18;
+            --bg-card: #0c1024;
+            --bg-elevated: #101630;
+            --blue: #3b82f6;
+            --blue-bright: #60a5fa;
+            --blue-dim: rgba(59, 130, 246, 0.15);
+            --blue-glow: rgba(59, 130, 246, 0.25);
+            --green: #22c55e;
+            --text: #94a3b8;
+            --text-bright: #e2e8f0;
+            --text-white: #ffffff;
+            --border: rgba(255, 255, 255, 0.06);
+            --border-hover: rgba(255, 255, 255, 0.12);
+            --font-display: 'Syne', sans-serif;
+            --font-body: 'Outfit', sans-serif;
+        }
+
+        *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+        html {
+            scroll-behavior: smooth;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+        }
+
+        body {
+            background: var(--bg-deep);
+            color: var(--text);
+            font-family: var(--font-body);
+            font-weight: 400;
+            font-size: 16px;
+            line-height: 1.6;
+            overflow-x: hidden;
+        }
+
+        /* --- Grain texture overlay --- */
+        body::after {
+            content: '';
+            position: fixed;
+            inset: 0;
+            pointer-events: none;
+            z-index: 1000;
+            opacity: 0.4;
+            background: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.75' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.025'/%3E%3C/svg%3E");
+        }
+
+        /* --- Background glow --- */
+        .glow-orb {
+            position: absolute;
+            border-radius: 50%;
+            filter: blur(100px);
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        /* --- Layout --- */
+        .container {
+            max-width: 1120px;
+            margin: 0 auto;
+            padding: 0 24px;
+        }
+
+        section {
+            position: relative;
+            z-index: 1;
+        }
+
+        a { color: var(--blue); text-decoration: none; }
+        a:hover { color: var(--blue-bright); }
+
+        /* ======================
+           NAVIGATION
+           ====================== */
+        nav {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            z-index: 100;
+            background: rgba(4, 6, 12, 0.75);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border-bottom: 1px solid var(--border);
+        }
+
+        .nav-inner {
+            max-width: 1120px;
+            margin: 0 auto;
+            padding: 0 24px;
+            height: 64px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .nav-brand {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            text-decoration: none;
+        }
+
+        .nav-brand svg { width: 28px; height: 28px; }
+
+        .nav-brand span {
+            font-family: var(--font-display);
+            font-weight: 700;
+            font-size: 18px;
+            color: var(--text-white);
+            letter-spacing: -0.02em;
+        }
+
+        .nav-links {
+            display: flex;
+            align-items: center;
+            gap: 32px;
+        }
+
+        .nav-links a {
+            font-size: 14px;
+            font-weight: 500;
+            color: var(--text);
+            transition: color 0.2s;
+        }
+
+        .nav-links a:hover { color: var(--text-white); }
+
+        .btn-install {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 20px;
+            background: var(--blue);
+            color: var(--text-white);
+            font-family: var(--font-body);
+            font-size: 14px;
+            font-weight: 600;
+            border-radius: 8px;
+            border: none;
+            cursor: pointer;
+            transition: background 0.2s, box-shadow 0.2s;
+            text-decoration: none;
+        }
+
+        .btn-install:hover {
+            background: #2563eb;
+            box-shadow: 0 0 24px var(--blue-glow);
+            color: var(--text-white);
+        }
+
+        /* ======================
+           HERO
+           ====================== */
+        .hero {
+            padding: 140px 0 100px;
+            min-height: 90vh;
+            display: flex;
+            align-items: center;
+            overflow: hidden;
+        }
+
+        .hero .container {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 60px;
+            align-items: center;
+        }
+
+        .hero-text h1 {
+            font-family: var(--font-display);
+            font-weight: 800;
+            font-size: clamp(42px, 5.5vw, 72px);
+            line-height: 1.05;
+            letter-spacing: -0.03em;
+            color: var(--text-white);
+            margin-bottom: 24px;
+        }
+
+        .hero-text h1 .accent {
+            background: linear-gradient(135deg, var(--blue), var(--blue-bright));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .hero-text .tagline {
+            font-size: 18px;
+            line-height: 1.7;
+            color: var(--text);
+            max-width: 420px;
+            margin-bottom: 32px;
+        }
+
+        .hero-badges {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+
+        .hero-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 14px;
+            border-radius: 20px;
+            background: rgba(255, 255, 255, 0.04);
+            border: 1px solid var(--border);
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--text);
+        }
+
+        .hero-badge .dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: var(--green);
+        }
+
+        /* --- Hero background glow --- */
+        .hero .glow-orb {
+            width: 500px;
+            height: 500px;
+            background: radial-gradient(circle, var(--blue-glow) 0%, transparent 70%);
+            right: -100px;
+            top: 50%;
+            transform: translateY(-50%);
+        }
+
+        /* ======================
+           ANIMATED DEMO
+           ====================== */
+        .demo-window {
+            width: 100%;
+            max-width: 440px;
+            border-radius: 12px;
+            overflow: hidden;
+            border: 1px solid var(--border-hover);
+            background: var(--bg-card);
+            box-shadow:
+                0 0 0 1px rgba(255, 255, 255, 0.03),
+                0 20px 60px -10px rgba(0, 0, 0, 0.6),
+                0 0 80px -20px var(--blue-glow);
+            position: relative;
+        }
+
+        .demo-titlebar {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px 16px;
+            background: var(--bg-surface);
+            border-bottom: 1px solid var(--border);
+        }
+
+        .demo-dots {
+            display: flex;
+            gap: 6px;
+        }
+
+        .demo-dots span {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+        }
+
+        .demo-dots span:nth-child(1) { background: #ff5f57; }
+        .demo-dots span:nth-child(2) { background: #ffbd2e; }
+        .demo-dots span:nth-child(3) { background: #28c840; }
+
+        .demo-url {
+            flex: 1;
+            padding: 4px 12px;
+            background: rgba(255, 255, 255, 0.04);
+            border-radius: 6px;
+            font-size: 11px;
+            color: var(--text);
+            font-family: 'SF Mono', 'Fira Code', monospace;
+        }
+
+        .demo-content {
+            position: relative;
+            padding: 20px;
+            min-height: 320px;
+        }
+
+        /* --- Fake social post --- */
+        .demo-post {
+            border-radius: 10px;
+            overflow: hidden;
+            background: var(--bg-surface);
+            border: 1px solid var(--border);
+        }
+
+        .demo-post-header {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 12px 14px;
+        }
+
+        .demo-avatar {
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            flex-shrink: 0;
+        }
+
+        .demo-username {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-bright);
+        }
+
+        .demo-post-image {
+            width: 100%;
+            height: 180px;
+            background: linear-gradient(135deg, #1a2a6c 0%, #b21f1f 50%, #fdbb2d 100%);
+        }
+
+        .demo-post-actions {
+            display: flex;
+            gap: 16px;
+            padding: 10px 14px;
+        }
+
+        .demo-post-actions svg {
+            width: 18px;
+            height: 18px;
+            stroke: var(--text);
+            fill: none;
+            stroke-width: 1.8;
+        }
+
+        /* --- Context menu (animated) --- */
+        .demo-ctx {
+            position: absolute;
+            top: 140px;
+            right: 30px;
+            width: 220px;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border-hover);
+            border-radius: 8px;
+            padding: 4px 0;
+            box-shadow: 0 12px 40px -8px rgba(0, 0, 0, 0.7);
+            animation: ctxMenu 8s ease infinite;
+        }
+
+        .demo-ctx-item {
+            padding: 7px 14px;
+            font-size: 12px;
+            color: var(--text);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            transition: background 0.15s;
+        }
+
+        .demo-ctx-sep {
+            height: 1px;
+            background: var(--border);
+            margin: 4px 0;
+        }
+
+        .demo-ctx-snag {
+            color: var(--blue-bright);
+            font-weight: 500;
+            animation: itemHighlight 8s ease infinite;
+        }
+
+        .demo-ctx-snag svg {
+            width: 14px;
+            height: 14px;
+        }
+
+        .demo-ctx-snag-all {
+            color: var(--text);
+            font-size: 12px;
+        }
+
+        .demo-ctx-snag-all svg {
+            width: 14px;
+            height: 14px;
+        }
+
+        /* --- Download notification (animated) --- */
+        .demo-notif {
+            position: absolute;
+            bottom: 16px;
+            right: 16px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 16px;
+            background: var(--bg-elevated);
+            border: 1px solid rgba(34, 197, 94, 0.3);
+            border-radius: 8px;
+            font-size: 12px;
+            color: var(--green);
+            font-weight: 500;
+            box-shadow: 0 8px 24px -4px rgba(0, 0, 0, 0.5);
+            animation: dlNotif 8s ease infinite;
+        }
+
+        .demo-notif svg {
+            width: 14px;
+            height: 14px;
+            stroke: var(--green);
+            fill: none;
+            stroke-width: 2;
+        }
+
+        /* --- Cursor (animated) --- */
+        .demo-cursor {
+            position: absolute;
+            top: 180px;
+            right: 100px;
+            z-index: 10;
+            animation: cursorMove 8s ease infinite;
+        }
+
+        .demo-cursor svg {
+            width: 18px;
+            height: 22px;
+            filter: drop-shadow(0 2px 4px rgba(0,0,0,0.5));
+        }
+
+        /* --- Demo keyframes --- */
+        @keyframes ctxMenu {
+            0%, 22% { opacity: 0; transform: translateY(6px) scale(0.97); }
+            28%, 64% { opacity: 1; transform: translateY(0) scale(1); }
+            70%, 100% { opacity: 0; transform: translateY(6px) scale(0.97); }
+        }
+
+        @keyframes itemHighlight {
+            0%, 36% { background: transparent; }
+            42%, 56% { background: var(--blue-dim); }
+            62%, 100% { background: transparent; }
+        }
+
+        @keyframes dlNotif {
+            0%, 64% { opacity: 0; transform: translateY(8px); }
+            70%, 86% { opacity: 1; transform: translateY(0); }
+            92%, 100% { opacity: 0; transform: translateY(8px); }
+        }
+
+        @keyframes cursorMove {
+            0%       { opacity: 0; transform: translate(30px, -40px); }
+            14%      { opacity: 0; transform: translate(30px, -40px); }
+            22%      { opacity: 1; transform: translate(0, 0); }
+            25%      { transform: translate(0, 0) scale(1); }
+            27%      { transform: translate(0, 0) scale(0.82); }
+            29%      { transform: translate(0, 0) scale(1); }
+            64%      { opacity: 1; transform: translate(0, 0); }
+            68%      { opacity: 0; }
+            100%     { opacity: 0; transform: translate(30px, -40px); }
+        }
+
+        /* ======================
+           HOW IT WORKS
+           ====================== */
+        .how {
+            padding: 100px 0;
+            background: var(--bg-surface);
+            border-top: 1px solid var(--border);
+            border-bottom: 1px solid var(--border);
+        }
+
+        .how h2 {
+            font-family: var(--font-display);
+            font-weight: 700;
+            font-size: clamp(28px, 3.5vw, 40px);
+            color: var(--text-white);
+            letter-spacing: -0.02em;
+            margin-bottom: 60px;
+            text-align: center;
+        }
+
+        .steps {
+            display: grid;
+            grid-template-columns: 1fr auto 1fr auto 1fr;
+            gap: 0;
+            align-items: start;
+            max-width: 900px;
+            margin: 0 auto;
+        }
+
+        .step {
+            position: relative;
+            text-align: center;
+            padding: 0 16px;
+        }
+
+        .step-num {
+            font-family: var(--font-display);
+            font-size: 64px;
+            font-weight: 800;
+            line-height: 1;
+            margin-bottom: 16px;
+            background: linear-gradient(180deg, rgba(59, 130, 246, 0.25) 0%, rgba(59, 130, 246, 0.05) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .step h3 {
+            font-family: var(--font-display);
+            font-weight: 600;
+            font-size: 20px;
+            color: var(--text-white);
+            margin-bottom: 8px;
+        }
+
+        .step p {
+            font-size: 14px;
+            color: var(--text);
+            line-height: 1.6;
+        }
+
+        .step-arrow {
+            display: flex;
+            align-items: center;
+            padding-top: 24px;
+            color: rgba(59, 130, 246, 0.3);
+        }
+
+        .step-arrow svg {
+            width: 40px;
+            height: 40px;
+        }
+
+        /* ======================
+           PLATFORMS
+           ====================== */
+        .platforms-section {
+            padding: 100px 0;
+        }
+
+        .platforms-section h2 {
+            font-family: var(--font-display);
+            font-weight: 700;
+            font-size: clamp(28px, 3.5vw, 40px);
+            color: var(--text-white);
+            letter-spacing: -0.02em;
+            margin-bottom: 48px;
+            text-align: center;
+        }
+
+        .platform-cards {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 20px;
+            max-width: 900px;
+            margin: 0 auto;
+        }
+
+        .platform-card {
+            padding: 28px 24px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            border-left: 3px solid transparent;
+            transition: border-color 0.2s, box-shadow 0.2s, transform 0.2s;
+        }
+
+        .platform-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 32px -8px rgba(0, 0, 0, 0.4);
+        }
+
+        .platform-card.instagram {
+            border-left-color: #e1306c;
+        }
+
+        .platform-card.instagram:hover {
+            box-shadow: 0 8px 32px -8px rgba(225, 48, 108, 0.15);
+        }
+
+        .platform-card.twitter {
+            border-left-color: #1d9bf0;
+        }
+
+        .platform-card.twitter:hover {
+            box-shadow: 0 8px 32px -8px rgba(29, 155, 240, 0.15);
+        }
+
+        .platform-card.facebook {
+            border-left-color: #1877f2;
+        }
+
+        .platform-card.facebook:hover {
+            box-shadow: 0 8px 32px -8px rgba(24, 119, 242, 0.15);
+        }
+
+        .platform-card h3 {
+            font-family: var(--font-display);
+            font-weight: 600;
+            font-size: 18px;
+            color: var(--text-white);
+            margin-bottom: 8px;
+        }
+
+        .platform-card p {
+            font-size: 14px;
+            line-height: 1.6;
+            color: var(--text);
+        }
+
+        /* ======================
+           FEATURES
+           ====================== */
+        .features-section {
+            padding: 100px 0;
+            background: var(--bg-surface);
+            border-top: 1px solid var(--border);
+            border-bottom: 1px solid var(--border);
+        }
+
+        .features-section h2 {
+            font-family: var(--font-display);
+            font-weight: 700;
+            font-size: clamp(28px, 3.5vw, 40px);
+            color: var(--text-white);
+            letter-spacing: -0.02em;
+            margin-bottom: 48px;
+            text-align: center;
+        }
+
+        .feature-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 20px;
+            max-width: 900px;
+            margin: 0 auto;
+        }
+
+        .feature {
+            padding: 24px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            transition: border-color 0.2s;
+        }
+
+        .feature:hover {
+            border-color: var(--border-hover);
+        }
+
+        .feature-icon {
+            width: 40px;
+            height: 40px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: var(--blue-dim);
+            border-radius: 10px;
+            margin-bottom: 16px;
+        }
+
+        .feature-icon svg {
+            width: 20px;
+            height: 20px;
+            stroke: var(--blue);
+            fill: none;
+            stroke-width: 2;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+        }
+
+        .feature h3 {
+            font-family: var(--font-display);
+            font-weight: 600;
+            font-size: 15px;
+            color: var(--text-white);
+            margin-bottom: 6px;
+        }
+
+        .feature p {
+            font-size: 13px;
+            line-height: 1.6;
+            color: var(--text);
+        }
+
+        /* ======================
+           PRIVACY
+           ====================== */
+        .privacy-section {
+            padding: 80px 0;
+            text-align: center;
+        }
+
+        .privacy-section .container {
+            max-width: 600px;
+        }
+
+        .privacy-icon {
+            width: 56px;
+            height: 56px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: var(--blue-dim);
+            border-radius: 14px;
+            margin: 0 auto 24px;
+        }
+
+        .privacy-icon svg {
+            width: 28px;
+            height: 28px;
+            stroke: var(--blue);
+            fill: none;
+            stroke-width: 2;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+        }
+
+        .privacy-section h2 {
+            font-family: var(--font-display);
+            font-weight: 700;
+            font-size: clamp(22px, 3vw, 32px);
+            color: var(--text-white);
+            letter-spacing: -0.02em;
+            margin-bottom: 16px;
+        }
+
+        .privacy-section p {
+            font-size: 16px;
+            line-height: 1.7;
+            color: var(--text);
+            margin-bottom: 16px;
+        }
+
+        .privacy-section a {
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        /* ======================
+           INSTALL
+           ====================== */
+        .install-section {
+            padding: 100px 0;
+            background: var(--bg-surface);
+            border-top: 1px solid var(--border);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .install-section .glow-orb {
+            width: 600px;
+            height: 600px;
+            background: radial-gradient(circle, rgba(59, 130, 246, 0.12) 0%, transparent 70%);
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
+        }
+
+        .install-section h2 {
+            font-family: var(--font-display);
+            font-weight: 700;
+            font-size: clamp(28px, 3.5vw, 40px);
+            color: var(--text-white);
+            letter-spacing: -0.02em;
+            margin-bottom: 48px;
+            text-align: center;
+            position: relative;
+            z-index: 1;
+        }
+
+        .install-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 24px;
+            max-width: 800px;
+            margin: 0 auto;
+            position: relative;
+            z-index: 1;
+        }
+
+        .install-card {
+            padding: 32px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+        }
+
+        .install-card h3 {
+            font-family: var(--font-display);
+            font-weight: 600;
+            font-size: 20px;
+            color: var(--text-white);
+            margin-bottom: 16px;
+        }
+
+        .install-card.coming-soon {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            border-style: dashed;
+        }
+
+        .install-card.coming-soon p {
+            color: var(--text);
+            font-size: 14px;
+        }
+
+        .install-steps {
+            list-style: none;
+            counter-reset: install-step;
+        }
+
+        .install-steps li {
+            counter-increment: install-step;
+            display: flex;
+            gap: 12px;
+            margin-bottom: 14px;
+            font-size: 14px;
+            color: var(--text);
+            line-height: 1.6;
+        }
+
+        .install-steps li::before {
+            content: counter(install-step);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 24px;
+            height: 24px;
+            min-width: 24px;
+            border-radius: 6px;
+            background: var(--blue-dim);
+            color: var(--blue);
+            font-size: 12px;
+            font-weight: 600;
+            margin-top: 1px;
+        }
+
+        .install-steps code {
+            display: inline-block;
+            padding: 2px 8px;
+            background: rgba(255, 255, 255, 0.06);
+            border-radius: 4px;
+            font-family: 'SF Mono', 'Fira Code', monospace;
+            font-size: 12px;
+            color: var(--text-bright);
+        }
+
+        /* ======================
+           FOOTER
+           ====================== */
+        footer {
+            padding: 40px 0;
+            border-top: 1px solid var(--border);
+            text-align: center;
+        }
+
+        footer .container {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        footer p {
+            font-size: 13px;
+            color: var(--text);
+        }
+
+        .footer-links {
+            display: flex;
+            gap: 24px;
+        }
+
+        .footer-links a {
+            font-size: 13px;
+            color: var(--text);
+            transition: color 0.2s;
+        }
+
+        .footer-links a:hover { color: var(--text-bright); }
+
+        /* ======================
+           RESPONSIVE
+           ====================== */
+        @media (max-width: 900px) {
+            .hero .container {
+                grid-template-columns: 1fr;
+                gap: 48px;
+                text-align: center;
+            }
+
+            .hero-text .tagline { margin: 0 auto 32px; }
+            .hero-badges { justify-content: center; }
+            .demo-window { margin: 0 auto; }
+
+            .steps {
+                grid-template-columns: 1fr;
+                gap: 40px;
+            }
+
+            .step-arrow { display: none; }
+
+            .platform-cards { grid-template-columns: 1fr; }
+            .feature-grid { grid-template-columns: 1fr 1fr; }
+            .install-grid { grid-template-columns: 1fr; }
+        }
+
+        @media (max-width: 600px) {
+            .hero { padding: 120px 0 60px; min-height: auto; }
+            .hero-text h1 { font-size: 36px; }
+
+            .nav-links a:not(.btn-install) { display: none; }
+
+            .feature-grid { grid-template-columns: 1fr; }
+
+            .demo-window { max-width: 100%; }
+            .demo-content { padding: 14px; min-height: 280px; }
+            .demo-post-image { height: 140px; }
+            .demo-ctx { right: 14px; width: 190px; }
+
+            footer .container {
+                flex-direction: column;
+                gap: 16px;
+            }
+
+            .how, .features-section, .install-section { padding: 60px 0; }
+            .platforms-section { padding: 60px 0; }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            html { scroll-behavior: auto; }
+
+            .demo-ctx,
+            .demo-ctx-snag,
+            .demo-notif,
+            .demo-cursor {
+                animation: none;
+            }
+
+            .demo-ctx { opacity: 1; transform: none; }
+            .demo-ctx-snag { background: var(--blue-dim); }
+            .demo-notif { opacity: 1; transform: none; }
+            .demo-cursor { opacity: 1; transform: none; }
+
+            .platform-card { transition: none; }
+            .feature { transition: none; }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- ========== NAVIGATION ========== -->
+    <nav>
+        <div class="nav-inner">
+            <a class="nav-brand" href="#">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+                    <rect x="16" y="16" width="96" height="96" rx="18" fill="#3b82f6"/>
+                    <rect x="57" y="34" width="14" height="30" rx="2" fill="#fff"/>
+                    <polygon points="64,82 42,58 86,58" fill="#fff"/>
+                    <rect x="36" y="90" width="56" height="6" rx="3" fill="#fff"/>
+                </svg>
+                <span>SocialSnag</span>
+            </a>
+            <div class="nav-links">
+                <a href="#how">How it works</a>
+                <a href="#platforms">Platforms</a>
+                <a href="#install" class="btn-install">Install</a>
+            </div>
+        </div>
+    </nav>
+
+    <!-- ========== HERO ========== -->
+    <section class="hero">
+        <div class="glow-orb"></div>
+        <div class="container">
+            <div class="hero-text">
+                <h1>Right-click.<br><span class="accent">Download.</span><br>Done.</h1>
+                <p class="tagline">Full-resolution images and videos from social media. No copy-pasting URLs, no sketchy converter sites. Just right-click.</p>
+                <div class="hero-badges">
+                    <span class="hero-badge"><span class="dot"></span> Chrome 116+</span>
+                    <span class="hero-badge">Manifest V3</span>
+                    <span class="hero-badge">MIT license</span>
+                </div>
+            </div>
+
+            <div class="hero-demo">
+                <div class="demo-window">
+                    <div class="demo-titlebar">
+                        <div class="demo-dots"><span></span><span></span><span></span></div>
+                        <div class="demo-url">instagram.com/p/Cx7mK...</div>
+                    </div>
+                    <div class="demo-content">
+                        <!-- Fake social post -->
+                        <div class="demo-post">
+                            <div class="demo-post-header">
+                                <div class="demo-avatar"></div>
+                                <div class="demo-username">photographer</div>
+                            </div>
+                            <div class="demo-post-image"></div>
+                            <div class="demo-post-actions">
+                                <svg viewBox="0 0 24 24"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78L12 21.23l8.84-8.84a5.5 5.5 0 000-7.78z"/></svg>
+                                <svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+                                <svg viewBox="0 0 24 24"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg>
+                            </div>
+                        </div>
+
+                        <!-- Context menu -->
+                        <div class="demo-ctx">
+                            <div class="demo-ctx-item">Open image in new tab</div>
+                            <div class="demo-ctx-item">Copy image address</div>
+                            <div class="demo-ctx-sep"></div>
+                            <div class="demo-ctx-item demo-ctx-snag">
+                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+                                    <rect x="16" y="16" width="96" height="96" rx="18" fill="#3b82f6"/>
+                                    <rect x="57" y="34" width="14" height="30" rx="2" fill="#fff"/>
+                                    <polygon points="64,82 42,58 86,58" fill="#fff"/>
+                                    <rect x="36" y="90" width="56" height="6" rx="3" fill="#fff"/>
+                                </svg>
+                                Download HD image
+                            </div>
+                            <div class="demo-ctx-item demo-ctx-snag-all">
+                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+                                    <rect x="16" y="16" width="96" height="96" rx="18" fill="#3b82f6" opacity="0.5"/>
+                                    <rect x="57" y="34" width="14" height="30" rx="2" fill="#fff"/>
+                                    <polygon points="64,82 42,58 86,58" fill="#fff"/>
+                                    <rect x="36" y="90" width="56" height="6" rx="3" fill="#fff"/>
+                                </svg>
+                                Download all from post
+                            </div>
+                        </div>
+
+                        <!-- Download notification -->
+                        <div class="demo-notif">
+                            <svg viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg>
+                            photo_2048x2048.jpg saved
+                        </div>
+
+                        <!-- Cursor -->
+                        <div class="demo-cursor">
+                            <svg viewBox="0 0 20 24" fill="none">
+                                <path d="M2 1L2 17L6.5 12.5L10.5 21L12.5 20L8.5 11L14.5 11L2 1Z" fill="white" stroke="#1e293b" stroke-width="1.2"/>
+                            </svg>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ========== HOW IT WORKS ========== -->
+    <section class="how" id="how">
+        <div class="container">
+            <h2>Three clicks, full resolution</h2>
+            <div class="steps">
+                <div class="step">
+                    <div class="step-num">01</div>
+                    <h3>Right-click</h3>
+                    <p>See something worth saving? Right-click it like you normally would.</p>
+                </div>
+                <div class="step-arrow">
+                    <svg viewBox="0 0 40 40" fill="none"><path d="M8 20h24M24 12l8 8-8 8" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </div>
+                <div class="step">
+                    <div class="step-num">02</div>
+                    <h3>Pick your download</h3>
+                    <p>SocialSnag appears in the context menu. Choose single image or grab the whole post.</p>
+                </div>
+                <div class="step-arrow">
+                    <svg viewBox="0 0 40 40" fill="none"><path d="M8 20h24M24 12l8 8-8 8" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </div>
+                <div class="step">
+                    <div class="step-num">03</div>
+                    <h3>Saved</h3>
+                    <p>Full-resolution file, organized by platform, dropped into your downloads folder.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ========== PLATFORMS ========== -->
+    <section class="platforms-section" id="platforms">
+        <div class="container">
+            <h2>Works where you scroll</h2>
+            <div class="platform-cards">
+                <div class="platform-card instagram">
+                    <h3>Instagram</h3>
+                    <p>Images, reels, and carousels at full resolution. Not the compressed preview you get from a screenshot.</p>
+                </div>
+                <div class="platform-card twitter">
+                    <h3>Twitter / X</h3>
+                    <p>Photos at original upload quality. Profile pictures at full size instead of the tiny thumbnail.</p>
+                </div>
+                <div class="platform-card facebook">
+                    <h3>Facebook</h3>
+                    <p>Images and videos from posts and pages. Grabs the highest quality version available on the CDN.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ========== FEATURES ========== -->
+    <section class="features-section">
+        <div class="container">
+            <h2>What you get</h2>
+            <div class="feature-grid">
+                <div class="feature">
+                    <div class="feature-icon">
+                        <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M12 16V8M8 12l4-4 4 4"/></svg>
+                    </div>
+                    <h3>HD quality</h3>
+                    <p>Rewrites CDN URLs to fetch the highest available resolution, not the compressed preview.</p>
+                </div>
+                <div class="feature">
+                    <div class="feature-icon">
+                        <svg viewBox="0 0 24 24"><rect x="6" y="6" width="15" height="15" rx="2"/><path d="M3 18V5a2 2 0 012-2h13"/></svg>
+                    </div>
+                    <h3>Multi-image posts</h3>
+                    <p>Download every image from a carousel or gallery in one click. No swiping through one at a time.</p>
+                </div>
+                <div class="feature">
+                    <div class="feature-icon">
+                        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>
+                    </div>
+                    <h3>Download history</h3>
+                    <p>Quick access to recent downloads from the popup. See what you grabbed and when.</p>
+                </div>
+                <div class="feature">
+                    <div class="feature-icon">
+                        <svg viewBox="0 0 24 24"><path d="M3 7v11a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg>
+                    </div>
+                    <h3>Organized folders</h3>
+                    <p>Files saved to SocialSnag/instagram/, SocialSnag/twitter/, etc. Sorted automatically.</p>
+                </div>
+                <div class="feature">
+                    <div class="feature-icon">
+                        <svg viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="10" rx="5"/><circle cx="17" cy="12" r="3" fill="var(--blue)"/></svg>
+                    </div>
+                    <h3>Platform toggles</h3>
+                    <p>Turn individual platforms on or off. Only activate what you use.</p>
+                </div>
+                <div class="feature">
+                    <div class="feature-icon">
+                        <svg viewBox="0 0 24 24"><path d="M12 3l8 4v5c0 5-3.5 9.5-8 11-4.5-1.5-8-6-8-11V7l8-4z"/><path d="M9 12l2 2 4-4"/></svg>
+                    </div>
+                    <h3>Zero tracking</h3>
+                    <p>No analytics, no telemetry, no server. Your browsing data stays on your device.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ========== PRIVACY ========== -->
+    <section class="privacy-section">
+        <div class="container">
+            <div class="privacy-icon">
+                <svg viewBox="0 0 24 24"><path d="M12 2L4 6v5c0 5.55 3.84 10.74 8 12 4.16-1.26 8-6.45 8-12V6l-8-4z"/><path d="M9 12l2 2 4-4"/></svg>
+            </div>
+            <h2>No tracking. No servers. No nonsense.</h2>
+            <p>SocialSnag has no backend, no analytics, and no data collection servers. All media processing happens in your browser, and settings are stored using the browser's built-in extension storage. If you have browser sync enabled, your browser may sync those settings via its own cloud services — controlled by your browser account, not SocialSnag.</p>
+            <a href="https://github.com/jamditis/socialsnag/blob/HEAD/PRIVACY.md">Read the full privacy policy</a>
+        </div>
+    </section>
+
+    <!-- ========== INSTALL ========== -->
+    <section class="install-section" id="install">
+        <div class="glow-orb"></div>
+        <div class="container">
+            <h2>Get SocialSnag</h2>
+            <div class="install-grid">
+                <div class="install-card coming-soon">
+                    <h3>Chrome Web Store</h3>
+                    <p>Submission pending. Check back soon.</p>
+                </div>
+                <div class="install-card">
+                    <h3>Developer mode</h3>
+                    <ol class="install-steps">
+                        <li>Clone the repo: <code>git clone https://github.com/jamditis/socialsnag.git</code></li>
+                        <li>Open <code>chrome://extensions</code> in Chrome</li>
+                        <li>Toggle on <strong style="color: var(--text-bright);">Developer mode</strong> in the top right</li>
+                        <li>Click <strong style="color: var(--text-bright);">Load unpacked</strong> and select the folder</li>
+                        <li>Right-click any image on a supported site</li>
+                    </ol>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ========== FOOTER ========== -->
+    <footer>
+        <div class="container">
+            <p>MIT license. Made by Joe Amditis.</p>
+            <div class="footer-links">
+                <a href="https://github.com/jamditis/socialsnag">GitHub</a>
+                <a href="https://github.com/jamditis/socialsnag/blob/HEAD/PRIVACY.md">Privacy</a>
+                <a href="https://github.com/jamditis/socialsnag/blob/HEAD/LICENSE">License</a>
+            </div>
+        </div>
+    </footer>
+
+</body>
+</html>
