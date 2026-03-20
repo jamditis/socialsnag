@@ -60,12 +60,12 @@ function resolveSingle(srcUrl, target) {
         return [{ url: upgraded, type: 'image', filename: id ? `tweet_${id}` : null }];
       }
     }
-    if (nearestMedia.tagName === 'VIDEO') {
+    if (nearestMedia.tagName === 'VIDEO' || nearestMedia.closest?.('[data-testid="videoComponent"]')) {
       return resolveVideo(target);
     }
   }
 
-  if (target?.tagName === 'VIDEO' || target?.closest('video')) {
+  if (target?.tagName === 'VIDEO' || target?.closest('video') || target?.closest('[data-testid="videoComponent"]')) {
     return resolveVideo(target);
   }
 
@@ -100,13 +100,21 @@ function resolveAll(target) {
   return items.length > 0 ? items : resolveSingle(target?.src || '', target);
 }
 
-async function resolveVideo() {
+async function resolveVideo(target) {
+  // First try webRequest captures (advanced mode)
   const captured = await getCapturedMedia();
   const mp4s = filterCapturedVideos(captured);
 
   if (mp4s.length > 0) {
     return [{ url: mp4s[0].url, type: 'video', filename: null }];
   }
+
+  // Fall back to API lookup via background script
+  const tweetId = extractTweetId(target) || window.location.pathname.match(/\/status\/(\d+)/)?.[1];
+  if (tweetId) {
+    return [{ type: 'video', filename: `tweet_${tweetId}`, tweetId, needsVideoLookup: true }];
+  }
+
   return [];
 }
 

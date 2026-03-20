@@ -200,8 +200,81 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   }
 });
 
+// --- API-based video resolvers ---
+
+async function resolveTwitterVideo(tweetId) {
+  try {
+    const resp = await fetch(
+      `https://cdn.syndication.twimg.com/tweet-result?id=${tweetId}&token=0`
+    );
+    if (!resp.ok) return null;
+    const data = await resp.json();
+
+    // Find video media in mediaDetails
+    const media = data.mediaDetails || [];
+    const videoMedia = media.find((m) => m.type === 'video' || m.type === 'animated_gif');
+    if (!videoMedia?.video_info?.variants) return null;
+
+    // Pick the highest bitrate MP4 variant
+    const mp4s = videoMedia.video_info.variants
+      .filter((v) => v.content_type === 'video/mp4' && v.url)
+      .sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
+
+    return mp4s.length > 0 ? mp4s[0].url : null;
+  } catch (e) {
+    console.error('SocialSnag: Twitter video API failed:', e);
+    return null;
+  }
+}
+
+async function resolveInstagramVideo(shortcode) {
+  try {
+    const resp = await fetch(
+      `https://www.instagram.com/p/${shortcode}/?__a=1&__d=dis`,
+      { credentials: 'include' }
+    );
+    if (!resp.ok) return null;
+    const data = await resp.json();
+
+    const item = data.graphql?.shortcode_media || data.items?.[0];
+    if (!item) return null;
+
+    // Direct video URL
+    if (item.video_url) return item.video_url;
+
+    // Carousel: find first video
+    const edges = item.edge_sidecar_to_children?.edges || [];
+    for (const edge of edges) {
+      if (edge.node?.video_url) return edge.node.video_url;
+    }
+
+    return null;
+  } catch (e) {
+    console.error('SocialSnag: Instagram video API failed:', e);
+    return null;
+  }
+}
+
 // Validate and download a single media item
 async function downloadMedia(item, platform) {
+  // Handle API-based video lookups
+  if (item.needsVideoLookup) {
+    let resolvedUrl = null;
+
+    if (item.tweetId) {
+      resolvedUrl = await resolveTwitterVideo(item.tweetId);
+    } else if (item.shortcode) {
+      resolvedUrl = await resolveInstagramVideo(item.shortcode);
+    }
+
+    if (!resolvedUrl) {
+      console.warn('SocialSnag: video API lookup returned no URL');
+      return null;
+    }
+
+    item = { ...item, url: resolvedUrl, needsVideoLookup: false };
+  }
+
   const validation = validateDownloadUrl(item.url);
   if (!validation.valid) {
     console.warn(`SocialSnag: rejected ${validation.reason}`);
