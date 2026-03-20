@@ -51,6 +51,29 @@ export function parseMediaFromJson(jsonStrings) {
   return items;
 }
 
+export function extractVideoUrlFromScripts(scriptTexts) {
+  for (const text of scriptTexts) {
+    if (!text) continue;
+
+    // Match "video_url":"https://...cdninstagram.com/..."
+    if (text.includes('video_url')) {
+      const match = text.match(/"video_url":"(https?:[^"]+)"/);
+      if (match) {
+        return match[1].replace(/\\\//g, '/');
+      }
+    }
+
+    // Match "video_versions":[{"url":"https://..."}]
+    if (text.includes('video_versions')) {
+      const match = text.match(/"video_versions"\s*:\s*\[\s*\{\s*"url"\s*:\s*"(https?:[^"]+)"/);
+      if (match) {
+        return match[1].replace(/\\\//g, '/');
+      }
+    }
+  }
+  return null;
+}
+
 // --- Browser wiring (not exported) ---
 
 function extractFromPageJson(pathname) {
@@ -91,30 +114,26 @@ function resolveSingle(srcUrl, target, pathname) {
       const shortcode = extractShortcode(pathname);
       return [{ url: src, type: 'video', filename: shortcode ? `reel_${shortcode}` : null }];
     }
+
+    // blob: URL — try to extract the real CDN URL from page scripts
+    const scripts = document.querySelectorAll('script');
+    const scriptTexts = Array.from(scripts).map((s) => s.textContent);
+    const cdnUrl = extractVideoUrlFromScripts(scriptTexts);
+    if (cdnUrl) {
+      const shortcode = extractShortcode(pathname);
+      return [{ url: cdnUrl, type: 'video', filename: shortcode ? `reel_${shortcode}` : null }];
+    }
   }
 
   // Fall back to resolveAll
   return [];
 }
 
-async function resolveAll(target, pathname) {
-  // Try JSON extraction first for carousel data
-  const jsonItems = extractFromPageJson(pathname);
-  if (jsonItems.length > 0) return jsonItems;
-
-  // Fall back to DOM collection
-  const post = findPostContainer(target, [
-    'article',
-    '[role="presentation"]',
-    'div._aagv',
-  ]);
-  if (!post) return resolveSingle(target?.src || '', target, pathname);
-
+function collectMediaFromContainer(container, shortcode) {
   const items = [];
-  const shortcode = extractShortcode(pathname);
   let index = 1;
 
-  post.querySelectorAll('img[src*="cdninstagram.com"]').forEach((img) => {
+  container.querySelectorAll('img[src*="cdninstagram.com"]').forEach((img) => {
     const url = upgradeImageUrl(img.src, img);
     if (url) {
       items.push({
@@ -126,7 +145,7 @@ async function resolveAll(target, pathname) {
     }
   });
 
-  post.querySelectorAll('video').forEach((video) => {
+  container.querySelectorAll('video').forEach((video) => {
     const src = video.src;
     if (src && !src.startsWith('blob:')) {
       items.push({
@@ -135,8 +154,65 @@ async function resolveAll(target, pathname) {
         filename: shortcode ? `post_${shortcode}_${index}` : null,
       });
       index++;
+    } else if (src && src.startsWith('blob:')) {
+      // blob: URL — try to extract real CDN URL from page scripts
+      const scripts = document.querySelectorAll('script');
+      const scriptTexts = Array.from(scripts).map((s) => s.textContent);
+      const cdnUrl = extractVideoUrlFromScripts(scriptTexts);
+      if (cdnUrl) {
+        items.push({
+          url: cdnUrl,
+          type: 'video',
+          filename: shortcode ? `post_${shortcode}_${index}` : null,
+        });
+        index++;
+      }
     }
   });
+
+  return { items, index };
+}
+
+function findBroadContainer(target) {
+  let el = target;
+  const body = globalThis.document?.body;
+  while (el && el !== body) {
+    el = el.parentElement;
+    if (!el) break;
+    const mediaCount = el.querySelectorAll('img[src*="cdninstagram.com"]').length
+      + el.querySelectorAll('video').length;
+    if (mediaCount > 1) {
+      return el;
+    }
+  }
+  return null;
+}
+
+async function resolveAll(target, pathname) {
+  // Try JSON extraction first for carousel data
+  const jsonItems = extractFromPageJson(pathname);
+  if (jsonItems.length > 0) return jsonItems;
+
+  // Fall back to DOM collection
+  let post = findPostContainer(target, [
+    'article',
+    '[role="presentation"]',
+    '[role="dialog"]',
+    'div._aagv',
+    'div._aatk',
+    'div._ab8w',
+  ]);
+
+  // If no known container matched, try broader ancestor walk
+  if (!post) {
+    post = findBroadContainer(target);
+  }
+
+  if (!post) return resolveSingle(target?.src || '', target, pathname);
+
+  const shortcode = extractShortcode(pathname);
+  const { items, index: nextIndex } = collectMediaFromContainer(post, shortcode);
+  let index = nextIndex;
 
   // If DOM only found one item, check webRequest captures for more
   if (items.length <= 1) {

@@ -3,6 +3,7 @@ import {
   upgradeImageUrl,
   extractShortcode,
   parseMediaFromJson,
+  extractVideoUrlFromScripts,
 } from '../src/platforms/instagram.js';
 
 describe('upgradeImageUrl', () => {
@@ -110,5 +111,52 @@ describe('parseMediaFromJson', () => {
   it('returns empty array for empty input', () => {
     const result = parseMediaFromJson([]);
     expect(result).toHaveLength(0);
+  });
+});
+
+describe('extractVideoUrlFromScripts', () => {
+  it('extracts video_url from IG JSON in script text', () => {
+    const scriptText = '{"video_url":"https:\\/\\/scontent.cdninstagram.com\\/v\\/t50\\/video.mp4"}';
+    const result = extractVideoUrlFromScripts([scriptText]);
+    expect(result).toBe('https://scontent.cdninstagram.com/v/t50/video.mp4');
+  });
+
+  it('extracts URL from video_versions array format', () => {
+    const scriptText = '{"video_versions":[{"url":"https:\\/\\/scontent.cdninstagram.com\\/v\\/t50\\/hd_video.mp4","width":1080}]}';
+    const result = extractVideoUrlFromScripts([scriptText]);
+    expect(result).toBe('https://scontent.cdninstagram.com/v/t50/hd_video.mp4');
+  });
+
+  it('unescapes forward slashes in extracted URLs', () => {
+    const scriptText = 'window.__data={"video_url":"https:\\/\\/scontent-lax3-1.cdninstagram.com\\/v\\/t50.2886-16\\/abc123.mp4?efg=abc\\u0026oh=def"}';
+    const result = extractVideoUrlFromScripts([scriptText]);
+    expect(result).toContain('https://scontent-lax3-1.cdninstagram.com/v/t50.2886-16/abc123.mp4');
+    expect(result).not.toContain('\\/');
+  });
+
+  it('returns null when no video URLs are present', () => {
+    const scriptText = '{"image_url":"https://scontent.cdninstagram.com/photo.jpg","type":"GraphImage"}';
+    const result = extractVideoUrlFromScripts([scriptText]);
+    expect(result).toBeNull();
+  });
+
+  it('returns null for empty input', () => {
+    expect(extractVideoUrlFromScripts([])).toBeNull();
+  });
+
+  it('searches multiple script texts and returns first match', () => {
+    const scripts = [
+      '{"unrelated":"data"}',
+      '{"video_url":"https:\\/\\/scontent.cdninstagram.com\\/first.mp4"}',
+      '{"video_url":"https:\\/\\/scontent.cdninstagram.com\\/second.mp4"}',
+    ];
+    const result = extractVideoUrlFromScripts(scripts);
+    expect(result).toBe('https://scontent.cdninstagram.com/first.mp4');
+  });
+
+  it('skips null and empty script texts', () => {
+    const scripts = [null, '', '{"video_url":"https:\\/\\/scontent.cdninstagram.com\\/video.mp4"}'];
+    const result = extractVideoUrlFromScripts(scripts);
+    expect(result).toBe('https://scontent.cdninstagram.com/video.mp4');
   });
 });
