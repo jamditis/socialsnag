@@ -1,12 +1,11 @@
 'use strict';
 
 if (typeof document !== 'undefined') {
-  const PLATFORMS = ['instagram', 'twitter', 'facebook'];
+  const PLATFORMS = ['instagram', 'twitter', 'facebook', 'bluesky'];
 
   const saveSettings = () => {
-    const settings = {
-      showNotifications: true,
-    };
+    // Don't touch showNotifications — no UI toggle for it, preserve whatever the user has
+    const settings = {};
 
     PLATFORMS.forEach((p) => {
       settings[`platform_${p}`] = document.getElementById(`${p}-toggle`).checked;

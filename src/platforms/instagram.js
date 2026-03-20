@@ -51,6 +51,13 @@ export function parseMediaFromJson(jsonStrings) {
   return items;
 }
 
+// Decode JSON escape sequences in extracted URL strings
+function decodeJsonString(str) {
+  return str
+    .replace(/\\\//g, '/')
+    .replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
+}
+
 export function extractVideoUrlFromScripts(scriptTexts) {
   for (const text of scriptTexts) {
     if (!text) continue;
@@ -59,7 +66,7 @@ export function extractVideoUrlFromScripts(scriptTexts) {
     if (text.includes('video_url')) {
       const match = text.match(/"video_url":"(https?:[^"]+)"/);
       if (match) {
-        return match[1].replace(/\\\//g, '/');
+        return decodeJsonString(match[1]);
       }
     }
 
@@ -67,7 +74,7 @@ export function extractVideoUrlFromScripts(scriptTexts) {
     if (text.includes('video_versions')) {
       const match = text.match(/"video_versions"\s*:\s*\[\s*\{\s*"url"\s*:\s*"(https?:[^"]+)"/);
       if (match) {
-        return match[1].replace(/\\\//g, '/');
+        return decodeJsonString(match[1]);
       }
     }
   }
@@ -145,6 +152,15 @@ function collectMediaFromContainer(container, shortcode) {
     }
   });
 
+  // Cache script texts once for all video elements (avoid re-querying DOM per video)
+  let _cachedScriptTexts = null;
+  function getScriptTexts() {
+    if (!_cachedScriptTexts) {
+      _cachedScriptTexts = Array.from(document.querySelectorAll('script')).map((s) => s.textContent);
+    }
+    return _cachedScriptTexts;
+  }
+
   container.querySelectorAll('video').forEach((video) => {
     const src = video.src;
     if (src && !src.startsWith('blob:')) {
@@ -156,9 +172,7 @@ function collectMediaFromContainer(container, shortcode) {
       index++;
     } else if (src && src.startsWith('blob:')) {
       // blob: URL — try to extract real CDN URL from page scripts
-      const scripts = document.querySelectorAll('script');
-      const scriptTexts = Array.from(scripts).map((s) => s.textContent);
-      const cdnUrl = extractVideoUrlFromScripts(scriptTexts);
+      const cdnUrl = extractVideoUrlFromScripts(getScriptTexts());
       if (cdnUrl) {
         items.push({
           url: cdnUrl,

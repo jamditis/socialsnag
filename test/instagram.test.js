@@ -132,6 +132,8 @@ describe('extractVideoUrlFromScripts', () => {
     const result = extractVideoUrlFromScripts([scriptText]);
     expect(result).toContain('https://scontent-lax3-1.cdninstagram.com/v/t50.2886-16/abc123.mp4');
     expect(result).not.toContain('\\/');
+    expect(result).toContain('&');
+    expect(result).not.toContain('\\u0026');
   });
 
   it('returns null when no video URLs are present', () => {
