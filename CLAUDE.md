@@ -151,7 +151,6 @@ This works without advanced mode (webRequest) enabled.
 
 ### Pending
 - CWS review approval (submitted 2026-03-20)
-- Upload social preview image in GitHub Settings > General > Social preview
 
 ### Future work
 - LinkedIn/TikTok ESM conversion and re-evaluation after CWS approval
