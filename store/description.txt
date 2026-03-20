@@ -4,6 +4,7 @@ Supported platforms:
 - Instagram (images, reels, carousels)
 - Twitter / X (images, profile pictures)
 - Facebook (images, videos)
+- Bluesky (images)
 
 Features:
 - Right-click any image or video to download the full-resolution version

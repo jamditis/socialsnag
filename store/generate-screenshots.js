@@ -1,6 +1,7 @@
 import { chromium } from 'playwright';
 import { mkdirSync, writeFileSync } from 'fs';
 import { join, resolve } from 'path';
+import { tmpdir } from 'os';
 
 const SCREENSHOT_DIR = resolve('store/screenshots');
 mkdirSync(SCREENSHOT_DIR, { recursive: true });
@@ -127,12 +128,13 @@ const popupPage = `<!DOCTYPE html>
   .popup-header .icon { width: 28px; height: 28px; background: #7c3aed; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-weight: bold; color: #fff; font-size: 14px; }
   .popup-header h1 { font-size: 16px; margin: 0; font-weight: 600; }
   .popup-header .version { font-size: 11px; color: #888; }
-  .platforms { display: flex; gap: 8px; padding: 12px 16px; }
-  .badge { padding: 4px 12px; border-radius: 12px; font-size: 12px; font-weight: 500; display: flex; align-items: center; gap: 6px; }
+  .platforms { display: flex; flex-wrap: wrap; gap: 6px; padding: 12px 16px; }
+  .badge { padding: 4px 10px; border-radius: 12px; font-size: 11px; font-weight: 500; display: flex; align-items: center; gap: 5px; white-space: nowrap; }
   .badge .dot { width: 8px; height: 8px; border-radius: 50%; background: #22c55e; }
   .badge.ig { background: rgba(225,48,108,0.15); color: #e1306c; }
   .badge.tw { background: rgba(29,155,240,0.15); color: #1d9bf0; }
   .badge.fb { background: rgba(24,119,242,0.15); color: #1877f2; }
+  .badge.bs { background: rgba(0,133,255,0.15); color: #0085ff; }
   .section-title { font-size: 13px; font-weight: 600; color: #888; padding: 8px 16px 4px; }
   .history-item { display: flex; align-items: center; padding: 10px 16px; gap: 12px; border-bottom: 1px solid rgba(255,255,255,0.05); }
   .platform-icon { width: 32px; height: 32px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 12px; color: #fff; }
@@ -158,12 +160,13 @@ const popupPage = `<!DOCTYPE html>
   <div class="popup">
     <div class="popup-header">
       <div class="left"><div class="icon">S</div><h1>SocialSnag</h1></div>
-      <span class="version">v1.0.0</span>
+      <span class="version">v1.1.0</span>
     </div>
     <div class="platforms">
       <div class="badge ig"><span class="dot"></span>Instagram</div>
       <div class="badge tw"><span class="dot"></span>Twitter/X</div>
       <div class="badge fb"><span class="dot"></span>Facebook</div>
+      <div class="badge bs"><span class="dot"></span>Bluesky</div>
     </div>
     <div class="section-title">Recent downloads</div>
     <div class="history-item"><div class="platform-icon ig">IG</div><div class="details"><div class="filename">post_CxK7mBr_1</div><div class="meta">instagram</div></div><span class="time">2m</span></div>
@@ -180,55 +183,55 @@ const popupPage = `<!DOCTYPE html>
 
 const optionsPage = `<!DOCTYPE html>
 <html><head><style>
-  body { margin: 0; background: #f5f5f5; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #333; }
-  .browser-bar { background: #e8e8e8; padding: 8px 16px; display: flex; align-items: center; gap: 8px; border-bottom: 1px solid #ccc; }
-  .browser-bar .dots { display: flex; gap: 6px; }
-  .browser-bar .dot { width: 12px; height: 12px; border-radius: 50%; }
-  .browser-bar .dot.r { background: #ff5f57; }
-  .browser-bar .dot.y { background: #febc2e; }
-  .browser-bar .dot.g { background: #28c840; }
-  .browser-bar .url { background: #fff; border-radius: 20px; padding: 6px 16px; color: #666; font-size: 13px; flex: 1; margin: 0 40px; border: 1px solid #ddd; }
-  .container { max-width: 560px; margin: 32px auto; padding: 0 20px; }
-  h1 { font-size: 24px; font-weight: 600; margin-bottom: 4px; }
-  h1 + p { color: #666; font-size: 14px; margin-top: 0; }
-  h2 { font-size: 16px; font-weight: 600; margin-top: 28px; margin-bottom: 12px; color: #444; }
-  .option-group { display: flex; align-items: center; gap: 10px; padding: 8px 0; }
-  .option-group input[type="checkbox"] { width: 18px; height: 18px; accent-color: #7c3aed; }
-  .option-group label { font-size: 15px; }
-  .disabled { color: #999; }
-  .section-note { font-size: 12px; color: #999; margin: 2px 0 0 28px; }
-  .description { font-size: 12px; color: #888; margin: 4px 0 0 28px; }
-  .advanced-section { background: #f0f0f0; border-radius: 8px; padding: 12px 16px; margin-top: 8px; }
-  button { background: #7c3aed; color: #fff; border: none; padding: 10px 24px; border-radius: 8px; font-size: 14px; cursor: pointer; margin-top: 20px; }
-  .status { margin-top: 8px; font-size: 13px; color: #22c55e; }
-  .disclaimer { margin-top: 24px; font-size: 12px; color: #999; line-height: 1.5; border-top: 1px solid #e0e0e0; padding-top: 16px; }
-  .privacy-link { color: #7c3aed; }
+  body { margin: 0; background: #0a0e1a; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #e0e0e0; display: flex; justify-content: center; padding-top: 40px; }
+  .container { max-width: 560px; width: 100%; padding: 0 20px; }
+  .header { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+  .logo { width: 36px; height: 36px; background: #3b82f6; border-radius: 8px; display: flex; align-items: center; justify-content: center; }
+  .logo svg { width: 20px; height: 20px; }
+  h1 { font-size: 22px; font-weight: 700; margin: 0; }
+  .subtitle { color: #888; font-size: 14px; margin: 0 0 24px; }
+  .card { background: #111827; border: 1px solid #1e293b; border-radius: 12px; padding: 20px; margin-bottom: 16px; }
+  h2 { font-size: 15px; font-weight: 600; margin: 0 0 16px; color: #f0f0f0; }
+  .toggle-row { display: flex; align-items: center; justify-content: space-between; padding: 10px 16px; border: 1px solid #1e293b; border-radius: 8px; margin-bottom: 8px; }
+  .toggle-row.disabled { opacity: 0.4; }
+  .toggle-label { font-size: 14px; font-weight: 500; }
+  .toggle-desc { font-size: 12px; color: #666; margin-top: 2px; }
+  .switch { width: 44px; height: 24px; background: #334155; border-radius: 12px; position: relative; flex-shrink: 0; }
+  .switch.on { background: #3b82f6; }
+  .switch .knob { width: 20px; height: 20px; background: #fff; border-radius: 50%; position: absolute; top: 2px; left: 2px; transition: left 0.15s; }
+  .switch.on .knob { left: 22px; }
+  .coming-soon { font-size: 11px; color: #555; margin-top: 2px; }
+  .disclaimer { font-size: 12px; color: #555; line-height: 1.6; margin-top: 16px; }
+  .disclaimer a { color: #3b82f6; text-decoration: none; }
 </style></head><body>
-  <div class="browser-bar">
-    <div class="dots"><div class="dot r"></div><div class="dot y"></div><div class="dot g"></div></div>
-    <div class="url">chrome-extension://socialsnag/options.html</div>
-  </div>
   <div class="container">
-    <h1>SocialSnag settings</h1>
-    <p>Configure which platforms are enabled and how downloads behave.</p>
-    <h2>Enabled platforms</h2>
-    <div class="option-group"><input type="checkbox" checked><label>Instagram</label></div>
-    <div class="option-group"><input type="checkbox" checked><label>Twitter / X</label></div>
-    <div class="option-group"><input type="checkbox" checked><label>Facebook</label></div>
-    <div class="option-group"><input type="checkbox" disabled><label class="disabled">LinkedIn</label></div>
-    <div class="section-note">Available in developer mode only</div>
-    <div class="option-group"><input type="checkbox" disabled><label class="disabled">TikTok</label></div>
-    <div class="section-note">Available in developer mode only</div>
-    <h2>Notifications</h2>
-    <div class="option-group"><input type="checkbox" checked><label>Show download notifications</label></div>
-    <h2>Advanced</h2>
-    <div class="advanced-section">
-      <div class="option-group"><input type="checkbox"><label>Advanced media detection</label></div>
-      <div class="description">Uses additional browser APIs to detect media that isn't visible in the page. May trigger extra permission prompts.</div>
+    <div class="header">
+      <div class="logo"><svg viewBox="0 0 32 32" fill="none"><path d="M10 22V14l6-4 6 4v8" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M16 10v12" stroke="#fff" stroke-width="2.5" stroke-linecap="round"/><path d="M12 16l4-4 4 4" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+      <h1>SocialSnag settings</h1>
     </div>
-    <button>Save settings</button>
-    <div class="status">Settings saved.</div>
-    <div class="disclaimer">SocialSnag downloads publicly accessible media. Users are responsible for complying with copyright laws and platform terms of service in their jurisdiction.<br><a class="privacy-link" href="#">Privacy policy</a></div>
+    <p class="subtitle">Configure which platforms are enabled and how downloads behave.</p>
+    <div class="card">
+      <h2>Platform support</h2>
+      <div class="toggle-row"><span class="toggle-label">Instagram</span><div class="switch on"><div class="knob"></div></div></div>
+      <div class="toggle-row"><span class="toggle-label">Twitter / X</span><div class="switch on"><div class="knob"></div></div></div>
+      <div class="toggle-row"><span class="toggle-label">Facebook</span><div class="switch on"><div class="knob"></div></div></div>
+      <div class="toggle-row"><span class="toggle-label">Bluesky</span><div class="switch on"><div class="knob"></div></div></div>
+    </div>
+    <div class="card">
+      <h2>Advanced modes</h2>
+      <div class="toggle-row">
+        <div><span class="toggle-label">Deep scan (webRequest)</span><p class="toggle-desc">Uses additional browser APIs to detect media not visible in the page.</p></div>
+        <div class="switch"><div class="knob"></div></div>
+      </div>
+      <div class="toggle-row disabled">
+        <div><span class="toggle-label">LinkedIn &amp; TikTok</span><div class="coming-soon">Coming soon</div></div>
+        <div class="switch"><div class="knob"></div></div>
+      </div>
+    </div>
+    <div class="card">
+      <h2>About and privacy</h2>
+      <p class="disclaimer">SocialSnag downloads publicly accessible media. No data is collected or transmitted.<br><br>Users are responsible for complying with copyright laws and platform terms of service.<br><br><a href="#">GitHub</a> &middot; <a href="#">Privacy policy</a></p>
+    </div>
   </div>
 </body></html>`;
 
@@ -269,6 +272,7 @@ const folderPage = `<!DOCTYPE html>
     <div class="item" style="padding-left: 36px;"><span class="icon">&#128193;</span> instagram</div>
     <div class="item" style="padding-left: 36px;"><span class="icon">&#128193;</span> twitter</div>
     <div class="item" style="padding-left: 36px;"><span class="icon">&#128193;</span> facebook</div>
+    <div class="item" style="padding-left: 36px;"><span class="icon">&#128193;</span> bluesky</div>
   </div>
   <div class="content">
     <div class="section-label">instagram/</div>
@@ -288,6 +292,10 @@ const folderPage = `<!DOCTYPE html>
     <div class="folder-grid">
       <div class="file"><div class="icon img">&#128444;</div><div class="name">photo_9876543210.jpg</div></div>
       <div class="file"><div class="icon img">&#128444;</div><div class="name">photo_9876543211.jpg</div></div>
+    </div>
+    <div class="section-label">bluesky/</div>
+    <div class="folder-grid">
+      <div class="file"><div class="icon img">&#128444;</div><div class="name">bsky_post_3kx92.jpg</div></div>
     </div>
   </div>
 </body></html>`;
@@ -309,7 +317,7 @@ async function main() {
 
   for (const page of pages) {
     const tab = await context.newPage();
-    const tmpPath = join('/tmp', `socialsnag-screenshot-${page.name}.html`);
+    const tmpPath = join(tmpdir(), `socialsnag-screenshot-${page.name}.html`);
     writeFileSync(tmpPath, page.html);
     await tab.goto(`file://${tmpPath}`);
     await tab.waitForTimeout(500);

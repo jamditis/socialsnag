@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Privacy policy - SocialSnag</title>
+    <meta name="description" content="SocialSnag privacy policy. No data collection, no analytics, no servers.">
+
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 128 128'%3E%3Crect x='16' y='16' width='96' height='96' rx='18' fill='%233b82f6'/%3E%3Crect x='57' y='34' width='14' height='30' rx='2' fill='%23fff'/%3E%3Cpolygon points='64,82 42,58 86,58' fill='%23fff'/%3E%3Crect x='36' y='90' width='56' height='6' rx='3' fill='%23fff'/%3E%3C/svg%3E">
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=Outfit:wght@300;400;500;600&display=swap" rel="stylesheet">
+
+    <style>
+        :root {
+            --bg-deep: #04060c;
+            --bg-surface: #080c18;
+            --bg-card: #0c1024;
+            --bg-elevated: #101630;
+            --blue: #3b82f6;
+            --blue-bright: #60a5fa;
+            --blue-dim: rgba(59, 130, 246, 0.15);
+            --blue-glow: rgba(59, 130, 246, 0.25);
+            --green: #22c55e;
+            --text: #94a3b8;
+            --text-bright: #e2e8f0;
+            --text-white: #ffffff;
+            --border: rgba(255, 255, 255, 0.06);
+            --border-hover: rgba(255, 255, 255, 0.12);
+            --font-display: 'Syne', sans-serif;
+            --font-body: 'Outfit', sans-serif;
+        }
+
+        *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+        html {
+            scroll-behavior: smooth;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+        }
+
+        body {
+            background: var(--bg-deep);
+            color: var(--text);
+            font-family: var(--font-body);
+            font-weight: 400;
+            font-size: 16px;
+            line-height: 1.6;
+            overflow-x: hidden;
+        }
+
+        body::after {
+            content: '';
+            position: fixed;
+            inset: 0;
+            pointer-events: none;
+            z-index: 1000;
+            opacity: 0.4;
+            background: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.75' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.025'/%3E%3C/svg%3E");
+        }
+
+        a { color: var(--blue); text-decoration: none; }
+        a:hover { color: var(--blue-bright); }
+
+        nav {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            z-index: 100;
+            background: rgba(4, 6, 12, 0.75);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border-bottom: 1px solid var(--border);
+        }
+
+        .nav-inner {
+            max-width: 1120px;
+            margin: 0 auto;
+            padding: 0 24px;
+            height: 64px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .nav-brand {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            text-decoration: none;
+        }
+
+        .nav-brand svg { width: 28px; height: 28px; }
+
+        .nav-brand span {
+            font-family: var(--font-display);
+            font-weight: 700;
+            font-size: 18px;
+            color: var(--text-white);
+            letter-spacing: -0.02em;
+        }
+
+        .nav-links {
+            display: flex;
+            align-items: center;
+            gap: 32px;
+        }
+
+        .nav-links a {
+            font-size: 14px;
+            font-weight: 500;
+            color: var(--text);
+            transition: color 0.2s;
+        }
+
+        .nav-links a:hover { color: var(--text-white); }
+
+        .content {
+            max-width: 720px;
+            margin: 0 auto;
+            padding: 120px 24px 80px;
+            position: relative;
+            z-index: 1;
+        }
+
+        .content h1 {
+            font-family: var(--font-display);
+            font-weight: 800;
+            font-size: clamp(28px, 4vw, 42px);
+            line-height: 1.1;
+            letter-spacing: -0.03em;
+            color: var(--text-white);
+            margin-bottom: 8px;
+        }
+
+        .updated {
+            font-size: 14px;
+            color: var(--text);
+            margin-bottom: 40px;
+        }
+
+        .content h2 {
+            font-family: var(--font-display);
+            font-weight: 600;
+            font-size: 22px;
+            color: var(--text-white);
+            letter-spacing: -0.01em;
+            margin-top: 48px;
+            margin-bottom: 16px;
+        }
+
+        .content p {
+            font-size: 16px;
+            line-height: 1.7;
+            color: var(--text);
+            margin-bottom: 16px;
+        }
+
+        .content ul {
+            list-style: none;
+            margin-bottom: 16px;
+        }
+
+        .content ul li {
+            position: relative;
+            padding-left: 20px;
+            margin-bottom: 8px;
+            font-size: 15px;
+            line-height: 1.6;
+            color: var(--text);
+        }
+
+        .content ul li::before {
+            content: '';
+            position: absolute;
+            left: 0;
+            top: 10px;
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: var(--blue);
+        }
+
+        .content strong {
+            color: var(--text-bright);
+            font-weight: 600;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 16px 0 24px;
+        }
+
+        th, td {
+            text-align: left;
+            padding: 12px 16px;
+            font-size: 14px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        th {
+            font-family: var(--font-display);
+            font-weight: 600;
+            font-size: 13px;
+            color: var(--text-bright);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            background: var(--bg-card);
+        }
+
+        td {
+            color: var(--text);
+        }
+
+        td:first-child {
+            color: var(--text-bright);
+            font-family: 'SF Mono', 'Fira Code', monospace;
+            font-size: 13px;
+        }
+
+        code {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            padding: 2px 6px;
+            font-size: 13px;
+            font-family: 'SF Mono', 'Fira Code', monospace;
+            color: var(--blue-bright);
+        }
+
+        footer {
+            padding: 40px 0;
+            border-top: 1px solid var(--border);
+            text-align: center;
+            position: relative;
+            z-index: 1;
+        }
+
+        footer .footer-inner {
+            max-width: 1120px;
+            margin: 0 auto;
+            padding: 0 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        footer p {
+            font-size: 13px;
+            color: var(--text);
+        }
+
+        .footer-links {
+            display: flex;
+            gap: 24px;
+        }
+
+        .footer-links a {
+            font-size: 13px;
+            color: var(--text);
+            transition: color 0.2s;
+        }
+
+        .footer-links a:hover { color: var(--text-bright); }
+
+        @media (max-width: 600px) {
+            .content { padding: 100px 20px 60px; }
+            .content h1 { font-size: 28px; }
+            table { font-size: 13px; }
+            th, td { padding: 8px 10px; }
+            footer .footer-inner { flex-direction: column; gap: 16px; }
+        }
+    </style>
+</head>
+<body>
+
+    <nav>
+        <div class="nav-inner">
+            <a class="nav-brand" href="./">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+                    <rect x="16" y="16" width="96" height="96" rx="18" fill="#3b82f6"/>
+                    <rect x="57" y="34" width="14" height="30" rx="2" fill="#fff"/>
+                    <polygon points="64,82 42,58 86,58" fill="#fff"/>
+                    <rect x="36" y="90" width="56" height="6" rx="3" fill="#fff"/>
+                </svg>
+                <span>SocialSnag</span>
+            </a>
+            <div class="nav-links">
+                <a href="./">Home</a>
+                <a href="https://github.com/jamditis/socialsnag">GitHub</a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="content">
+        <h1>Privacy policy</h1>
+        <p class="updated">Last updated: March 20, 2026</p>
+
+        <h2>What SocialSnag collects</h2>
+        <p>Nothing. SocialSnag does not collect, transmit, or share any user data.</p>
+
+        <h2>Data stored on your device</h2>
+        <p>SocialSnag stores the following data locally using Chrome's built-in storage APIs:</p>
+        <ul>
+            <li><strong>Preferences</strong> (<code>chrome.storage.sync</code>): Which platforms are enabled, notification settings, and the advanced mode toggle. These sync across your Chrome instances if you have Chrome sync turned on.</li>
+            <li><strong>Download history</strong> (<code>chrome.storage.local</code>): Filenames, platform names, and timestamps for recent downloads (up to 50 entries). This stays on your device and is never transmitted. Download history does not contain media URLs.</li>
+        </ul>
+
+        <h2>Permissions</h2>
+        <table>
+            <thead>
+                <tr><th>Permission</th><th>Why it's needed</th></tr>
+            </thead>
+            <tbody>
+                <tr><td>contextMenus</td><td>Adds "Download this (HD)" and "Download all from post" to the right-click menu</td></tr>
+                <tr><td>downloads</td><td>Saves media files to your Downloads/SocialSnag/ folder</td></tr>
+                <tr><td>activeTab</td><td>Accesses the current tab to find media URLs when you right-click</td></tr>
+                <tr><td>storage</td><td>Stores your preferences and download history locally</td></tr>
+                <tr><td>notifications</td><td>Shows a notification when a download completes (can be disabled in settings)</td></tr>
+                <tr><td>scripting</td><td>Injects the media resolver into supported sites</td></tr>
+                <tr><td>webRequest</td><td>Optional, advanced mode only. Intercepts network requests to find media not visible in the page DOM</td></tr>
+            </tbody>
+        </table>
+
+        <h2>Host permissions</h2>
+        <p>SocialSnag requests access to Instagram, Twitter/X, Facebook, and Bluesky domains (and their CDN subdomains) so it can find and download media on those sites. It does not access these sites in the background or when you're not using the extension.</p>
+        <p>LinkedIn and TikTok host permissions are optional and only requested if you enable those platforms.</p>
+
+        <h2>Third-party services</h2>
+        <p>SocialSnag does not communicate with any external servers, APIs, or analytics services. All processing happens locally in your browser.</p>
+
+        <h2>User control</h2>
+        <ul>
+            <li><strong>Clear download history:</strong> Open the SocialSnag popup and click the clear button.</li>
+            <li><strong>Disable platforms:</strong> Toggle individual platforms on or off from the settings page.</li>
+            <li><strong>Remove all data:</strong> Uninstall the extension. Chrome deletes all associated local storage.</li>
+        </ul>
+
+        <h2>Contact</h2>
+        <p>Questions about this policy? <a href="https://github.com/jamditis/socialsnag/issues">Open an issue on GitHub</a>.</p>
+    </div>
+
+    <footer>
+        <div class="footer-inner">
+            <p>MIT license. Made by Joe Amditis.</p>
+            <div class="footer-links">
+                <a href="https://github.com/jamditis/socialsnag">GitHub</a>
+                <a href="./">Home</a>
+                <a href="https://github.com/jamditis/socialsnag/blob/HEAD/LICENSE">License</a>
+            </div>
+        </div>
+    </footer>
+
+</body>
+</html>
