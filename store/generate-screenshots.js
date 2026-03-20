@@ -1,6 +1,7 @@
-import { chromium } from 'playwright';
-import { mkdirSync, writeFileSync } from 'fs';
+import { chromium } from 'playwright-core';
+import { mkdirSync, writeFileSync, unlinkSync } from 'fs';
 import { join, resolve } from 'path';
+import { pathToFileURL } from 'url';
 import { tmpdir } from 'os';
 
 const SCREENSHOT_DIR = resolve('store/screenshots');
@@ -319,13 +320,14 @@ async function main() {
     const tab = await context.newPage();
     const tmpPath = join(tmpdir(), `socialsnag-screenshot-${page.name}.html`);
     writeFileSync(tmpPath, page.html);
-    await tab.goto(`file://${tmpPath}`);
+    await tab.goto(pathToFileURL(tmpPath).href);
     await tab.waitForTimeout(500);
 
     const outPath = join(SCREENSHOT_DIR, `${page.name}.png`);
     await tab.screenshot({ path: outPath, fullPage: false });
     console.log(`Saved: ${outPath}`);
     await tab.close();
+    unlinkSync(tmpPath);
   }
 
   await browser.close();
