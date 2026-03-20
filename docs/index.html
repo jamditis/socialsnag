@@ -852,18 +852,63 @@
             margin-bottom: 16px;
         }
 
-        .install-card.coming-soon {
+        .install-card.cws-pending {
             display: flex;
             flex-direction: column;
             align-items: center;
             justify-content: center;
             text-align: center;
-            border-style: dashed;
+            gap: 20px;
+            border-color: var(--border-hover);
         }
 
-        .install-card.coming-soon p {
+        .cws-icon {
+            width: 64px;
+            height: 64px;
+            border-radius: 16px;
+            background: linear-gradient(135deg, var(--blue-dim), rgba(59, 130, 246, 0.06));
+            border: 1px solid rgba(59, 130, 246, 0.2);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .cws-icon svg {
+            width: 32px;
+            height: 32px;
+        }
+
+        .cws-status {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 14px;
+            background: rgba(234, 179, 8, 0.1);
+            border: 1px solid rgba(234, 179, 8, 0.25);
+            border-radius: 20px;
+            font-size: 13px;
+            font-weight: 500;
+            color: #eab308;
+        }
+
+        .cws-status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #eab308;
+            animation: pulse-dot 2s ease-in-out infinite;
+        }
+
+        @keyframes pulse-dot {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
+        }
+
+        .install-card.cws-pending p {
             color: var(--text);
             font-size: 14px;
+            line-height: 1.6;
+            max-width: 280px;
         }
 
         .terminal-window {
@@ -1257,9 +1302,22 @@
         <div class="container">
             <h2>Get SocialSnag</h2>
             <div class="install-grid">
-                <div class="install-card coming-soon">
+                <div class="install-card cws-pending">
+                    <div class="cws-icon">
+                        <svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <circle cx="16" cy="16" r="12" stroke="#3b82f6" stroke-width="2"/>
+                            <circle cx="16" cy="16" r="5" fill="#3b82f6"/>
+                            <path d="M4 16h8" stroke="#22c55e" stroke-width="2" stroke-linecap="round"/>
+                            <path d="M20 16l6.9-4" stroke="#eab308" stroke-width="2" stroke-linecap="round"/>
+                            <path d="M20 16l-2.9 7" stroke="#ef4444" stroke-width="2" stroke-linecap="round"/>
+                        </svg>
+                    </div>
                     <h3>Chrome Web Store</h3>
-                    <p>v1.1.0 submitted and pending review. Will be published automatically once approved.</p>
+                    <div class="cws-status">
+                        <span class="cws-status-dot"></span>
+                        Pending review
+                    </div>
+                    <p>v1.1.0 submitted. Will be published automatically once approved by the Chrome Web Store team.</p>
                 </div>
 
                 <div class="terminal-window">
