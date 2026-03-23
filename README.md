@@ -1,8 +1,8 @@
 ![Version](https://img.shields.io/badge/version-1.1.0-blue)
+[![Chrome Web Store](https://img.shields.io/chrome-web-store/v/llbpeneloehnlaomolbalbmhjncpmnfa)](https://chromewebstore.google.com/detail/socialsnag/llbpeneloehnlaomolbalbmhjncpmnfa)
 ![License](https://img.shields.io/github/license/jamditis/socialsnag)
 ![Manifest](https://img.shields.io/badge/manifest-v3-green)
 ![Chrome](https://img.shields.io/badge/chrome-116%2B-yellow)
-![CWS](https://img.shields.io/badge/CWS-pending%20review-orange)
 
 # SocialSnag
 
@@ -34,7 +34,7 @@ Right-click to download full-resolution images and videos from social media.
 
 ### Chrome Web Store
 
-SocialSnag v1.1.0 has been submitted to the Chrome Web Store and is pending review. Once approved, it will be published automatically.
+**[Install from the Chrome Web Store](https://chromewebstore.google.com/detail/socialsnag/llbpeneloehnlaomolbalbmhjncpmnfa)**
 
 ### Developer mode
 
