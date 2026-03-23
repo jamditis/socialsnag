@@ -149,8 +149,12 @@ This works without advanced mode (webRequest) enabled.
 - CWS submission completed 2026-03-20 — pending review, auto-publish enabled
 - Extension ID: `llbpeneloehnlaomolbalbmhjncpmnfa`
 
+### Chrome Web Store
+- **Initial CWS publish date:** 2026-03-23 — Item ID: `llbpeneloehnlaomolbalbmhjncpmnfa`
+- CWS listing (source of truth for dates/versions): https://chromewebstore.google.com/detail/socialsnag/llbpeneloehnlaomolbalbmhjncpmnfa
+
 ### Pending
-- CWS review approval (submitted 2026-03-20)
+- Upload social preview image in GitHub Settings > General > Social preview
 
 ### Future work
 - LinkedIn/TikTok ESM conversion and re-evaluation after CWS approval

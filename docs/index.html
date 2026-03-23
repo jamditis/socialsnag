@@ -852,12 +852,18 @@
             margin-bottom: 16px;
         }
 
-        .install-card.cws-pending {
-            display: flex;
+        .install-card.cws-live {
             flex-direction: row;
             align-items: center;
             gap: 24px;
             border-color: var(--border-hover);
+            cursor: pointer;
+            transition: border-color 0.2s, background 0.2s;
+        }
+
+        .install-card.cws-live:hover {
+            border-color: #22c55e;
+            background: rgba(34, 197, 94, 0.04);
         }
 
         .cws-icon {
@@ -881,25 +887,16 @@
             align-items: center;
             gap: 8px;
             padding: 6px 14px;
-            background: rgba(234, 179, 8, 0.1);
-            border: 1px solid rgba(234, 179, 8, 0.25);
             border-radius: 20px;
             font-size: 13px;
             font-weight: 500;
-            color: #eab308;
+            margin-left: auto;
         }
 
-        .cws-status-dot {
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            background: #eab308;
-            animation: pulse-dot 2s ease-in-out infinite;
-        }
-
-        @keyframes pulse-dot {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.4; }
+        .cws-status-live {
+            background: rgba(34, 197, 94, 0.1);
+            border: 1px solid rgba(34, 197, 94, 0.25);
+            color: #22c55e;
         }
 
         .cws-text {
@@ -912,7 +909,7 @@
             margin-bottom: 0;
         }
 
-        .install-card.cws-pending p {
+        .install-card.cws-live p {
             color: var(--text);
             font-size: 14px;
             line-height: 1.6;
@@ -1050,7 +1047,7 @@
             .feature.span-3, .feature.span-2, .feature.span-6 { grid-column: span 6; }
             .feature.span-6 { flex-direction: column; align-items: flex-start; gap: 20px;}
 
-            .install-card.cws-pending { flex-direction: column; text-align: center; }
+            .install-card.cws-live { flex-direction: column; text-align: center; }
             .cws-status { align-self: center; }
         }
 
@@ -1311,7 +1308,7 @@
         <div class="container">
             <h2>Get SocialSnag</h2>
             <div class="install-grid">
-                <div class="install-card cws-pending">
+                <a href="https://chromewebstore.google.com/detail/socialsnag/llbpeneloehnlaomolbalbmhjncpmnfa" class="install-card cws-live" style="text-decoration: none; display: flex;">
                     <div class="cws-icon">
                         <svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
                             <circle cx="16" cy="16" r="12" stroke="#3b82f6" stroke-width="2"/>
@@ -1323,11 +1320,10 @@
                     </div>
                     <div class="cws-text">
                         <h3>Chrome Web Store</h3>
-                        <p>v1.1.0 submitted. Will be published automatically once approved by the Chrome Web Store team.</p>
+                        <p>The easiest way to install. One click, automatic updates.</p>
                     </div>
-                    <div class="cws-status">
-                        <span class="cws-status-dot"></span>
-                        Pending
+                    <div class="cws-status cws-status-live">
+                        Install
                     </div>
                 </div>
 
