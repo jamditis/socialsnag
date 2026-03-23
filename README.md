@@ -1,4 +1,4 @@
-![Version](https://img.shields.io/badge/version-1.1.0-blue)
+![Version](https://img.shields.io/github/v/release/jamditis/socialsnag)
 [![Chrome Web Store](https://img.shields.io/chrome-web-store/v/llbpeneloehnlaomolbalbmhjncpmnfa)](https://chromewebstore.google.com/detail/socialsnag/llbpeneloehnlaomolbalbmhjncpmnfa)
 ![License](https://img.shields.io/github/license/jamditis/socialsnag)
 ![Manifest](https://img.shields.io/badge/manifest-v3-green)
