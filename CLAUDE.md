@@ -146,7 +146,7 @@ This works without advanced mode (webRequest) enabled.
 - Twitter/X video downloads via syndication API (background script, no webRequest needed)
 - Instagram video downloads via media API with shortcode-to-mediaId conversion
 - Configurable download folder path in settings
-- CWS submission completed 2026-03-20 — pending review, auto-publish enabled
+- CWS submission completed 2026-03-20, approved and published 2026-03-23
 - Extension ID: `llbpeneloehnlaomolbalbmhjncpmnfa`
 
 ### Chrome Web Store
