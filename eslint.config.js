@@ -12,6 +12,7 @@ export default [
         console: 'readonly',
         fetch: 'readonly',
         setTimeout: 'readonly',
+        clearTimeout: 'readonly',
         URL: 'readonly',
         URLSearchParams: 'readonly',
         Promise: 'readonly',
