@@ -1,47 +1,29 @@
-# SocialSnag — Copilot review context
+# Copilot review instructions — socialsnag
 
-## Architecture
+Project context, architecture, message flow, and Chrome Web Store compliance details live in [CLAUDE.md](../CLAUDE.md). Both this file and CLAUDE.md are read by Copilot code review (cap ~4,000 chars each). This file lists the rules worth named attention on every PR.
 
-SocialSnag is a Chrome extension (Manifest V3) that downloads HD media from social platforms via right-click context menu.
+## Global rules to flag
 
-**Components:**
+These are Joe's user-level conventions. They live in `~/.claude/CLAUDE.md`, which Copilot's PR review bot does *not* read — so they're restated here so the bot enforces them on this repo's PRs.
 
-- `background.js` — service worker. Registers context menu items, handles menu clicks, validates URLs against a domain allowlist, triggers downloads, records download history.
-- `platforms/common.js` — shared utilities loaded before each platform script. Provides `SocialSnag.init()` (sets up contextmenu listener + message handler) and `SocialSnag.registerResolver()` (registers the platform's resolve function). Also includes domain validation, filename sanitization, and media element traversal helpers.
-- `platforms/<platform>.js` — per-platform content scripts (instagram, twitter, facebook). Each calls `SocialSnag.init()` then `SocialSnag.registerResolver()` with a handler that returns `{ urls, platform }`.
-- `popup.js` / `popup.html` — popup UI showing platform toggles and download history.
-- `options.js` / `options.html` — full options page with platform toggles and advanced mode.
+- **Sentence case** in headings, UI text, and identifiers. Title Case is a regression.
+- **No emojis** in source code, log messages, comments, commits, PR bodies, or any output. Plain text only.
+- **No AI attribution.** Never include "Generated with Claude Code", `Co-Authored-By: Claude` trailers, or any AI/model/company attribution in PRs, commits, code, or any committed file.
+- **Banned words** (delete or replace): *comprehensive, sophisticated, robust, transformative, leveraging, seamlessly, innovative, cutting-edge, state-of-the-art, holistic, synergy, ecosystem, paradigm, empower*.
+- **Every HTML page must have an SVG favicon and full OG/Twitter meta tags.** (`popup.html`, `options.html`, and the landing page in `dist/`.)
 
-## Message passing
+## Project-specific bug classes to flag
 
-1. User right-clicks on a supported site.
-2. Background receives context menu click, sends `{ action: 'resolve', type: 'single'|'all', srcUrl, pageUrl }` to the active tab's content script.
-3. Content script's registered resolver extracts media URLs from the page DOM.
-4. Content script responds with `{ urls: [...], platform: 'instagram'|'twitter'|'facebook' }`.
-5. Background validates each URL (HTTPS + domain allowlist), downloads, and records to history.
+1. **No `innerHTML` or `insertAdjacentHTML`.** All DOM construction must use `createElement` + `textContent`. Raw HTML insertion is an XSS vector regardless of source — flag any new occurrence in `src/popup.js`, `src/options.js`, or platform scripts.
 
-## Platform resolver pattern
+2. **URL validation must run on every download.** Every URL passed to `chrome.downloads.download()` must pass `isHttps()` AND `isAllowedDomain()` with the dot-boundary check (`hostname === d || hostname.endsWith('.'+d)`). Both checks live in `src/platforms/common.js` and are called from `src/background.js`. New download paths that bypass either check are a security regression.
 
-Each platform script follows the same structure:
+3. **Filename sanitization must run on every download.** All filenames must pass through `sanitizeFilename()` (strips `../`, `..\\`, and `<>:"/\\|?*`). Watch for path traversal where user-controllable strings (page titles, alt text, OG metadata) feed into filename construction.
 
-```js
-SocialSnag.init('platformName');
-SocialSnag.registerResolver(async (message, target) => {
-  // Extract and return media URLs
-  return [{ url, type, filename }];
-});
-```
+4. **Manifest permission creep.** Any addition to `permissions` or `host_permissions` in `manifest.json` needs justification. Prefer `optional_host_permissions` for non-core platforms — CWS flags upfront permissions for sites the extension doesn't actively use.
 
-Platform scripts rewrite CDN URLs to request the highest available resolution (e.g., removing size parameters from Instagram CDN URLs, requesting `?name=orig` on Twitter).
+5. **Sensitive data must not enter `chrome.storage`.** Storage holds download history (filename, platform, timestamp) and user preferences only. No tokens, credentials, PII, or CDN URLs.
 
-## Key review flags
+6. **No fetches to non-CDN domains.** Any `fetch()` or `XMLHttpRequest` should only target hosts in `ALLOWED_DOMAINS`. New requests to other hosts need scrutiny — it's a common vector for accidental data exfiltration in extensions.
 
-Watch for these in PRs:
-
-- **innerHTML or insertAdjacentHTML usage** — XSS risk. All DOM construction should use `createElement` + `textContent`. Flag any raw HTML insertion.
-- **URL validation bypass** — Downloads must pass both `isHttps()` and domain allowlist checks (in both `common.js` and `background.js`). New URL patterns that skip validation are a security issue.
-- **New host_permissions** — Any addition to `host_permissions` in manifest.json must be justified. Prefer `optional_host_permissions` for non-core platforms.
-- **Permission creep** — New entries in the `permissions` array need clear justification. The extension should request the minimum permissions required.
-- **Sensitive data in chrome.storage** — Storage should only contain download history (filenames, timestamps, platform names) and user preferences. No tokens, credentials, or PII.
-- **Unsanitized filenames** — All filenames must pass through `sanitizeFilename()` before use in download paths. Watch for path traversal (`../`).
-- **Direct network requests to non-CDN domains** — The extension should only fetch from known CDN domains. Any `fetch()` or `XMLHttpRequest` to other domains needs scrutiny.
+7. **Sender validation on every background `onMessage` handler.** Each handler must check `sender.id === chrome.runtime.id` to reject messages from compromised content scripts on unrelated origins.
