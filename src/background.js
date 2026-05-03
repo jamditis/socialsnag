@@ -399,6 +399,12 @@ async function downloadMedia(item, platform) {
 
   let downloadUrl = item.url;
 
+  // TODO(deprecate-tiktok): unreachable in current build — TikTok has
+  // optional_host_permissions but no content_scripts entry, so no caller
+  // sends platform === 'tiktok'. Kept for post-CWS-approval ESM conversion
+  // (see CLAUDE.md "Pending" → LinkedIn/TikTok ESM conversion). When that
+  // work happens, also re-evaluate whether this Referer-stripped fetch
+  // belongs in ALLOWED_DOMAINS or stays as a per-platform exception.
   if (platform === 'tiktok') {
     try {
       const response = await fetch(item.url, {
