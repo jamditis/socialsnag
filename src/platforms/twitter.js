@@ -55,7 +55,6 @@ function resolveSingle(srcUrl, target) {
   // Check if this tweet contains a video — if so, prioritize video download
   // (Twitter blocks right-click on videos, so users right-click the tweet text instead)
   if (tweetHasVideo(target)) {
-    const id = extractTweetId(target);
     // If srcUrl is just a profile pic or empty, go straight to video
     const isProfilePic = srcUrl && srcUrl.includes('/profile_images/');
     const isMediaImage = srcUrl && srcUrl.includes('/media/');
