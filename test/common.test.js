@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   ALLOWED_DOMAINS,
   isAllowedDomain,
+  hostMatches,
   isHttps,
   sanitizeFilename,
   extractId,
@@ -49,6 +50,33 @@ describe('isAllowedDomain', () => {
 
   it('returns false for empty string', () => {
     expect(isAllowedDomain('')).toBe(false);
+  });
+});
+
+describe('hostMatches', () => {
+  it('matches an exact host', () => {
+    expect(hostMatches('https://media.licdn.com/x.jpg', 'media.licdn.com')).toBe(true);
+  });
+
+  it('matches a subdomain of the host', () => {
+    expect(hostMatches('https://static.media.licdn.com/x.png', 'media.licdn.com')).toBe(true);
+    expect(hostMatches('https://scontent.xx.fbcdn.net/v/photo.jpg', 'fbcdn.net')).toBe(true);
+  });
+
+  it('rejects a host where the domain appears only in the path or query', () => {
+    expect(hostMatches('https://evil.com/?u=media.licdn.com/x.jpg', 'media.licdn.com')).toBe(false);
+    expect(hostMatches('https://evil.com/fbcdn.net/photo.jpg', 'fbcdn.net')).toBe(false);
+  });
+
+  it('rejects a dot-boundary lookalike host', () => {
+    expect(hostMatches('https://evilfbcdn.net/photo.jpg', 'fbcdn.net')).toBe(false);
+    expect(hostMatches('https://media.licdn.com.evil.com/x.jpg', 'media.licdn.com')).toBe(false);
+  });
+
+  it('returns false for malformed URLs and empty input', () => {
+    expect(hostMatches('not a url', 'fbcdn.net')).toBe(false);
+    expect(hostMatches('', 'fbcdn.net')).toBe(false);
+    expect(hostMatches(null, 'fbcdn.net')).toBe(false);
   });
 });
 

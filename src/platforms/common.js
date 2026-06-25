@@ -10,15 +10,20 @@ export const ALLOWED_DOMAINS = [
   'video.bsky.app',
 ];
 
-export function isAllowedDomain(url) {
+// True if url's hostname is exactly `host` or a subdomain of it. False for an
+// unparseable URL. Hostname-based so a CDN string in the path or query
+// (e.g. https://evil.com/?u=media.licdn.com/x) cannot pass as a match.
+export function hostMatches(url, host) {
   try {
     const hostname = new URL(url).hostname.toLowerCase();
-    return ALLOWED_DOMAINS.some((d) => {
-      return hostname === d || hostname.endsWith(`.${d}`);
-    });
+    return hostname === host || hostname.endsWith(`.${host}`);
   } catch (e) {
     return false;
   }
+}
+
+export function isAllowedDomain(url) {
+  return ALLOWED_DOMAINS.some((d) => hostMatches(url, d));
 }
 
 export function isHttps(url) {

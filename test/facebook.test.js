@@ -22,6 +22,14 @@ describe('upgradeUrl', () => {
     expect(upgradeUrl('https://example.com/image.jpg')).toBeNull();
   });
 
+  it('returns null when fbcdn.net appears only in the query, not the host', () => {
+    expect(upgradeUrl('https://evil.com/?u=https://scontent.fbcdn.net/photo.jpg')).toBeNull();
+  });
+
+  it('returns null for a dot-boundary lookalike host', () => {
+    expect(upgradeUrl('https://evilfbcdn.net/photo.jpg')).toBeNull();
+  });
+
   it('returns null for null input', () => {
     expect(upgradeUrl(null)).toBeNull();
   });

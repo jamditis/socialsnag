@@ -1,12 +1,11 @@
 // SocialSnag — Bluesky content script
 
-import { findNearestMedia, findPostContainer } from './common.js';
+import { findNearestMedia, findPostContainer, hostMatches } from './common.js';
 
 // --- Pure functions (exported for testing) ---
 
 export function upgradeImageUrl(url) {
-  if (!url) return null;
-  if (!url.includes('cdn.bsky.app')) return null;
+  if (!hostMatches(url, 'cdn.bsky.app')) return null;
 
   // Upgrade feed_thumbnail to feed_fullsize
   if (url.includes('/feed_thumbnail/')) {
@@ -118,11 +117,10 @@ function initContentScript() {
       const target = _lastTarget;
       const pathname = window.location.pathname;
 
-      const handler = message.type === 'single'
-        ? resolveSingle(message.srcUrl, target, pathname)
-        : resolveAll(target, pathname);
-
-      Promise.resolve(handler)
+      Promise.resolve()
+        .then(() => (message.type === 'single'
+          ? resolveSingle(message.srcUrl, target, pathname)
+          : resolveAll(target, pathname)))
         .then((urls) => {
           sendResponse({ urls: urls || [], platform: 'bluesky' });
         })

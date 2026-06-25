@@ -1,11 +1,11 @@
 // SocialSnag — LinkedIn content script
 
-import { findNearestMedia, findPostContainer } from './common.js';
+import { findNearestMedia, findPostContainer, hostMatches } from './common.js';
 
 // --- Pure functions (exported for testing) ---
 
 export function upgradeUrl(url) {
-  if (!url || !url.includes('media.licdn.com')) return null;
+  if (!hostMatches(url, 'media.licdn.com')) return null;
   // LinkedIn serves a downscaled copy under a /shrink_<w>_<h>/ path segment;
   // dropping the segment returns the full-size original.
   return url.replace(/\/shrink_\d+_\d+\//, '/');
@@ -98,11 +98,10 @@ function initContentScript() {
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.action === 'resolve') {
       const target = _lastTarget;
-      const handler = message.type === 'single'
-        ? resolveSingle(message.srcUrl, target)
-        : resolveAll(target);
-
-      Promise.resolve(handler)
+      Promise.resolve()
+        .then(() => (message.type === 'single'
+          ? resolveSingle(message.srcUrl, target)
+          : resolveAll(target)))
         .then((urls) => {
           sendResponse({ urls: urls || [], platform: 'linkedin' });
         })
