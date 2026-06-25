@@ -1,6 +1,6 @@
 // SocialSnag — Twitter/X content script
 
-import { findNearestMedia, findPostContainer, getCapturedMedia } from './common.js';
+import { findNearestMedia, findPostContainer, getCapturedMedia, hostMatches } from './common.js';
 
 // --- Pure functions (exported for testing) ---
 
@@ -16,7 +16,7 @@ export function upgradeImageUrl(url) {
       return url.replace(/_(normal|bigger|mini|200x200|400x400)\./i, '.');
     }
   } catch (e) { /* ignore */ }
-  return url.includes('twimg.com') ? url : null;
+  return hostMatches(url, 'twimg.com') ? url : null;
 }
 
 export function filterCapturedVideos(captured) {
@@ -154,11 +154,10 @@ function initContentScript() {
     if (message.action === 'resolve') {
       const target = _lastTarget;
 
-      const handler = message.type === 'single'
-        ? resolveSingle(message.srcUrl, target)
-        : resolveAll(target);
-
-      Promise.resolve(handler)
+      Promise.resolve()
+        .then(() => (message.type === 'single'
+          ? resolveSingle(message.srcUrl, target)
+          : resolveAll(target)))
         .then((urls) => {
           sendResponse({ urls: urls || [], platform: 'twitter' });
         })

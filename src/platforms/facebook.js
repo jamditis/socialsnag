@@ -1,11 +1,11 @@
 // SocialSnag — Facebook content script
 
-import { findNearestMedia, findPostContainer, getCapturedMedia } from './common.js';
+import { findNearestMedia, findPostContainer, getCapturedMedia, hostMatches } from './common.js';
 
 // --- Pure functions (exported for testing) ---
 
 export function upgradeUrl(url) {
-  if (!url || !url.includes('fbcdn.net')) return null;
+  if (!hostMatches(url, 'fbcdn.net')) return null;
   // Try removing size constraints from path
   let upgraded = url.replace(/\/[sp]\d+x\d+\//, '/');
   return upgraded;
@@ -138,11 +138,10 @@ function initContentScript() {
     if (message.action === 'resolve') {
       const target = _lastTarget;
 
-      const handler = message.type === 'single'
-        ? resolveSingle(message.srcUrl, target)
-        : resolveAll(target);
-
-      Promise.resolve(handler)
+      Promise.resolve()
+        .then(() => (message.type === 'single'
+          ? resolveSingle(message.srcUrl, target)
+          : resolveAll(target)))
         .then((urls) => {
           sendResponse({ urls: urls || [], platform: 'facebook' });
         })

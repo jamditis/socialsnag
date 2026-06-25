@@ -15,6 +15,14 @@ describe('upgradeImageUrl', () => {
     expect(upgradeImageUrl(null, null)).toBeNull();
   });
 
+  it('returns null when cdninstagram.com appears only in the query, not the host', () => {
+    expect(upgradeImageUrl('https://evil.com/?u=https://scontent.cdninstagram.com/p.jpg', null)).toBeNull();
+  });
+
+  it('returns null for a dot-boundary lookalike host', () => {
+    expect(upgradeImageUrl('https://evilcdninstagram.com/p.jpg', null)).toBeNull();
+  });
+
   it('removes /s640x640/ size constraint', () => {
     const url = 'https://scontent.cdninstagram.com/v/t51/s640x640/photo.jpg';
     const result = upgradeImageUrl(url, null);

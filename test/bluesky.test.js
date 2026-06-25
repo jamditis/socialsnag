@@ -31,6 +31,14 @@ describe('upgradeImageUrl', () => {
     expect(upgradeImageUrl('https://example.com/image.jpg')).toBeNull();
   });
 
+  it('returns null when cdn.bsky.app appears only in the query, not the host', () => {
+    expect(upgradeImageUrl('https://evil.com/?u=https://cdn.bsky.app/img/x.jpg')).toBeNull();
+  });
+
+  it('returns null for a dot-boundary lookalike host', () => {
+    expect(upgradeImageUrl('https://cdn.bsky.app.evil.com/x.jpg')).toBeNull();
+  });
+
   it('returns null for null input', () => {
     expect(upgradeImageUrl(null)).toBeNull();
   });

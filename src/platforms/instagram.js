@@ -1,11 +1,11 @@
 // SocialSnag — Instagram content script
 
-import { findNearestMedia, findPostContainer, getCapturedMedia } from './common.js';
+import { findNearestMedia, findPostContainer, getCapturedMedia, hostMatches } from './common.js';
 
 // --- Pure functions (exported for testing) ---
 
 export function upgradeImageUrl(url, imgElement) {
-  if (!url || !url.includes('cdninstagram.com')) return null;
+  if (!hostMatches(url, 'cdninstagram.com')) return null;
 
   // Check srcset for highest resolution
   if (imgElement?.srcset) {
@@ -285,11 +285,10 @@ function initContentScript() {
       const target = _lastTarget;
       const pathname = window.location.pathname;
 
-      const handler = message.type === 'single'
-        ? resolveSingle(message.srcUrl, target, pathname)
-        : resolveAll(target, pathname);
-
-      Promise.resolve(handler)
+      Promise.resolve()
+        .then(() => (message.type === 'single'
+          ? resolveSingle(message.srcUrl, target, pathname)
+          : resolveAll(target, pathname)))
         .then((urls) => {
           sendResponse({ urls: urls || [], platform: 'instagram' });
         })

@@ -10,6 +10,14 @@ describe('upgradeUrl', () => {
     expect(upgradeUrl('https://example.com/photo.jpg')).toBeNull();
   });
 
+  it('returns null when media.licdn.com appears only in the query, not the host', () => {
+    expect(upgradeUrl('https://evil.com/?u=https://media.licdn.com/x.jpg')).toBeNull();
+  });
+
+  it('returns null for a dot-boundary lookalike host', () => {
+    expect(upgradeUrl('https://media.licdn.com.attacker.com/x.jpg')).toBeNull();
+  });
+
   it('drops a /shrink_<w>_<h>/ size segment to get the full-size original', () => {
     const url = 'https://media.licdn.com/dms/image/v2/D4E22/shrink_800_800/photo.jpg';
     const result = upgradeUrl(url);
