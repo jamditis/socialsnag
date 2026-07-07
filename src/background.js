@@ -233,7 +233,10 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     }
 
     if (!response || !response.urls || response.urls.length === 0) {
-      showNotification('Could not find downloadable media on this element.');
+      const msg = (platform === 'instagram' && lastIgError)
+        ? lastIgError
+        : 'Could not find downloadable media on this element.';
+      showNotification(msg);
       return;
     }
 

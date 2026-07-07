@@ -172,3 +172,29 @@ describe('resolveInstagramPost', () => {
     expect(items).toBeNull();
   });
 });
+
+describe('context menu click — Instagram total failure', () => {
+  afterEach(() => resetFetch());
+
+  it('shows the login message when the API 401s and the DOM finds nothing', async () => {
+    // API rejects with 401 (not logged in); the default tabs.sendMessage mock
+    // returns {} (no media), so both resolution paths come up empty.
+    installFetch((url) => (url.includes('i.instagram.com') ? { status: 401, json: {} } : null));
+
+    const notes = [];
+    const origCreate = globalThis.chrome.notifications.create;
+    globalThis.chrome.notifications.create = (opts) => { notes.push(opts.message); };
+
+    try {
+      const handler = globalThis.chrome.contextMenus.onClicked._listeners[0];
+      await handler(
+        { menuItemId: 'socialsnag-download-all', pageUrl: 'https://www.instagram.com/p/ABC/', srcUrl: '' },
+        { id: 1, url: 'https://www.instagram.com/p/ABC/' }
+      );
+    } finally {
+      globalThis.chrome.notifications.create = origCreate;
+    }
+
+    expect(notes).toContain('Log in to Instagram to download this.');
+  });
+});
