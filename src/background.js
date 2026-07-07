@@ -397,19 +397,7 @@ async function downloadMedia(item, platform) {
   const rawFilename = item.filename || `${Date.now()}`;
   const path = sanitizeDownloadPath(rawFilename, platform, ext, downloadPath);
 
-  let downloadUrl = item.url;
-
-  if (platform === 'tiktok') {
-    try {
-      const response = await fetch(item.url, {
-        headers: { 'Referer': 'https://www.tiktok.com/' },
-      });
-      const blob = await response.blob();
-      downloadUrl = URL.createObjectURL(blob);
-    } catch (e) {
-      console.error('SocialSnag: TikTok fetch failed, trying direct:', e);
-    }
-  }
+  const downloadUrl = item.url;
 
   try {
     const downloadId = await chrome.downloads.download({
