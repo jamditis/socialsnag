@@ -75,5 +75,7 @@ describe('offscreen zip build', () => {
     await vi.waitFor(() => expect(sendResponse).toHaveBeenCalled());
     expect(sendResponse.mock.calls[0][0]).toMatchObject({ ok: true, count: 2 });
     expect(sendResponse.mock.calls[0][0].url).toBeTruthy();
+    // Cookies must be sent so authenticated-only media (stories) can be fetched.
+    expect(globalThis.fetch).toHaveBeenCalledWith('u1', { credentials: 'include' });
   });
 });

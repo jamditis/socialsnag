@@ -26,7 +26,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const inputs = [];
         for (const f of message.files) {
           try {
-            const resp = await fetch(f.url);
+            // credentials: 'include' sends site cookies so authenticated-only
+            // media (e.g. Instagram stories) fetches like a normal browser
+            // request; the extension has host permission for these CDN origins.
+            const resp = await fetch(f.url, { credentials: 'include' });
             if (resp.ok) inputs.push({ name: f.name, input: resp });
           } catch (e) { /* fall through: a short inputs list fails the zip below */ }
         }
