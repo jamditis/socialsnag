@@ -316,6 +316,40 @@ describe('copy media URL', () => {
     expect(downloaded).toEqual([]);
   });
 
+  it('aborts the copy and does not resolve when clipboard permission is denied', async () => {
+    // clipboardWrite is optional; if the user declines the request, copy stops
+    // before touching the offscreen document or the content script.
+    const origRequest = globalThis.chrome.permissions.request;
+    globalThis.chrome.permissions.request = async () => false;
+
+    const sent = [];
+    const origSendMessage = globalThis.chrome.runtime.sendMessage;
+    globalThis.chrome.runtime.sendMessage = async (msg) => { sent.push(msg); return { ok: true }; };
+
+    let tabsAsked = false;
+    const origTabsSend = globalThis.chrome.tabs.sendMessage;
+    globalThis.chrome.tabs.sendMessage = async () => { tabsAsked = true; return { urls: [], platform: 'bluesky' }; };
+
+    const notes = [];
+    const origNotify = globalThis.chrome.notifications.create;
+    globalThis.chrome.notifications.create = (opts) => { notes.push(opts); };
+
+    try {
+      const handler = globalThis.chrome.contextMenus.onClicked._listeners[0];
+      await handler(copyInfo, copyTab);
+    } finally {
+      globalThis.chrome.permissions.request = origRequest;
+      globalThis.chrome.runtime.sendMessage = origSendMessage;
+      globalThis.chrome.tabs.sendMessage = origTabsSend;
+      globalThis.chrome.notifications.create = origNotify;
+    }
+
+    // No clipboard message, no resolution attempt, and a permission-specific note.
+    expect(sent).toEqual([]);
+    expect(tabsAsked).toBe(false);
+    expect(notes.some((n) => /permission/i.test(n.message))).toBe(true);
+  });
+
   it('shows a not-found notification and does not copy when nothing resolves', async () => {
     const origGetContexts = globalThis.chrome.runtime.getContexts;
     globalThis.chrome.runtime.getContexts = async () => [{ contextType: 'OFFSCREEN_DOCUMENT' }];

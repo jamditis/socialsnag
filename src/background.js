@@ -181,6 +181,19 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     return;
   }
 
+  // Copy needs clipboardWrite (optional, so the 1.2 update installs silently for
+  // users who never copy). Request it here, BEFORE the first await: a context-menu
+  // click is a user gesture, but crossing an async boundary can drop that
+  // activation and make Chrome reject the prompt. request() is a silent no-op
+  // that resolves true when already granted.
+  if (isCopy) {
+    const granted = await chrome.permissions.request({ permissions: ['clipboardWrite'] });
+    if (!granted) {
+      showNotification('SocialSnag: clipboard permission is needed to copy media URLs.');
+      return;
+    }
+  }
+
   const platformSettings = await chrome.storage.sync.get({
     [`platform_${platform}`]: true,
     showNotifications: true,
@@ -289,6 +302,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 
     // Zip: bundle multiple items into one archive when forced by the menu or by
     // the setting default. Only worth it for 2+ items.
+    let zipFellBack = false;
     const shouldZip = (isZipMenu || (type === 'all' && platformSettings.zipMultiPosts))
       && response.urls.length >= 2;
     if (shouldZip) {
@@ -299,8 +313,10 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
         }
         return;
       }
-      // Zip failed (offscreen or all fetches failed) — fall through to per-file.
+      // Zip failed (offscreen or all fetches failed) — fall through to per-file,
+      // and tell the user why they got loose files instead of the archive.
       console.warn('SocialSnag: zip failed, downloading files individually.');
+      zipFellBack = true;
     }
 
     let count = 0;
@@ -315,7 +331,10 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     if (count > 0) {
       if (platformSettings.showNotifications) {
         const label = count === 1 ? '1 file' : `${count} files`;
-        showNotification(`Downloaded ${label} from ${response.platform}.`);
+        const msg = zipFellBack
+          ? `Zip failed — saved ${label} individually from ${response.platform}.`
+          : `Downloaded ${label} from ${response.platform}.`;
+        showNotification(msg);
       }
     } else {
       console.warn('SocialSnag: all download attempts failed for', response.urls);
@@ -324,8 +343,11 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       }
     }
   } catch (error) {
+    // This is the unexpected-exception path (network failure, a bug) -- distinct
+    // from the "resolved but found nothing" path above, which reports its own
+    // specific message. Don't mislabel a thrown error as "no media found".
     console.error('SocialSnag error:', error);
-    showNotification('SocialSnag: No supported media found here.');
+    showNotification('SocialSnag: something went wrong. Try refreshing the page.');
   }
 });
 

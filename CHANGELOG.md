@@ -14,7 +14,7 @@
 ### Changed
 - The four context-menu actions now nest under one SocialSnag parent submenu instead of sitting at the top level.
 - Added the extension's first offscreen document to build zips and write to the clipboard, neither of which an MV3 service worker can do directly.
-- New permissions: `offscreen` and `clipboardWrite`. `clipboardWrite` adds a "modify data you copy and paste" warning, so existing users must re-accept the extension on update. No new site-access (host) permissions were added.
+- New permission: `offscreen` (no install warning). `clipboardWrite` is requested only when you first use "Copy media URL", not upfront, so the update installs without disabling the extension for existing users. No new site-access (host) permissions were added.
 - Removed a dead, unreachable TikTok code path from the service worker.
 
 ## 1.1.0 — 2026-03-20

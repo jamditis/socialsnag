@@ -38,7 +38,7 @@ src/
 npm install                    # install dev deps (esbuild, vitest, eslint)
 npm run build                  # bundle to dist/
 npm run build:zip              # bundle + minify + create socialsnag-{version}.zip
-npm test                       # run vitest (201 tests)
+npm test                       # run vitest (204 tests)
 npm run lint                   # eslint src/
 ```
 
@@ -90,9 +90,9 @@ Instagram, Twitter/X, Facebook, Bluesky.
 - **TikTok** — code in repo, `optional_host_permissions`. Needs ESM conversion. Medium-high rejection risk.
 
 ### Permission model
-- Core: `contextMenus`, `downloads`, `activeTab`, `storage`, `notifications`, `scripting`, `offscreen`, `clipboardWrite`
-- `clipboardWrite` triggers a "modify data you copy and paste" install warning; existing users re-accept on update
-- Optional: `webRequest` (toggled via "advanced mode" in settings)
+- Core: `contextMenus`, `downloads`, `activeTab`, `storage`, `notifications`, `scripting`, `offscreen`
+- Optional: `clipboardWrite`, `webRequest`
+- `clipboardWrite` is optional (not upfront) on purpose: adding an install-warning permission to a published extension disables it for every existing user until they re-approve. The copy handler requests it on the first "Copy media URL" click (a context-menu click carries the user gesture), so the update installs silently and only people who copy ever see a prompt. `webRequest` is toggled via "advanced mode" in settings.
 - Host permissions (upfront): Instagram + CDN, Twitter/X + CDN, Facebook + CDN, Bluesky + CDN
 - Optional host permissions: LinkedIn + CDN, TikTok + CDN
 
@@ -119,7 +119,7 @@ Instagram, Twitter/X, Facebook, Bluesky.
 
 ### Testing
 ```bash
-npm test                           # all 201 tests
+npm test                           # all 204 tests
 npx vitest run test/instagram.test.js  # single file
 npm run test:watch                 # watch mode
 ```
@@ -148,8 +148,8 @@ This works without advanced mode (webRequest) enabled.
 - Context menu reorganized under a SocialSnag parent submenu
 - Specific Instagram error messages: login required, rate-limited, expired or deleted
 - Dead TikTok code path removed from the service worker
-- 201 unit tests (vitest)
-- New permissions: `offscreen`, `clipboardWrite` (no new host permissions)
+- 204 unit tests (vitest)
+- New permissions: `offscreen` (required); `clipboardWrite` (optional, requested on first Copy media URL) — no new host permissions
 
 ### Done (v1.1.0)
 - 4 platforms: Instagram, Twitter/X, Facebook, Bluesky

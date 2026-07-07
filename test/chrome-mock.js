@@ -73,6 +73,8 @@ globalThis.chrome = {
   },
   permissions: {
     contains: async () => false,
+    // Granted by default in tests; a test can override to simulate a denial.
+    request: async () => true,
   },
   webRequest: {
     onCompleted: createEventTarget(),

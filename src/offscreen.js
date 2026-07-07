@@ -26,7 +26,10 @@ function copyTextToClipboard(text) {
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (sender.id !== chrome.runtime.id) return;
+  // Only the service worker talks to the offscreen document. Content scripts
+  // share the extension id, so also reject anything with a sender.tab -- those
+  // come from a page context, which has no business driving zip/clipboard.
+  if (sender.id !== chrome.runtime.id || sender.tab) return;
   if (message?.target !== 'offscreen') return;
 
   if (message.action === 'clipboard') {

@@ -47,6 +47,16 @@ describe('offscreen onMessage listener', () => {
     expect(execCommand).not.toHaveBeenCalled();
   });
 
+  it('rejects a message from a tab context even with the right id', () => {
+    // A content script shares the extension id; sender.tab marks it as page-side.
+    listener(
+      { target: 'offscreen', action: 'clipboard', text: 'x' },
+      { id: OWN_ID, tab: { id: 7 } },
+      vi.fn(),
+    );
+    expect(execCommand).not.toHaveBeenCalled();
+  });
+
   it('ignores a message aimed at a different target', () => {
     listener(
       { target: 'other', action: 'clipboard', text: 'x' },

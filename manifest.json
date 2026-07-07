@@ -13,10 +13,10 @@
     "storage",
     "notifications",
     "scripting",
-    "offscreen",
-    "clipboardWrite"
+    "offscreen"
   ],
   "optional_permissions": [
+    "clipboardWrite",
     "webRequest"
   ],
   "host_permissions": [
