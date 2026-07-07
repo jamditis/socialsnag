@@ -5,7 +5,7 @@
 SocialSnag — Chrome extension (Manifest V3) that downloads full-resolution images and videos from social media via right-click context menu.
 
 **Repo:** https://github.com/jamditis/socialsnag (public)
-**Version:** 1.2.0
+**Version:** 1.2.1
 **Author:** Joe Amditis
 
 ## Architecture
@@ -38,8 +38,9 @@ src/
 npm install                    # install dev deps (esbuild, vitest, eslint)
 npm run build                  # bundle to dist/
 npm run build:zip              # bundle + minify + create socialsnag-{version}.zip
-npm test                       # run vitest (210 tests)
+npm test                       # run vitest (221 tests)
 npm run lint                   # eslint src/
+npm run publish:cws            # upload the built zip and publish (needs CWS_* env; see docs/cws-publishing.md)
 ```
 
 ### Message flow
@@ -119,7 +120,7 @@ Instagram, Twitter/X, Facebook, Bluesky.
 
 ### Testing
 ```bash
-npm test                           # all 210 tests
+npm test                           # all 221 tests
 npx vitest run test/instagram.test.js  # single file
 npm run test:watch                 # watch mode
 ```
@@ -139,6 +140,10 @@ Instagram videos use `blob:` URLs (MediaSource API). Direct `video.src` is alway
 This works without advanced mode (webRequest) enabled.
 
 ## Current status
+
+### Done (v1.2.1)
+- Instagram feed and profile-grid carousels enumerate every slide. The content script recovers the post's shortcode from the DOM permalink (clicked-target ancestor link first, then the enclosing article, then the container) and hands it to the background, which resolves the whole post through the media API. Fixes feed/grid "download all" capping at the ~2 slides Instagram lazy-renders (#32).
+- Chrome Web Store publish automation: `npm run publish:cws` uploads the built zip and publishes the item through the Chrome Web Store API. Credentials are read from the environment, never committed; one-time OAuth setup is in `docs/cws-publishing.md`.
 
 ### Done (v1.2.0)
 - Instagram carousel and bulk download resolve through the media API (every slide, in order), with DOM scraping as the fallback
