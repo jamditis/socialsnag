@@ -36,8 +36,8 @@ describe('zipViaOffscreen', () => {
     globalThis.chrome.runtime.sendMessage = vi.fn().mockResolvedValue({ ok: false });
     expect(await zipViaOffscreen([{ name: 'a.jpg', url: 'https://cdn.example/a.jpg' }])).toBeNull();
   });
-  it('returns the blob url when the build succeeds', async () => {
-    globalThis.chrome.runtime.sendMessage = vi.fn().mockResolvedValue({ ok: true, url: 'blob:abc' });
-    expect(await zipViaOffscreen([{ name: 'a.jpg', url: 'https://cdn.example/a.jpg' }])).toBe('blob:abc');
+  it('returns the blob url and count when the build succeeds', async () => {
+    globalThis.chrome.runtime.sendMessage = vi.fn().mockResolvedValue({ ok: true, url: 'blob:abc', count: 3 });
+    expect(await zipViaOffscreen([{ name: 'a.jpg', url: 'https://cdn.example/a.jpg' }])).toEqual({ url: 'blob:abc', count: 3 });
   });
 });

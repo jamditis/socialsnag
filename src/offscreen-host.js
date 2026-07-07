@@ -20,11 +20,11 @@ export async function copyViaOffscreen(text) {
   return chrome.runtime.sendMessage({ target: 'offscreen', action: 'clipboard', text });
 }
 
-// files: [{ name, url }] — returns a blob: URL for the zip, or null.
+// files: [{ name, url }] — returns { url, count } for the zip, or null.
 export async function zipViaOffscreen(files) {
   await ensureOffscreen();
   const res = await chrome.runtime.sendMessage({ target: 'offscreen', action: 'zip', files });
-  return res?.ok ? res.url : null;
+  return res?.ok ? { url: res.url, count: res.count } : null;
 }
 
 // Revoke a blob URL the offscreen document created. Only that realm can revoke

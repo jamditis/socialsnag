@@ -400,7 +400,7 @@ describe('zip download flow', () => {
 
     try {
       const result = await downloadItemsAsZip(imgItems, 'bluesky');
-      expect(result).toBe(true);
+      expect(result).toBe(2);
 
       const zipMsg = off.sent.find((m) => m.action === 'zip');
       expect(zipMsg.files).toHaveLength(2);
@@ -432,11 +432,33 @@ describe('zip download flow', () => {
         { url: 'https://evil.example/x.jpg', type: 'image', filename: 'x' },
       ];
       const result = await downloadItemsAsZip(items, 'bluesky');
-      expect(result).toBe(true);
+      expect(result).toBe(1);
 
       const zipMsg = off.sent.find((m) => m.action === 'zip');
       expect(zipMsg.files).toHaveLength(1);
       expect(zipMsg.files[0].name).toBe('a.jpg');
+    } finally {
+      globalThis.chrome.downloads.download = origDownload;
+      off.restore();
+    }
+  });
+
+  it('neutralizes a traversal path smuggled through the ?format= extension', async () => {
+    const off = installOffscreenMock(true);
+    const origDownload = globalThis.chrome.downloads.download;
+    globalThis.chrome.downloads.download = async () => 8;
+
+    try {
+      // guessExtension echoes the ?format= value verbatim, so a crafted format
+      // can carry / and .. into the entry name unless the whole name is sanitized.
+      const result = await downloadItemsAsZip([
+        { url: 'https://cdn.bsky.app/img/a?format=../../evil.sh', type: 'image', filename: 'slide' },
+      ], 'bluesky');
+      expect(result).toBe(1);
+
+      const zipMsg = off.sent.find((m) => m.action === 'zip');
+      expect(zipMsg.files[0].name).not.toContain('/');
+      expect(zipMsg.files[0].name).not.toContain('..');
     } finally {
       globalThis.chrome.downloads.download = origDownload;
       off.restore();
@@ -534,6 +556,94 @@ describe('zip download flow', () => {
       globalThis.chrome.downloads.download = origDownload2;
       offOff.restore();
       globalThis.chrome.tabs.sendMessage = origTabsSend;
+    }
+  });
+
+  it('degrades a forced zip to a normal download when only one item resolves', async () => {
+    const off = installOffscreenMock(true);
+    const origTabsSend = globalThis.chrome.tabs.sendMessage;
+    globalThis.chrome.tabs.sendMessage = async () => ({
+      platform: 'bluesky',
+      urls: [{ url: 'https://cdn.bsky.app/img/a.jpg', type: 'image', filename: 'bsky_a' }],
+    });
+    const downloads = [];
+    const origDownload = globalThis.chrome.downloads.download;
+    globalThis.chrome.downloads.download = async (opts) => { downloads.push(opts); return 3; };
+
+    try {
+      const handler = globalThis.chrome.contextMenus.onClicked._listeners[0];
+      await handler(
+        { menuItemId: 'socialsnag-download-zip', pageUrl: 'https://bsky.app/profile/x/post/1', srcUrl: '' },
+        { id: 5, url: 'https://bsky.app/profile/x/post/1' }
+      );
+      // The >= 2 guard means one item never zips; it downloads directly.
+      expect(off.sent.some((m) => m.action === 'zip')).toBe(false);
+      expect(downloads).toHaveLength(1);
+      expect(downloads[0].filename.endsWith('.zip')).toBe(false);
+    } finally {
+      globalThis.chrome.tabs.sendMessage = origTabsSend;
+      globalThis.chrome.downloads.download = origDownload;
+      off.restore();
+    }
+  });
+
+  it('bails to per-file when any item still needs a video lookup', async () => {
+    const off = installOffscreenMock(true);
+    const downloads = [];
+    const origDownload = globalThis.chrome.downloads.download;
+    globalThis.chrome.downloads.download = async (opts) => { downloads.push(opts); return 1; };
+
+    try {
+      const result = await downloadItemsAsZip([
+        { url: 'https://cdn.bsky.app/img/a.jpg', type: 'image', filename: 'a' },
+        { type: 'video', filename: 'v', needsVideoLookup: true },
+      ], 'bluesky');
+      expect(result).toBe(false);
+      expect(off.sent.some((m) => m.action === 'zip')).toBe(false);
+      expect(downloads).toHaveLength(0);
+    } finally {
+      globalThis.chrome.downloads.download = origDownload;
+      off.restore();
+    }
+  });
+
+  it('records the archive with no url in history', async () => {
+    const off = installOffscreenMock(true);
+    const origDownload = globalThis.chrome.downloads.download;
+    globalThis.chrome.downloads.download = async () => 55;
+
+    try {
+      await globalThis.chrome.storage.local.set({ downloadHistory: [] });
+      const result = await downloadItemsAsZip(imgItems, 'bluesky');
+      expect(result).toBe(2);
+
+      const { downloadHistory } = await globalThis.chrome.storage.local.get({ downloadHistory: [] });
+      expect(downloadHistory).toHaveLength(1);
+      const entry = downloadHistory[0];
+      expect('url' in entry).toBe(false);
+      expect(JSON.stringify(entry)).not.toContain('blob:');
+      expect(entry.filename.endsWith('.zip')).toBe(true);
+    } finally {
+      globalThis.chrome.downloads.download = origDownload;
+      off.restore();
+    }
+  });
+
+  it('revokes the blob on an interrupted download too', async () => {
+    const off = installOffscreenMock(true);
+    const origDownload = globalThis.chrome.downloads.download;
+    globalThis.chrome.downloads.download = async () => 63;
+
+    try {
+      const result = await downloadItemsAsZip(imgItems, 'bluesky');
+      expect(result).toBe(2);
+
+      globalThis.chrome.downloads.onChanged._listeners[0]({ id: 63, state: { current: 'interrupted' } });
+      await Promise.resolve();
+      expect(off.sent).toContainEqual({ target: 'offscreen', action: 'revoke', url: 'blob:zip1' });
+    } finally {
+      globalThis.chrome.downloads.download = origDownload;
+      off.restore();
     }
   });
 });

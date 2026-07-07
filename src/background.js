@@ -298,10 +298,10 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     const shouldZip = (isZipMenu || (type === 'all' && platformSettings.zipMultiPosts))
       && response.urls.length >= 2;
     if (shouldZip) {
-      const zipped = await downloadItemsAsZip(response.urls, response.platform);
-      if (zipped) {
+      const zippedCount = await downloadItemsAsZip(response.urls, response.platform);
+      if (zippedCount) {
         if (platformSettings.showNotifications) {
-          showNotification(`Downloaded ${response.urls.length} files as a .zip from ${response.platform}.`);
+          showNotification(`Downloaded ${zippedCount} files as a .zip from ${response.platform}.`);
         }
         return;
       }
@@ -488,8 +488,14 @@ async function resolveInstagramVideo(shortcode) {
 }
 
 // Bundle multiple resolved media items into one .zip via the offscreen document.
-// Returns true once a download has started, false to fall back to per-file.
+// Returns the count of files archived (a truthy number) once the download has
+// started, or false to fall back to per-file.
 export async function downloadItemsAsZip(items, platform) {
+  // Zip bundles direct URLs only. If any item needs a video-API lookup (the
+  // Instagram DOM fallback emits video slides with no url yet), fall back to
+  // per-file so a slide is never silently dropped from the archive.
+  if (items.some((it) => it.needsVideoLookup)) return false;
+
   const { downloadPath } = await chrome.storage.sync.get({ downloadPath: 'SocialSnag/{platform}' });
 
   const files = [];
@@ -502,17 +508,18 @@ export async function downloadItemsAsZip(items, platform) {
     }
     const ext = guessExtension(item.url, item.type);
     const base = sanitizeFilename(item.filename || `${platform}_${files.length + 1}`);
-    // Keep archive entry names unique so carousel slides don't overwrite.
-    let name = `${base}${ext}`;
+    // Sanitize the whole entry name: guessExtension can echo a ?format= value
+    // containing / or .., and client-zip writes entry names verbatim.
+    let name = sanitizeFilename(`${base}${ext}`);
     let n = 2;
-    while (seen.has(name)) { name = `${base}_${n}${ext}`; n++; }
+    while (seen.has(name)) { name = sanitizeFilename(`${base}_${n}${ext}`); n++; }
     seen.add(name);
     files.push({ name, url: item.url });
   }
   if (files.length === 0) return false;
 
-  const blobUrl = await zipViaOffscreen(files);
-  if (!blobUrl) return false;
+  const zip = await zipViaOffscreen(files);
+  if (!zip) return false;
 
   const stamp = Date.now();
   const zipBase = `${platform}_${stamp}`;
@@ -520,22 +527,22 @@ export async function downloadItemsAsZip(items, platform) {
   let downloadId = null;
   try {
     downloadId = await chrome.downloads.download({
-      url: blobUrl,
+      url: zip.url,
       filename: zipPath,
       conflictAction: 'uniquify',
     });
   } catch (e) {
     console.error('SocialSnag: zip download failed:', e);
-    await revokeViaOffscreen(blobUrl); // never started; safe to revoke now
+    await revokeViaOffscreen(zip.url); // never started; safe to revoke now
     return false;
   }
 
   // Revoke only after the download finishes reading the blob (see helper).
-  revokeBlobWhenComplete(downloadId, blobUrl);
+  revokeBlobWhenComplete(downloadId, zip.url);
 
   // Record one history entry for the archive; no url is stored.
   await recordDownload({ type: 'zip', filename: `${zipBase}.zip` }, platform, downloadId);
-  return true;
+  return zip.count ?? files.length;
 }
 
 // Revoke a blob URL once its download reaches a terminal state. Revoking
