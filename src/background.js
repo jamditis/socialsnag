@@ -179,13 +179,17 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   if (!platformSettings[`platform_${platform}`]) return;
 
   try {
+    // Reset per click so a stale reason from a prior click can never be shown.
+    lastIgError = null;
     const pageUrl = info.pageUrl || tab.url;
     let response;
+    let triedIgPostApi = false;
 
     // Instagram: for "download all", enumerate the whole post via the API first.
     if (platform === 'instagram' && type === 'all') {
       const shortcode = pageUrl.match(/\/(p|reel|tv)\/([A-Za-z0-9_-]+)/)?.[2];
       if (shortcode) {
+        triedIgPostApi = true;
         const apiItems = await resolveInstagramPost(shortcode);
         if (apiItems && apiItems.length) {
           response = { urls: apiItems, platform };
@@ -195,8 +199,10 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 
     // Fall back to the existing single-video API + content-script path.
     if (!response) {
-      // Try API-based video resolution FIRST (works without content script)
-      const apiResult = await resolveViaApi(platform, pageUrl);
+      // Try API-based video resolution FIRST (works without content script).
+      // Skip it if the post API already ran this click — resolveViaApi would
+      // only repeat the identical i.instagram.com fetch for the same shortcode.
+      const apiResult = triedIgPostApi ? null : await resolveViaApi(platform, pageUrl);
       if (apiResult) {
         // API found a video — use it directly
         response = { urls: [apiResult], platform };

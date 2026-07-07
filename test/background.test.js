@@ -198,3 +198,40 @@ describe('context menu click — Instagram total failure', () => {
     expect(notes).toContain('Log in to Instagram to download this.');
   });
 });
+
+describe('context menu click — Instagram DOM fallback', () => {
+  afterEach(() => resetFetch());
+
+  it('downloads content-script media when the post API fails but the DOM has media', async () => {
+    // Post API 404s (resolveInstagramPost returns null); the content script
+    // still resolves real CDN images, which must still get downloaded.
+    installFetch((url) => (url.includes('i.instagram.com') ? { status: 404, json: {} } : null));
+
+    const domUrls = [
+      'https://scontent.cdninstagram.com/a.jpg',
+      'https://scontent.cdninstagram.com/b.jpg',
+    ];
+    const origSend = globalThis.chrome.tabs.sendMessage;
+    globalThis.chrome.tabs.sendMessage = async () => ({
+      platform: 'instagram',
+      urls: domUrls.map((url, i) => ({ url, type: 'image', filename: `post_ABC_${i + 1}` })),
+    });
+
+    const downloaded = [];
+    const origDownload = globalThis.chrome.downloads.download;
+    globalThis.chrome.downloads.download = async (opts) => { downloaded.push(opts.url); return downloaded.length; };
+
+    try {
+      const handler = globalThis.chrome.contextMenus.onClicked._listeners[0];
+      await handler(
+        { menuItemId: 'socialsnag-download-all', pageUrl: 'https://www.instagram.com/p/ABC/', srcUrl: '' },
+        { id: 1, url: 'https://www.instagram.com/p/ABC/' }
+      );
+    } finally {
+      globalThis.chrome.tabs.sendMessage = origSend;
+      globalThis.chrome.downloads.download = origDownload;
+    }
+
+    expect(downloaded).toEqual(domUrls);
+  });
+});
