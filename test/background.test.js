@@ -419,6 +419,60 @@ describe('context menu click — Instagram DOM fallback', () => {
   });
 });
 
+describe('context menu click — Instagram feed carousel (no URL shortcode)', () => {
+  afterEach(() => resetFetch());
+
+  it('enumerates the full post via the API using a DOM-supplied shortcode', async () => {
+    // Feed/grid: the page URL is instagram.com/ with no /p/<code>/, so the
+    // API-first block is skipped. The content script found the post's shortcode
+    // from its DOM permalink but returned only the ~2 lazy-rendered slides. The
+    // background must still enumerate the whole carousel through the API.
+    installFetch((url) => {
+      if (!url.includes('i.instagram.com')) return null;
+      return {
+        status: 200,
+        json: { items: [{ carousel_media: [
+          igImgSlide('https://cdn.cdninstagram.com/1.jpg'),
+          igVidSlide('https://cdn.cdninstagram.com/2.mp4'),
+          igImgSlide('https://cdn.cdninstagram.com/3.jpg'),
+        ] }] },
+      };
+    });
+
+    const origSend = globalThis.chrome.tabs.sendMessage;
+    globalThis.chrome.tabs.sendMessage = async () => ({
+      platform: 'instagram',
+      shortcode: 'ABC',
+      urls: [
+        { url: 'https://scontent.cdninstagram.com/dom1.jpg', type: 'image', filename: 'post_ABC_1' },
+        { url: 'https://scontent.cdninstagram.com/dom2.jpg', type: 'image', filename: 'post_ABC_2' },
+      ],
+    });
+
+    const downloaded = [];
+    const origDownload = globalThis.chrome.downloads.download;
+    globalThis.chrome.downloads.download = async (opts) => { downloaded.push(opts.url); return downloaded.length; };
+
+    try {
+      const handler = globalThis.chrome.contextMenus.onClicked._listeners[0];
+      await handler(
+        { menuItemId: 'socialsnag-download-all', pageUrl: 'https://www.instagram.com/', srcUrl: '' },
+        { id: 1, url: 'https://www.instagram.com/' }
+      );
+    } finally {
+      globalThis.chrome.tabs.sendMessage = origSend;
+      globalThis.chrome.downloads.download = origDownload;
+    }
+
+    // All three carousel items, not the two partial DOM slides.
+    expect(downloaded).toEqual([
+      'https://cdn.cdninstagram.com/1.jpg',
+      'https://cdn.cdninstagram.com/2.mp4',
+      'https://cdn.cdninstagram.com/3.jpg',
+    ]);
+  });
+});
+
 describe('zip download flow', () => {
   // revokeBlobWhenComplete registers a downloads.onChanged listener per zip.
   // Clear them so _listeners[0] is deterministic and listeners don't leak.
