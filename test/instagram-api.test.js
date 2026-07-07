@@ -103,8 +103,9 @@ describe('parseStoryTray', () => {
     expect(out).toHaveLength(1);
     expect(out[0].url).toBe('b');
   });
-  it('returns all when storyId does not match', () => {
-    expect(parseStoryTray(tray, { storyId: 'nope' })).toHaveLength(2);
+  it('returns nothing when a single story is not found (never the whole tray)', () => {
+    // A stale or expired story URL must not dump every currently-active story.
+    expect(parseStoryTray(tray, { storyId: 'nope' })).toEqual([]);
   });
   it('returns empty for empty tray', () => {
     expect(parseStoryTray({ reels_media: [] }, {})).toEqual([]);

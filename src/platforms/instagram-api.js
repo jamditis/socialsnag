@@ -82,9 +82,14 @@ export function parseStoryTray(apiJson, { storyId } = {}) {
     return url ? { url, type: 'image', filename: `story_${base.pk}`, index: base.index, pk: base.pk } : null;
   }).filter(Boolean);
 
+  // A single-story request ("download this") must return that exact story or
+  // nothing — never fall back to the whole tray. The URL's story can be missing
+  // when it has expired (stories last 24h) or the URL is stale; returning empty
+  // lets the caller show "expired or unavailable" instead of dumping every
+  // currently-active story.
   if (storyId) {
     const one = mapped.find((m) => m.pk === String(storyId));
-    if (one) return [one];
+    return one ? [{ url: one.url, type: one.type, filename: one.filename, index: one.index }] : [];
   }
   return mapped.map((m) => ({ url: m.url, type: m.type, filename: m.filename, index: m.index }));
 }
