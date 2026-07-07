@@ -42,3 +42,36 @@ describe('pickBestVideo', () => {
     expect(pickBestVideo([{ width: 100 }])).toBeNull();
   });
 });
+
+import { parsePostMedia } from '../src/platforms/instagram-api.js';
+
+const imgSlide = (u) => ({ media_type: 1, image_versions2: { candidates: [{ url: u, width: 1080, height: 1080 }] } });
+const vidSlide = (u) => ({ media_type: 2, video_versions: [{ url: u, width: 1080 }] });
+
+describe('parsePostMedia', () => {
+  it('parses a single image post', () => {
+    const json = { items: [imgSlide('https://cdn.cdninstagram.com/one.jpg')] };
+    const out = parsePostMedia(json, 'ABC');
+    expect(out).toEqual([{ url: 'https://cdn.cdninstagram.com/one.jpg', type: 'image', filename: 'post_ABC', index: 1 }]);
+  });
+  it('parses a single video post', () => {
+    const json = { items: [vidSlide('https://cdn.cdninstagram.com/v.mp4')] };
+    const out = parsePostMedia(json, 'ABC');
+    expect(out).toEqual([{ url: 'https://cdn.cdninstagram.com/v.mp4', type: 'video', filename: 'reel_ABC', index: 1 }]);
+  });
+  it('parses a mixed carousel in order', () => {
+    const json = { items: [{ carousel_media: [imgSlide('i1'), vidSlide('v2'), imgSlide('i3')] }] };
+    const out = parsePostMedia(json, 'XYZ');
+    expect(out.map((o) => o.url)).toEqual(['i1', 'v2', 'i3']);
+    expect(out.map((o) => o.type)).toEqual(['image', 'video', 'image']);
+    expect(out.map((o) => o.filename)).toEqual(['post_XYZ_1', 'post_XYZ_2', 'post_XYZ_3']);
+  });
+  it('returns empty array for empty response', () => {
+    expect(parsePostMedia({ items: [] }, 'ABC')).toEqual([]);
+    expect(parsePostMedia({}, 'ABC')).toEqual([]);
+  });
+  it('skips a slide with no usable media', () => {
+    const json = { items: [{ carousel_media: [imgSlide('i1'), { media_type: 1, image_versions2: { candidates: [] } }] }] };
+    expect(parsePostMedia(json, 'X').map((o) => o.url)).toEqual(['i1']);
+  });
+});
