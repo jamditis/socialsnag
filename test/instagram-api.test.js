@@ -84,7 +84,9 @@ describe('extractStoryRef', () => {
   });
   it('returns null for non-story paths', () => {
     expect(extractStoryRef('/p/ABC/')).toBeNull();
-    expect(extractStoryRef('/stories/highlights/99/')).toEqual({ username: 'highlights', storyId: '99' });
+  });
+  it('returns null for highlights (not active stories, different API)', () => {
+    expect(extractStoryRef('/stories/highlights/99/')).toBeNull();
   });
 });
 

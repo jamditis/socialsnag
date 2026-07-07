@@ -65,7 +65,14 @@ export function parsePostMedia(apiJson, shortcode) {
 // Parse a story page path: /stories/{username}/{storyId}/
 export function extractStoryRef(pathname) {
   const m = pathname.match(/^\/stories\/([^/]+)\/(\d+)/);
-  return m ? { username: m[1], storyId: m[2] } : null;
+  if (!m) return null;
+  // /stories/highlights/<id>/ is a highlight, not an active story: "highlights"
+  // is a literal path segment (not a username) and highlights are not served by
+  // the reels tray API. Skip it so we don't look up an account named
+  // "highlights" and download unrelated media; the page falls back to the
+  // generic resolver instead. Highlight support is tracked for v1.3.
+  if (m[1] === 'highlights') return null;
+  return { username: m[1], storyId: m[2] };
 }
 
 // Enumerate story items from a reels_media response. If storyId matches an
