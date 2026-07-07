@@ -1,7 +1,7 @@
 'use strict';
 
 import { ALLOWED_DOMAINS } from './platforms/common.js';
-import { IG_APP_ID, shortcodeToMediaId, parsePostMedia, mapIgStatusToMessage } from './platforms/instagram-api.js';
+import { IG_APP_ID, shortcodeToMediaId, parsePostMedia, extractStoryRef, parseStoryTray, mapIgStatusToMessage } from './platforms/instagram-api.js';
 
 const MENU_DOWNLOAD_SINGLE = 'socialsnag-download-single';
 const MENU_DOWNLOAD_ALL = 'socialsnag-download-all';
@@ -197,6 +197,17 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       }
     }
 
+    // Instagram stories: resolve via the reels_media API (no DOM path exists).
+    if (platform === 'instagram' && !response) {
+      const storyRef = extractStoryRef(new URL(pageUrl).pathname);
+      if (storyRef) {
+        // "single" grabs the viewed story; "all" grabs the whole tray.
+        const ref = type === 'all' ? { ...storyRef, storyId: null } : storyRef;
+        const storyItems = await resolveInstagramStories(ref);
+        if (storyItems && storyItems.length) response = { urls: storyItems, platform };
+      }
+    }
+
     // Fall back to the existing single-video API + content-script path.
     if (!response) {
       // Try API-based video resolution FIRST (works without content script).
@@ -372,6 +383,46 @@ export async function resolveInstagramPost(shortcode) {
     return items;
   } catch (e) {
     console.error('SocialSnag: Instagram post API failed:', e);
+    return null;
+  }
+}
+
+// Look up an Instagram username's numeric user id via the private web API.
+// Returns the id string, or null on failure — recording the reason in lastIgError.
+async function fetchInstagramUserId(username) {
+  try {
+    const resp = await fetch(
+      `https://www.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(username)}`,
+      { headers: { 'x-ig-app-id': IG_APP_ID }, credentials: 'include' },
+    );
+    if (!resp.ok) { lastIgError = mapIgStatusToMessage(resp.status); return null; }
+    const data = await resp.json();
+    return data?.data?.user?.id || null;
+  } catch (e) {
+    console.error('SocialSnag: IG user lookup failed:', e);
+    return null;
+  }
+}
+
+// Resolve a story ref to its media via the reels_media API. storyId null means
+// the whole active tray. Returns an array of media items, or null on failure —
+// recording the reason in lastIgError for the click handler.
+export async function resolveInstagramStories({ username, storyId }) {
+  const userId = await fetchInstagramUserId(username);
+  if (!userId) return null;
+  try {
+    const resp = await fetch(
+      `https://i.instagram.com/api/v1/feed/reels_media/?reel_ids=${userId}`,
+      { headers: { 'x-ig-app-id': IG_APP_ID }, credentials: 'include' },
+    );
+    if (!resp.ok) { lastIgError = mapIgStatusToMessage(resp.status); return null; }
+    const data = await resp.json();
+    const items = parseStoryTray(data, { storyId });
+    if (items.length === 0) { lastIgError = mapIgStatusToMessage(0); return null; }
+    lastIgError = null;
+    return items;
+  } catch (e) {
+    console.error('SocialSnag: IG stories API failed:', e);
     return null;
   }
 }

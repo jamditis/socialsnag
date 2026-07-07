@@ -5,6 +5,7 @@ import {
   validateDownloadUrl,
   sanitizeDownloadPath,
   resolveInstagramPost,
+  resolveInstagramStories,
 } from '../src/background.js';
 
 describe('detectPlatform', () => {
@@ -170,6 +171,43 @@ describe('resolveInstagramPost', () => {
     installFetch(() => ({ status: 429, json: {} }));
     const items = await resolveInstagramPost('ABC');
     expect(items).toBeNull();
+  });
+});
+
+// Fetch-shaped Instagram story item (media_type mirrors the private web API).
+const igStoryImg = (pk, u) => ({ pk, image_versions2: { candidates: [{ url: u, width: 1080, height: 1920 }] } });
+
+describe('resolveInstagramStories', () => {
+  afterEach(() => resetFetch());
+
+  it('derives user id then returns the active tray', async () => {
+    installFetch((url) => {
+      if (url.includes('web_profile_info')) return { status: 200, json: { data: { user: { id: '55' } } } };
+      if (url.includes('reels_media')) {
+        return { status: 200, json: { reels_media: [{ items: [igStoryImg('1', 'https://cdn.cdninstagram.com/s.jpg')] }] } };
+      }
+      return null;
+    });
+
+    const items = await resolveInstagramStories({ username: 'x', storyId: null });
+    expect(items.map((i) => i.url)).toEqual(['https://cdn.cdninstagram.com/s.jpg']);
+  });
+
+  it('returns only the viewed story when storyId matches', async () => {
+    installFetch((url) => {
+      if (url.includes('web_profile_info')) return { status: 200, json: { data: { user: { id: '55' } } } };
+      if (url.includes('reels_media')) {
+        return { status: 200, json: { reels_media: [{ items: [
+          igStoryImg('1', 'https://cdn.cdninstagram.com/1.jpg'),
+          igStoryImg('2', 'https://cdn.cdninstagram.com/2.jpg'),
+        ] }] } };
+      }
+      return null;
+    });
+
+    const items = await resolveInstagramStories({ username: 'x', storyId: '2' });
+    expect(items).toHaveLength(1);
+    expect(items[0].url).toBe('https://cdn.cdninstagram.com/2.jpg');
   });
 });
 
