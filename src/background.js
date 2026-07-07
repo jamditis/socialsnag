@@ -1,11 +1,12 @@
 'use strict';
 
-import { ALLOWED_DOMAINS } from './platforms/common.js';
+import { ALLOWED_DOMAINS, sanitizeFilename } from './platforms/common.js';
 import { IG_APP_ID, shortcodeToMediaId, parsePostMedia, extractStoryRef, parseStoryTray, mapIgStatusToMessage } from './platforms/instagram-api.js';
-import { copyViaOffscreen } from './offscreen-host.js';
+import { copyViaOffscreen, zipViaOffscreen, revokeViaOffscreen } from './offscreen-host.js';
 
 const MENU_DOWNLOAD_SINGLE = 'socialsnag-download-single';
 const MENU_DOWNLOAD_ALL = 'socialsnag-download-all';
+const MENU_DOWNLOAD_ZIP = 'socialsnag-download-zip';
 const MENU_COPY_URL = 'socialsnag-copy-url';
 
 // Supported platform URL patterns for context menu visibility
@@ -109,6 +110,12 @@ chrome.runtime.onInstalled.addListener(() => {
     documentUrlPatterns: SUPPORTED_URL_PATTERNS,
   });
   chrome.contextMenus.create({
+    id: MENU_DOWNLOAD_ZIP,
+    title: 'SocialSnag: Download all as .zip',
+    contexts: ['page', 'image', 'video', 'link'],
+    documentUrlPatterns: SUPPORTED_URL_PATTERNS,
+  });
+  chrome.contextMenus.create({
     id: MENU_COPY_URL,
     title: 'SocialSnag: Copy media URL',
     contexts: ['page', 'image', 'video', 'link'],
@@ -173,7 +180,8 @@ async function handleWebRequestCompleted(details) {
 // Handle context menu clicks
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   const isCopy = info.menuItemId === MENU_COPY_URL;
-  const type = info.menuItemId === MENU_DOWNLOAD_ALL ? 'all' : 'single';
+  const isZipMenu = info.menuItemId === MENU_DOWNLOAD_ZIP;
+  const type = (info.menuItemId === MENU_DOWNLOAD_ALL || isZipMenu) ? 'all' : 'single';
 
   const platform = detectPlatform(tab.url);
   if (!platform) {
@@ -184,6 +192,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   const platformSettings = await chrome.storage.sync.get({
     [`platform_${platform}`]: true,
     showNotifications: true,
+    zipMultiPosts: false,
   });
   if (!platformSettings[`platform_${platform}`]) return;
 
@@ -282,6 +291,22 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
         showNotification('SocialSnag: could not copy to clipboard.');
       }
       return;
+    }
+
+    // Zip: bundle multiple items into one archive when forced by the menu or by
+    // the setting default. Only worth it for 2+ items.
+    const shouldZip = (isZipMenu || (type === 'all' && platformSettings.zipMultiPosts))
+      && response.urls.length >= 2;
+    if (shouldZip) {
+      const zipped = await downloadItemsAsZip(response.urls, response.platform);
+      if (zipped) {
+        if (platformSettings.showNotifications) {
+          showNotification(`Downloaded ${response.urls.length} files as a .zip from ${response.platform}.`);
+        }
+        return;
+      }
+      // Zip failed (offscreen or all fetches failed) — fall through to per-file.
+      console.warn('SocialSnag: zip failed, downloading files individually.');
     }
 
     let count = 0;
@@ -460,6 +485,72 @@ async function resolveInstagramVideo(shortcode) {
   if (!items) return null;
   const video = items.find((it) => it.type === 'video');
   return video ? video.url : null;
+}
+
+// Bundle multiple resolved media items into one .zip via the offscreen document.
+// Returns true once a download has started, false to fall back to per-file.
+export async function downloadItemsAsZip(items, platform) {
+  const { downloadPath } = await chrome.storage.sync.get({ downloadPath: 'SocialSnag/{platform}' });
+
+  const files = [];
+  const seen = new Set();
+  for (const item of items) {
+    const validation = validateDownloadUrl(item.url);
+    if (!validation.valid) {
+      console.warn(`SocialSnag: skipping ${validation.reason} in zip`);
+      continue;
+    }
+    const ext = guessExtension(item.url, item.type);
+    const base = sanitizeFilename(item.filename || `${platform}_${files.length + 1}`);
+    // Keep archive entry names unique so carousel slides don't overwrite.
+    let name = `${base}${ext}`;
+    let n = 2;
+    while (seen.has(name)) { name = `${base}_${n}${ext}`; n++; }
+    seen.add(name);
+    files.push({ name, url: item.url });
+  }
+  if (files.length === 0) return false;
+
+  const blobUrl = await zipViaOffscreen(files);
+  if (!blobUrl) return false;
+
+  const stamp = Date.now();
+  const zipBase = `${platform}_${stamp}`;
+  const zipPath = sanitizeDownloadPath(zipBase, platform, '.zip', downloadPath);
+  let downloadId = null;
+  try {
+    downloadId = await chrome.downloads.download({
+      url: blobUrl,
+      filename: zipPath,
+      conflictAction: 'uniquify',
+    });
+  } catch (e) {
+    console.error('SocialSnag: zip download failed:', e);
+    await revokeViaOffscreen(blobUrl); // never started; safe to revoke now
+    return false;
+  }
+
+  // Revoke only after the download finishes reading the blob (see helper).
+  revokeBlobWhenComplete(downloadId, blobUrl);
+
+  // Record one history entry for the archive; no url is stored.
+  await recordDownload({ type: 'zip', filename: `${zipBase}.zip` }, platform, downloadId);
+  return true;
+}
+
+// Revoke a blob URL once its download reaches a terminal state. Revoking
+// earlier can truncate the file, because chrome.downloads.download resolves
+// when the download STARTS, not when it finishes reading the blob.
+function revokeBlobWhenComplete(downloadId, blobUrl) {
+  const listener = (delta) => {
+    if (delta.id !== downloadId || !delta.state) return;
+    const s = delta.state.current;
+    if (s === 'complete' || s === 'interrupted') {
+      chrome.downloads.onChanged.removeListener(listener);
+      revokeViaOffscreen(blobUrl);
+    }
+  };
+  chrome.downloads.onChanged.addListener(listener);
 }
 
 // Validate and download a single media item

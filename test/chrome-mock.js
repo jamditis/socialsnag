@@ -65,6 +65,7 @@ globalThis.chrome = {
   downloads: {
     download: async () => 1,
     show: () => {},
+    onChanged: createEventTarget(),
   },
   notifications: {
     create: () => {},

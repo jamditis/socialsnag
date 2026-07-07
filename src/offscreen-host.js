@@ -26,3 +26,12 @@ export async function zipViaOffscreen(files) {
   const res = await chrome.runtime.sendMessage({ target: 'offscreen', action: 'zip', files });
   return res?.ok ? res.url : null;
 }
+
+// Revoke a blob URL the offscreen document created. Only that realm can revoke
+// it, so round a message through it. Best-effort: if the doc is gone the URL
+// dies with it.
+export async function revokeViaOffscreen(url) {
+  try {
+    await chrome.runtime.sendMessage({ target: 'offscreen', action: 'revoke', url });
+  } catch (e) { /* offscreen gone */ }
+}

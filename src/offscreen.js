@@ -13,6 +13,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.action === 'revoke') {
+    try { URL.revokeObjectURL(message.url); } catch (e) { /* already gone */ }
+    sendResponse({ ok: true });
+    return true;
+  }
+
   if (message.action === 'zip') {
     // message.files: [{ name, url }]
     (async () => {
