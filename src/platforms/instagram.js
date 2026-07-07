@@ -253,6 +253,12 @@ function ancestorHrefs(el) {
   return hrefs;
 }
 
+// Descendant <a> hrefs of a container, in DOM order.
+function descendantHrefs(container) {
+  if (!container) return [];
+  return Array.from(container.querySelectorAll('a[href]')).map((a) => a.getAttribute('href'));
+}
+
 async function resolveAll(target, pathname) {
   const urlShortcode = extractShortcode(pathname);
 
@@ -279,12 +285,17 @@ async function resolveAll(target, pathname) {
 
   // On the feed/grid the URL has no shortcode; read the post's permalink from
   // the DOM so the background can enumerate the whole carousel via the API (the
-  // DOM only renders ~2 slides at a time). Prefer an ancestor permalink of the
-  // clicked target (grid thumbnails wrap their own /p/ link) before scanning the
-  // container, so a shared-row container can't resolve to a sibling post.
+  // DOM only renders ~2 slides at a time). Try three scopes in order:
+  //   1. ancestors of the clicked target — a grid thumbnail wraps its own /p/
+  //      link, so this resolves the exact post the user clicked;
+  //   2. the enclosing <article> — in the feed the permalink is the timestamp
+  //      link in the article header, which is neither an ancestor of the media
+  //      nor inside the narrow media wrapper findPostContainer often returns;
+  //   3. the resolved container itself, as a last resort.
   const shortcode = urlShortcode
     || shortcodeFromContainer(ancestorHrefs(target))
-    || shortcodeFromContainer(Array.from(post.querySelectorAll('a[href]')).map((a) => a.getAttribute('href')));
+    || shortcodeFromContainer(descendantHrefs(target?.closest?.('article')))
+    || shortcodeFromContainer(descendantHrefs(post));
   const { items, index: nextIndex } = collectMediaFromContainer(post, shortcode);
   let index = nextIndex;
 
