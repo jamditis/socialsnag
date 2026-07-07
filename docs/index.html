@@ -745,6 +745,59 @@
             color: var(--text);
         }
 
+        /* Reviews */
+        .reviews {
+            padding: 100px 0;
+        }
+
+        .reviews .container {
+            max-width: 760px;
+        }
+
+        .review-card {
+            padding: 48px 40px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            text-align: center;
+        }
+
+        .review-stars {
+            display: inline-flex;
+            gap: 4px;
+            margin-bottom: 24px;
+        }
+
+        .review-stars svg {
+            width: 22px;
+            height: 22px;
+            fill: #fbbf24;
+        }
+
+        .review-quote {
+            font-family: var(--font-display);
+            font-weight: 600;
+            font-size: clamp(22px, 2.8vw, 30px);
+            line-height: 1.4;
+            letter-spacing: -0.02em;
+            color: var(--text-white);
+            margin-bottom: 28px;
+        }
+
+        .review-source {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 14px;
+            font-weight: 500;
+            color: var(--text);
+        }
+
+        .review-source svg {
+            width: 18px;
+            height: 18px;
+        }
+
         /* Privacy */
         .privacy-section {
             padding: 80px 0;
@@ -1068,8 +1121,9 @@
                 gap: 16px;
             }
 
-            .how, .features-section, .install-section { padding: 60px 0; }
+            .how, .features-section, .install-section, .reviews { padding: 60px 0; }
             .platforms-section { padding: 60px 0; }
+            .review-card { padding: 32px 24px; }
         }
 
         @media (prefers-reduced-motion: reduce) {
@@ -1222,7 +1276,7 @@
             <div class="platform-cards">
                 <div class="platform-card instagram">
                     <h3>Instagram</h3>
-                    <p>Images, reels, and carousels at full resolution. Not the compressed preview you get from a screenshot.</p>
+                    <p>Images, reels, carousels, and stories at full resolution. Not the compressed preview you get from a screenshot.</p>
                 </div>
                 <div class="platform-card twitter">
                     <h3>Twitter / X</h3>
@@ -1256,7 +1310,28 @@
                         <svg viewBox="0 0 24 24"><rect x="6" y="6" width="15" height="15" rx="2"/><path d="M3 18V5a2 2 0 012-2h13"/></svg>
                     </div>
                     <h3>Multi-image posts</h3>
-                    <p>Download every image from a carousel or gallery in one click. No swiping through one at a time to grab everything.</p>
+                    <p>Download every photo and video from a carousel in one click, in order, resolved through Instagram's media API. No swiping through one at a time.</p>
+                </div>
+                <div class="feature span-2">
+                    <div class="feature-icon">
+                        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M10 9l5 3-5 3V9z"/></svg>
+                    </div>
+                    <h3>Instagram stories</h3>
+                    <p>Grab the story you're viewing, or the user's whole active tray at once, before it disappears.</p>
+                </div>
+                <div class="feature span-2">
+                    <div class="feature-icon">
+                        <svg viewBox="0 0 24 24"><path d="M9 15l6-6"/><path d="M11 6l1-1a4 4 0 015.66 5.66l-1 1"/><path d="M13 18l-1 1a4 4 0 01-5.66-5.66l1-1"/></svg>
+                    </div>
+                    <h3>Copy media URL</h3>
+                    <p>Copy the resolved full-resolution URL straight to your clipboard instead of downloading the file.</p>
+                </div>
+                <div class="feature span-2">
+                    <div class="feature-icon">
+                        <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v11a1 1 0 001 1h12a1 1 0 001-1V8"/><path d="M10 12h4"/></svg>
+                    </div>
+                    <h3>Download as .zip</h3>
+                    <p>Bundle a carousel or story into a single archive, as a global default or per download from the menu.</p>
                 </div>
                 <div class="feature span-2">
                     <div class="feature-icon">
@@ -1287,6 +1362,31 @@
                         <h3>Zero tracking</h3>
                         <p>No analytics, no telemetry, no servers. Your browsing data stays on your device. All scraping and formatting runs locally inside your browser, meaning SocialSnag can't track what you download.</p>
                     </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="reviews">
+        <div class="container">
+            <div class="review-card">
+                <div class="review-stars">
+                    <svg viewBox="0 0 24 24"><path d="M12 2l2.9 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l7.1-1.01L12 2z"/></svg>
+                    <svg viewBox="0 0 24 24"><path d="M12 2l2.9 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l7.1-1.01L12 2z"/></svg>
+                    <svg viewBox="0 0 24 24"><path d="M12 2l2.9 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l7.1-1.01L12 2z"/></svg>
+                    <svg viewBox="0 0 24 24"><path d="M12 2l2.9 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l7.1-1.01L12 2z"/></svg>
+                    <svg viewBox="0 0 24 24"><path d="M12 2l2.9 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l7.1-1.01L12 2z"/></svg>
+                </div>
+                <p class="review-quote">&ldquo;FINALLY! I always wished something would come along that is both fully functional AND extremely simple and integrated. LOVE IT!&rdquo;</p>
+                <div class="review-source">
+                    <svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <circle cx="16" cy="16" r="12" stroke="#3b82f6" stroke-width="2"/>
+                        <circle cx="16" cy="16" r="5" fill="#3b82f6"/>
+                        <path d="M4 16h8" stroke="#22c55e" stroke-width="2" stroke-linecap="round"/>
+                        <path d="M20 16l6.9-4" stroke="#eab308" stroke-width="2" stroke-linecap="round"/>
+                        <path d="M20 16l-2.9 7" stroke="#ef4444" stroke-width="2" stroke-linecap="round"/>
+                    </svg>
+                    Chrome Web Store review
                 </div>
             </div>
         </div>
