@@ -5,7 +5,7 @@
 SocialSnag — Chrome extension (Manifest V3) that downloads full-resolution images and videos from social media via right-click context menu.
 
 **Repo:** https://github.com/jamditis/socialsnag (public)
-**Version:** 1.1.0
+**Version:** 1.2.0
 **Author:** Joe Amditis
 
 ## Architecture
@@ -14,9 +14,10 @@ ESM modules in `src/`, bundled by esbuild to `dist/`. Chrome loads from `dist/`.
 
 ```
 src/
-  background.js          — service worker: context menu, downloads, URL validation, download history, optional webRequest
+  background.js          — service worker: context menu (SocialSnag submenu), downloads, URL validation, download history, Instagram API resolution (posts + stories), zip and copy-URL routing, optional webRequest
   platforms/common.js    — shared exports: ALLOWED_DOMAINS, isAllowedDomain, isHttps, sanitizeFilename, findPostContainer, findNearestMedia, getCapturedMedia
-  platforms/instagram.js — Instagram resolver (srcset upgrade, JSON extraction, video script extraction, carousel support)
+  platforms/instagram.js — Instagram DOM resolver (srcset upgrade, JSON extraction, video script extraction, carousel support) — the fallback when the API path fails
+  platforms/instagram-api.js — Instagram private web API (pure module): shortcodeToMediaId, parsePostMedia (single + carousel), extractStoryRef, parseStoryTray, mapIgStatusToMessage
   platforms/twitter.js   — Twitter/X resolver (name=orig rewrite, profile pic upgrade, video via webRequest captures)
   platforms/facebook.js  — Facebook resolver (fbcdn upgrade, video extraction from scripts)
   platforms/bluesky.js   — Bluesky resolver (feed_fullsize upgrade, avatar upgrade, direct video URLs)
@@ -25,6 +26,8 @@ src/
   platforms/youtube.js   — YouTube resolver — NOT in manifest, fully excluded
   popup.html/js/css      — popup UI: dark theme, platform status grid, download history with SVG icons
   options.html/js/css    — settings: card layout, custom toggle switches, save on change
+  offscreen.html/js      — offscreen document: builds zips (client-zip) and writes the clipboard, which an MV3 service worker cannot do directly
+  offscreen-host.js      — service-worker side helpers to create the offscreen doc and call it (copyViaOffscreen, zipViaOffscreen, revokeViaOffscreen)
   fonts/syne.woff2       — Syne display font (bundled, not CDN)
   fonts/outfit.woff2     — Outfit body font (bundled, not CDN)
 ```
@@ -35,7 +38,7 @@ src/
 npm install                    # install dev deps (esbuild, vitest, eslint)
 npm run build                  # bundle to dist/
 npm run build:zip              # bundle + minify + create socialsnag-{version}.zip
-npm test                       # run vitest (122 tests)
+npm test                       # run vitest (194 tests)
 npm run lint                   # eslint src/
 ```
 
@@ -87,7 +90,8 @@ Instagram, Twitter/X, Facebook, Bluesky.
 - **TikTok** — code in repo, `optional_host_permissions`. Needs ESM conversion. Medium-high rejection risk.
 
 ### Permission model
-- Core: `contextMenus`, `downloads`, `activeTab`, `storage`, `notifications`, `scripting`
+- Core: `contextMenus`, `downloads`, `activeTab`, `storage`, `notifications`, `scripting`, `offscreen`, `clipboardWrite`
+- `clipboardWrite` triggers a "modify data you copy and paste" install warning; existing users re-accept on update
 - Optional: `webRequest` (toggled via "advanced mode" in settings)
 - Host permissions (upfront): Instagram + CDN, Twitter/X + CDN, Facebook + CDN, Bluesky + CDN
 - Optional host permissions: LinkedIn + CDN, TikTok + CDN
@@ -110,11 +114,12 @@ Instagram, Twitter/X, Facebook, Bluesky.
 - `manifest.json` — permissions, content_scripts, version
 - `src/background.js` — the security gate (URL validation, `validateDownloadUrl()`)
 - `src/platforms/common.js` — shared domain allowlist
+- `src/offscreen.js` / `src/offscreen-host.js` — the offscreen document and its service-worker callers (sender validation, zip/copy/revoke)
 - `build.js` — entry points, manifest rewrite, asset copying
 
 ### Testing
 ```bash
-npm test                           # all 122 tests
+npm test                           # all 194 tests
 npx vitest run test/instagram.test.js  # single file
 npm run test:watch                 # watch mode
 ```
@@ -134,6 +139,17 @@ Instagram videos use `blob:` URLs (MediaSource API). Direct `video.src` is alway
 This works without advanced mode (webRequest) enabled.
 
 ## Current status
+
+### Done (v1.2.0)
+- Instagram carousel and bulk download resolve through the media API (every slide, in order), with DOM scraping as the fallback
+- Instagram stories: the viewed story and the user's whole active tray, via the reels_media API
+- Copy media URL and download-all-as-zip, both routed through the extension's first offscreen document (client-zip for the archive)
+- `zipMultiPosts` global setting plus a per-download .zip menu item that overrides it
+- Context menu reorganized under a SocialSnag parent submenu
+- Specific Instagram error messages: login required, rate-limited, expired or deleted
+- Dead TikTok code path removed from the service worker
+- 194 unit tests (vitest)
+- New permissions: `offscreen`, `clipboardWrite` (no new host permissions)
 
 ### Done (v1.1.0)
 - 4 platforms: Instagram, Twitter/X, Facebook, Bluesky
