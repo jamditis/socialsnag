@@ -38,7 +38,7 @@ src/
 npm install                    # install dev deps (esbuild, vitest, eslint)
 npm run build                  # bundle to dist/
 npm run build:zip              # bundle + minify + create socialsnag-{version}.zip
-npm test                       # run vitest (194 tests)
+npm test                       # run vitest (201 tests)
 npm run lint                   # eslint src/
 ```
 
@@ -119,7 +119,7 @@ Instagram, Twitter/X, Facebook, Bluesky.
 
 ### Testing
 ```bash
-npm test                           # all 194 tests
+npm test                           # all 201 tests
 npx vitest run test/instagram.test.js  # single file
 npm run test:watch                 # watch mode
 ```
@@ -148,7 +148,7 @@ This works without advanced mode (webRequest) enabled.
 - Context menu reorganized under a SocialSnag parent submenu
 - Specific Instagram error messages: login required, rate-limited, expired or deleted
 - Dead TikTok code path removed from the service worker
-- 194 unit tests (vitest)
+- 201 unit tests (vitest)
 - New permissions: `offscreen`, `clipboardWrite` (no new host permissions)
 
 ### Done (v1.1.0)
