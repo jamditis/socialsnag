@@ -56,8 +56,11 @@ writeFileSync('dist/manifest.json', JSON.stringify(manifest, null, 2));
 console.log('Build complete: dist/');
 
 if (isZip) {
-  const version = manifest.version;
-  const zipName = `socialsnag-${version}.zip`;
+  // Name the zip after the package, not a hardcoded string, so this build
+  // script is copy-paste portable to the other extension repos. publish-cws.js
+  // looks for the same <name>-<version>.zip.
+  const { name } = JSON.parse(readFileSync('package.json', 'utf8'));
+  const zipName = `${name}-${manifest.version}.zip`;
   execFileSync('zip', ['-r', `../${zipName}`, '.'], { cwd: 'dist' });
   console.log(`Zip created: ${zipName}`);
 }

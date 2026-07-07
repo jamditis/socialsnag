@@ -40,7 +40,22 @@ Keep them in a secret manager or an untracked env file, never in the repo.
 | `CWS_CLIENT_SECRET` | yes | OAuth client secret |
 | `CWS_REFRESH_TOKEN` | yes | from the OAuth Playground step |
 | `CWS_PUBLISHER_ID` | yes | from the developer dashboard |
-| `CWS_ITEM_ID` | no | defaults to the published SocialSnag item id |
+| `CWS_ITEM_ID` | no | overrides the repo's `package.json` `cws.itemId`; set it only for a one-off target |
+
+## Which store item it targets
+
+The upload goes to one store listing, identified by its item id. The script
+resolves it in order: `CWS_ITEM_ID` from the environment first (an override for
+a one-off target), then `cws.itemId` in the repo's own `package.json`. There is
+no built-in default — if neither is set the script stops with an error rather
+than guessing, so a build is never published to the wrong extension.
+
+The `chromewebstore` scope on the refresh token manages every extension the
+publisher account owns, so the same four credentials work for all of them. To
+publish another extension, copy `publish-cws.js` into its repo, add that repo's
+own `cws.itemId` to its `package.json`, and run `npm run publish:cws` there. The
+default zip name also follows `package.json` `name` (use a plain, unscoped name
+so the zip stays a flat filename), so nothing in the script is SocialSnag-specific.
 
 ## Publishing
 

@@ -172,6 +172,7 @@ This works without advanced mode (webRequest) enabled.
 
 ### Chrome Web Store
 - **Initial CWS publish date:** 2026-03-23 — Item ID: `llbpeneloehnlaomolbalbmhjncpmnfa`
+- The publish script (`npm run publish:cws`) reads this item id from `package.json` `cws.itemId`; `CWS_ITEM_ID` overrides it. See docs/cws-publishing.md.
 - CWS listing (source of truth for dates/versions): https://chromewebstore.google.com/detail/socialsnag/llbpeneloehnlaomolbalbmhjncpmnfa
 
 ### Pending
