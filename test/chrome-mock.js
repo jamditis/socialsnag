@@ -52,6 +52,7 @@ globalThis.chrome = {
     onStartup: createEventTarget(),
     onMessage: createEventTarget(),
     openOptionsPage: () => {},
+    getContexts: async () => [],
   },
   contextMenus: {
     create: () => {},
@@ -77,4 +78,37 @@ globalThis.chrome = {
   scripting: {
     executeScript: async () => [],
   },
+  offscreen: {
+    createDocument: async () => {},
+    closeDocument: async () => {},
+    hasDocument: async () => false,
+  },
+};
+
+// URL blob helpers (not present in the jsdom/node test env by default)
+if (!globalThis.URL.createObjectURL) {
+  globalThis.URL.createObjectURL = () => 'blob:mock/00000000-0000-0000-0000-000000000000';
+}
+if (!globalThis.URL.revokeObjectURL) {
+  globalThis.URL.revokeObjectURL = () => {};
+}
+
+// navigator.clipboard
+if (!globalThis.navigator) globalThis.navigator = {};
+globalThis.navigator.clipboard = { writeText: async () => {} };
+
+// Simple installable fetch mock. Tests call installFetch(map|fn); resetFetch() clears it.
+globalThis.__fetchResponses = null;
+globalThis.installFetch = (handler) => { globalThis.__fetchResponses = handler; };
+globalThis.resetFetch = () => { globalThis.__fetchResponses = null; };
+globalThis.fetch = async (url) => {
+  const h = globalThis.__fetchResponses;
+  const spec = typeof h === 'function' ? h(url) : (h ? h[url] : null);
+  if (!spec) return { ok: false, status: 404, json: async () => ({}) };
+  return {
+    ok: spec.status ? spec.status >= 200 && spec.status < 400 : true,
+    status: spec.status || 200,
+    json: async () => spec.json,
+    blob: async () => spec.blob || new Blob([]),
+  };
 };
