@@ -272,6 +272,20 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       }
     }
 
+    // Feed and profile-grid carousels have no shortcode in the URL, so the
+    // API-first enumeration above was skipped and the content script returned
+    // only the ~2 slides Instagram lazy-renders in the DOM. If the content
+    // script read the post's shortcode from its permalink, enumerate the whole
+    // post via the API now and prefer that complete list; the DOM items remain
+    // the fallback when the API comes up empty.
+    if (platform === 'instagram' && type === 'all' && !triedIgPostApi
+        && response && response.shortcode) {
+      const apiItems = await resolveInstagramPost(response.shortcode);
+      if (apiItems && apiItems.length) {
+        response = { urls: apiItems, platform };
+      }
+    }
+
     if (!response || !response.urls || response.urls.length === 0) {
       const msg = (platform === 'instagram' && lastIgError)
         ? lastIgError

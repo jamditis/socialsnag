@@ -29,6 +29,18 @@ export function extractShortcode(pathname) {
   return match ? match[2] : null;
 }
 
+// Feed and profile-grid posts have no shortcode in the page URL, but the post's
+// own permalink (its timestamp link) is in the DOM as /p/<code>/, /reel/<code>/,
+// or /tv/<code>/. Profile (/username/) and explore links don't match, so the
+// first hit is the post itself. Returns the shortcode or null.
+export function shortcodeFromContainer(hrefs) {
+  for (const href of hrefs) {
+    const match = href && href.match(/\/(p|reel|tv)\/([A-Za-z0-9_-]+)/);
+    if (match) return match[2];
+  }
+  return null;
+}
+
 export function parseMediaFromJson(jsonStrings) {
   const items = [];
 
@@ -223,10 +235,36 @@ function findBroadContainer(target) {
   return null;
 }
 
+// Ancestor <a> hrefs of the clicked element, nearest-first. On a profile grid a
+// thumbnail is wrapped in its own <a href="/p/...">, so anchoring the shortcode
+// to the clicked target resolves the post the user actually clicked rather than
+// the first permalink in a shared row container.
+function ancestorHrefs(el) {
+  const hrefs = [];
+  const body = globalThis.document?.body;
+  let node = el;
+  while (node && node !== body) {
+    if (node.tagName === 'A') {
+      const href = node.getAttribute('href');
+      if (href) hrefs.push(href);
+    }
+    node = node.parentElement;
+  }
+  return hrefs;
+}
+
+// Descendant <a> hrefs of a container, in DOM order.
+function descendantHrefs(container) {
+  if (!container) return [];
+  return Array.from(container.querySelectorAll('a[href]')).map((a) => a.getAttribute('href'));
+}
+
 async function resolveAll(target, pathname) {
+  const urlShortcode = extractShortcode(pathname);
+
   // Try JSON extraction first for carousel data
   const jsonItems = extractFromPageJson(pathname);
-  if (jsonItems.length > 0) return jsonItems;
+  if (jsonItems.length > 0) return { items: jsonItems, shortcode: urlShortcode };
 
   // Fall back to DOM collection
   let post = findPostContainer(target, [
@@ -243,9 +281,21 @@ async function resolveAll(target, pathname) {
     post = findBroadContainer(target);
   }
 
-  if (!post) return resolveSingle(target?.src || '', target, pathname);
+  if (!post) return { items: resolveSingle(target?.src || '', target, pathname), shortcode: urlShortcode };
 
-  const shortcode = extractShortcode(pathname);
+  // On the feed/grid the URL has no shortcode; read the post's permalink from
+  // the DOM so the background can enumerate the whole carousel via the API (the
+  // DOM only renders ~2 slides at a time). Try three scopes in order:
+  //   1. ancestors of the clicked target — a grid thumbnail wraps its own /p/
+  //      link, so this resolves the exact post the user clicked;
+  //   2. the enclosing <article> — in the feed the permalink is the timestamp
+  //      link in the article header, which is neither an ancestor of the media
+  //      nor inside the narrow media wrapper findPostContainer often returns;
+  //   3. the resolved container itself, as a last resort.
+  const shortcode = urlShortcode
+    || shortcodeFromContainer(ancestorHrefs(target))
+    || shortcodeFromContainer(descendantHrefs(target?.closest?.('article')))
+    || shortcodeFromContainer(descendantHrefs(post));
   const { items, index: nextIndex } = collectMediaFromContainer(post, shortcode);
   let index = nextIndex;
 
@@ -268,7 +318,10 @@ async function resolveAll(target, pathname) {
     });
   }
 
-  return items.length > 0 ? items : resolveSingle(target?.src || '', target, pathname);
+  return {
+    items: items.length > 0 ? items : resolveSingle(target?.src || '', target, pathname),
+    shortcode,
+  };
 }
 
 function initContentScript() {
@@ -287,10 +340,10 @@ function initContentScript() {
 
       Promise.resolve()
         .then(() => (message.type === 'single'
-          ? resolveSingle(message.srcUrl, target, pathname)
+          ? { items: resolveSingle(message.srcUrl, target, pathname), shortcode: null }
           : resolveAll(target, pathname)))
-        .then((urls) => {
-          sendResponse({ urls: urls || [], platform: 'instagram' });
+        .then((result) => {
+          sendResponse({ urls: result.items || [], platform: 'instagram', shortcode: result.shortcode || null });
         })
         .catch((err) => {
           console.error('SocialSnag instagram error:', err);

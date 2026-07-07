@@ -4,6 +4,7 @@ import {
   extractShortcode,
   parseMediaFromJson,
   extractVideoUrlFromScripts,
+  shortcodeFromContainer,
 } from '../src/platforms/instagram.js';
 
 describe('upgradeImageUrl', () => {
@@ -168,5 +169,31 @@ describe('extractVideoUrlFromScripts', () => {
     const scripts = [null, '', '{"video_url":"https:\\/\\/scontent.cdninstagram.com\\/video.mp4"}'];
     const result = extractVideoUrlFromScripts(scripts);
     expect(result).toBe('https://scontent.cdninstagram.com/video.mp4');
+  });
+});
+
+describe('shortcodeFromContainer', () => {
+  it('picks the post permalink and ignores profile and explore links', () => {
+    // A feed article's header links to /username/, the timestamp links to the
+    // post permalink; only the permalink carries the shortcode.
+    expect(shortcodeFromContainer(['/theuser/', '/p/CxYz-1_aB/', '/explore/tags/x/']))
+      .toBe('CxYz-1_aB');
+  });
+
+  it('matches /reel/ and /tv/ permalinks too', () => {
+    expect(shortcodeFromContainer(['/reel/AbC123/'])).toBe('AbC123');
+    expect(shortcodeFromContainer(['/tv/XyZ789/'])).toBe('XyZ789');
+  });
+
+  it('returns the first permalink when several are present', () => {
+    expect(shortcodeFromContainer(['/p/first_ONE/', '/p/second_TWO/'])).toBe('first_ONE');
+  });
+
+  it('returns null when no permalink is present', () => {
+    expect(shortcodeFromContainer(['/theuser/', '/explore/', null, undefined])).toBeNull();
+  });
+
+  it('returns null for an empty list', () => {
+    expect(shortcodeFromContainer([])).toBeNull();
   });
 });
