@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { interpretUploadState, interpretPublishState, resolveZipPath } from '../publish-cws.js';
+import { interpretUploadState, interpretPublishState, resolveZipPath, resolveItemId } from '../publish-cws.js';
 
 describe('interpretUploadState', () => {
   it('treats SUCCEEDED as ok', () => {
@@ -57,11 +57,36 @@ describe('interpretPublishState', () => {
 });
 
 describe('resolveZipPath', () => {
-  it('defaults to the manifest-version zip', () => {
-    expect(resolveZipPath(['--skip-publish'], '1.2.1')).toBe('socialsnag-1.2.1.zip');
+  it('defaults to the <name>-<version> zip from package.json', () => {
+    expect(resolveZipPath(['--skip-publish'], 'socialsnag', '1.2.1')).toBe('socialsnag-1.2.1.zip');
+  });
+
+  it('derives the prefix from the package name so it is not repo-specific', () => {
+    // Portability: copied into another extension repo, the default zip name
+    // follows that repo's package.json "name", not a hardcoded "socialsnag".
+    expect(resolveZipPath(['--skip-publish'], 'linksweepr', '2.0.0')).toBe('linksweepr-2.0.0.zip');
   });
 
   it('uses an explicit .zip argument when given', () => {
-    expect(resolveZipPath(['some/build.zip'], '1.2.1')).toBe('some/build.zip');
+    expect(resolveZipPath(['some/build.zip'], 'socialsnag', '1.2.1')).toBe('some/build.zip');
+  });
+});
+
+describe('resolveItemId', () => {
+  it('uses package.json cws.itemId when no env override is set', () => {
+    expect(resolveItemId(undefined, { cws: { itemId: 'abc123' } })).toBe('abc123');
+  });
+
+  it('lets CWS_ITEM_ID override the package.json value', () => {
+    // env beats config so a one-off can target a different listing without
+    // editing package.json.
+    expect(resolveItemId('envid', { cws: { itemId: 'pkgid' } })).toBe('envid');
+  });
+
+  it('throws when neither source provides an id', () => {
+    // No hardcoded fallback on purpose: guessing would risk publishing one
+    // repo's build to another extension. Missing config must fail loudly.
+    expect(() => resolveItemId(undefined, {})).toThrow(/item id/);
+    expect(() => resolveItemId('', { cws: {} })).toThrow(/item id/);
   });
 });

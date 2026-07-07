@@ -8,6 +8,11 @@
 // Credentials come from the environment and are never committed. See
 // docs/cws-publishing.md for the one-time OAuth setup.
 //
+// The upload targets the repo's package.json "cws.itemId" (CWS_ITEM_ID
+// overrides it). One publisher credential set manages every extension the
+// account owns, so copying this script into another extension repo and setting
+// that repo's cws.itemId is all it needs to publish a different extension.
+//
 // Usage:
 //   npm run publish:cws                    upload the version's zip, then publish
 //   npm run publish:cws -- --skip-publish  upload only (publish later from the dashboard)
@@ -19,7 +24,6 @@ import { pathToFileURL } from 'node:url';
 
 const TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const API = 'https://chromewebstore.googleapis.com';
-const DEFAULT_ITEM_ID = 'llbpeneloehnlaomolbalbmhjncpmnfa';
 const REQUIRED_ENV = ['CWS_CLIENT_ID', 'CWS_CLIENT_SECRET', 'CWS_REFRESH_TOKEN', 'CWS_PUBLISHER_ID'];
 
 // --- Pure helpers (exported for testing) ---
@@ -51,9 +55,25 @@ export function interpretPublishState(json) {
   return { ok: PUBLISH_OK_STATES.has(state), state: state || 'unknown', warnings };
 }
 
-export function resolveZipPath(args, version) {
+export function resolveZipPath(args, name, version) {
   const explicit = args.find((a) => a.endsWith('.zip'));
-  return explicit || `socialsnag-${version}.zip`;
+  return explicit || `${name}-${version}.zip`;
+}
+
+// Which store listing receives the upload. CWS_ITEM_ID from the environment
+// wins (a one-off override, or any checkout without repo config), then the
+// repo's own package.json "cws.itemId". No baked-in default on purpose: a
+// hardcoded id would let this script silently publish one repo's build to a
+// different extension when the config is missing. Absent in both places is a
+// hard error, not a guess.
+export function resolveItemId(envItemId, pkg) {
+  const id = envItemId || pkg?.cws?.itemId;
+  if (!id) {
+    throw new Error(
+      'no store item id: set CWS_ITEM_ID or add "cws": { "itemId": "..." } to package.json. See docs/cws-publishing.md',
+    );
+  }
+  return id;
 }
 
 // --- Network ---
@@ -112,7 +132,7 @@ async function main() {
   const args = process.argv.slice(2);
   const skipPublish = args.includes('--skip-publish');
 
-  const env = { CWS_ITEM_ID: process.env.CWS_ITEM_ID || DEFAULT_ITEM_ID };
+  const env = {};
   const missing = [];
   for (const key of REQUIRED_ENV) {
     env[key] = process.env[key];
@@ -122,8 +142,16 @@ async function main() {
     throw new Error(`missing env: ${missing.join(', ')}. See docs/cws-publishing.md`);
   }
 
+  const pkg = JSON.parse(await readFile('package.json', 'utf8'));
+  env.CWS_ITEM_ID = resolveItemId(process.env.CWS_ITEM_ID, pkg);
+  // Surface the one situation that would publish to the wrong extension: an
+  // env override that disagrees with the repo's declared id.
+  if (process.env.CWS_ITEM_ID && pkg?.cws?.itemId && process.env.CWS_ITEM_ID !== pkg.cws.itemId) {
+    console.log(`note: CWS_ITEM_ID overrides package.json cws.itemId (${pkg.cws.itemId} -> ${process.env.CWS_ITEM_ID})`);
+  }
+
   const manifest = JSON.parse(await readFile('manifest.json', 'utf8'));
-  const zipPath = resolveZipPath(args, manifest.version);
+  const zipPath = resolveZipPath(args, pkg.name, manifest.version);
   if (!existsSync(zipPath)) {
     throw new Error(`zip not found: ${zipPath}. Run "npm run build:zip" first.`);
   }
