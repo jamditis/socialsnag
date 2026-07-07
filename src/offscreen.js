@@ -2,14 +2,36 @@
 // The MV3 service worker cannot do either directly.
 import { downloadZip } from 'client-zip';
 
+// Copy text to the clipboard from the offscreen document. The async Clipboard
+// API (navigator.clipboard.writeText) rejects here because an offscreen document
+// is never focused; the hidden-textarea + execCommand('copy') path copies the
+// current selection synchronously and works without focus. Returns whether the
+// copy succeeded.
+function copyTextToClipboard(text) {
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  // Keep it out of view so it never flashes or scrolls the document.
+  textarea.style.position = 'fixed';
+  textarea.style.top = '-9999px';
+  document.body.appendChild(textarea);
+  textarea.select();
+  let ok = false;
+  try {
+    ok = document.execCommand('copy');
+  } catch (e) {
+    ok = false;
+  }
+  document.body.removeChild(textarea);
+  return ok;
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (sender.id !== chrome.runtime.id) return;
   if (message?.target !== 'offscreen') return;
 
   if (message.action === 'clipboard') {
-    navigator.clipboard.writeText(message.text)
-      .then(() => sendResponse({ ok: true }))
-      .catch((e) => sendResponse({ ok: false, error: String(e) }));
+    const ok = copyTextToClipboard(message.text);
+    sendResponse(ok ? { ok: true } : { ok: false, error: 'clipboard copy command was rejected' });
     return true;
   }
 

@@ -15,13 +15,27 @@ const listener = globalThis.chrome.runtime.onMessage._listeners[0];
 const OWN_ID = 'test-extension-id';
 
 describe('offscreen onMessage listener', () => {
-  let originalWriteText;
+  // The clipboard path uses a hidden textarea + document.execCommand('copy'),
+  // which the async Clipboard API can't do from an unfocused offscreen document.
+  // The node test env has no document, so stub the minimum the path touches.
+  let execCommand;
+  let lastTextarea;
+  let originalDocument;
   beforeEach(() => {
-    originalWriteText = globalThis.navigator.clipboard.writeText;
-    globalThis.navigator.clipboard.writeText = vi.fn().mockResolvedValue();
+    execCommand = vi.fn(() => true);
+    lastTextarea = null;
+    originalDocument = globalThis.document;
+    globalThis.document = {
+      createElement: () => {
+        lastTextarea = { value: '', style: {}, select: vi.fn() };
+        return lastTextarea;
+      },
+      body: { appendChild: vi.fn(), removeChild: vi.fn() },
+      execCommand,
+    };
   });
   afterEach(() => {
-    globalThis.navigator.clipboard.writeText = originalWriteText;
+    globalThis.document = originalDocument;
   });
 
   it('rejects a message from a foreign sender', () => {
@@ -30,7 +44,7 @@ describe('offscreen onMessage listener', () => {
       { id: 'someone-else' },
       vi.fn(),
     );
-    expect(globalThis.navigator.clipboard.writeText).not.toHaveBeenCalled();
+    expect(execCommand).not.toHaveBeenCalled();
   });
 
   it('ignores a message aimed at a different target', () => {
@@ -39,16 +53,30 @@ describe('offscreen onMessage listener', () => {
       { id: OWN_ID },
       vi.fn(),
     );
-    expect(globalThis.navigator.clipboard.writeText).not.toHaveBeenCalled();
+    expect(execCommand).not.toHaveBeenCalled();
   });
 
-  it('writes the clipboard for a valid clipboard message', () => {
+  it('copies via execCommand for a valid clipboard message', () => {
+    const sendResponse = vi.fn();
     listener(
       { target: 'offscreen', action: 'clipboard', text: 'https://cdn.example/x.jpg' },
       { id: OWN_ID },
-      vi.fn(),
+      sendResponse,
     );
-    expect(globalThis.navigator.clipboard.writeText).toHaveBeenCalledWith('https://cdn.example/x.jpg');
+    expect(lastTextarea.value).toBe('https://cdn.example/x.jpg');
+    expect(execCommand).toHaveBeenCalledWith('copy');
+    expect(sendResponse).toHaveBeenCalledWith({ ok: true });
+  });
+
+  it('reports failure when the copy command is rejected', () => {
+    execCommand.mockReturnValue(false);
+    const sendResponse = vi.fn();
+    listener(
+      { target: 'offscreen', action: 'clipboard', text: 'x' },
+      { id: OWN_ID },
+      sendResponse,
+    );
+    expect(sendResponse.mock.calls[0][0].ok).toBe(false);
   });
 });
 
