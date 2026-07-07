@@ -3,6 +3,7 @@
 import { downloadZip } from 'client-zip';
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (sender.id !== chrome.runtime.id) return;
   if (message?.target !== 'offscreen') return;
 
   if (message.action === 'clipboard') {
@@ -15,17 +16,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'zip') {
     // message.files: [{ name, url }]
     (async () => {
-      const inputs = [];
-      for (const f of message.files) {
-        try {
-          const resp = await fetch(f.url);
-          if (resp.ok) inputs.push({ name: f.name, input: resp });
-        } catch (e) { /* skip a failed file */ }
+      try {
+        const inputs = [];
+        for (const f of message.files) {
+          try {
+            const resp = await fetch(f.url);
+            if (resp.ok) inputs.push({ name: f.name, input: resp });
+          } catch (e) { /* skip a failed file */ }
+        }
+        if (inputs.length === 0) { sendResponse({ ok: false, error: 'no files fetched' }); return; }
+        const blob = await downloadZip(inputs).blob();
+        const url = URL.createObjectURL(blob);
+        sendResponse({ ok: true, url, count: inputs.length });
+      } catch (e) {
+        sendResponse({ ok: false, error: String(e) });
       }
-      if (inputs.length === 0) { sendResponse({ ok: false, error: 'no files fetched' }); return; }
-      const blob = await downloadZip(inputs).blob();
-      const url = URL.createObjectURL(blob);
-      sendResponse({ ok: true, url, count: inputs.length });
     })();
     return true;
   }

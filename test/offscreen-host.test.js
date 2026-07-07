@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { ensureOffscreen, copyViaOffscreen } from '../src/offscreen-host.js';
+import { ensureOffscreen, copyViaOffscreen, zipViaOffscreen } from '../src/offscreen-host.js';
 
 describe('ensureOffscreen', () => {
   beforeEach(() => {
@@ -24,5 +24,20 @@ describe('copyViaOffscreen', () => {
     globalThis.chrome.runtime.sendMessage = (msg) => { sent.push(msg); return Promise.resolve({ ok: true }); };
     await copyViaOffscreen('https://cdn.example/x.jpg');
     expect(sent[0]).toMatchObject({ target: 'offscreen', action: 'clipboard', text: 'https://cdn.example/x.jpg' });
+  });
+});
+
+describe('zipViaOffscreen', () => {
+  beforeEach(() => {
+    // Doc already exists so ensureOffscreen is a no-op.
+    globalThis.chrome.runtime.getContexts = vi.fn().mockResolvedValue([{ contextType: 'OFFSCREEN_DOCUMENT' }]);
+  });
+  it('returns null when the offscreen build fails', async () => {
+    globalThis.chrome.runtime.sendMessage = vi.fn().mockResolvedValue({ ok: false });
+    expect(await zipViaOffscreen([{ name: 'a.jpg', url: 'https://cdn.example/a.jpg' }])).toBeNull();
+  });
+  it('returns the blob url when the build succeeds', async () => {
+    globalThis.chrome.runtime.sendMessage = vi.fn().mockResolvedValue({ ok: true, url: 'blob:abc' });
+    expect(await zipViaOffscreen([{ name: 'a.jpg', url: 'https://cdn.example/a.jpg' }])).toBe('blob:abc');
   });
 });
