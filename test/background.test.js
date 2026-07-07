@@ -647,3 +647,34 @@ describe('zip download flow', () => {
     }
   });
 });
+
+describe('context menu registration', () => {
+  it('nests the four actions under one SocialSnag parent', () => {
+    const created = [];
+    const origCreate = globalThis.chrome.contextMenus.create;
+    globalThis.chrome.contextMenus.create = (opts) => { created.push(opts); };
+    try {
+      // onInstalled listener 0 is the menu registration (listener 1 is
+      // advanced-mode init); firing all is order-independent and safe.
+      globalThis.chrome.runtime.onInstalled._listeners.forEach((fn) => fn());
+    } finally {
+      globalThis.chrome.contextMenus.create = origCreate;
+    }
+
+    const parent = created.find((m) => m.id === 'socialsnag-parent');
+    expect(parent).toBeTruthy();
+    expect(parent.title).toBe('SocialSnag');
+    expect(parent.parentId).toBeUndefined();
+    expect(parent.documentUrlPatterns).toBeTruthy();
+
+    const children = created.filter((m) => m.parentId === 'socialsnag-parent');
+    expect(children.map((c) => c.id).sort()).toEqual([
+      'socialsnag-copy-url',
+      'socialsnag-download-all',
+      'socialsnag-download-single',
+      'socialsnag-download-zip',
+    ]);
+    // Children carry no "SocialSnag:" prefix — the parent supplies it.
+    children.forEach((c) => expect(c.title.startsWith('SocialSnag')).toBe(false));
+  });
+});

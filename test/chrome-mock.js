@@ -56,6 +56,7 @@ globalThis.chrome = {
   },
   contextMenus: {
     create: () => {},
+    removeAll: (cb) => { if (cb) cb(); },
     onClicked: createEventTarget(),
   },
   tabs: {

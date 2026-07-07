@@ -4,6 +4,7 @@ import { ALLOWED_DOMAINS, sanitizeFilename } from './platforms/common.js';
 import { IG_APP_ID, shortcodeToMediaId, parsePostMedia, extractStoryRef, parseStoryTray, mapIgStatusToMessage } from './platforms/instagram-api.js';
 import { copyViaOffscreen, zipViaOffscreen, revokeViaOffscreen } from './offscreen-host.js';
 
+const MENU_PARENT = 'socialsnag-parent';
 const MENU_DOWNLOAD_SINGLE = 'socialsnag-download-single';
 const MENU_DOWNLOAD_ALL = 'socialsnag-download-all';
 const MENU_DOWNLOAD_ZIP = 'socialsnag-download-zip';
@@ -95,31 +96,21 @@ export function sanitizeDownloadPath(rawFilename, platform, ext, downloadPath) {
 
 // --- Browser wiring (not exported) ---
 
-// Register context menu items on install
+// Register the context menu on install. removeAll first so re-registering on an
+// update never hits a duplicate-id error. The four actions nest under one
+// SocialSnag parent; children inherit the parent's contexts and URL patterns.
 chrome.runtime.onInstalled.addListener(() => {
-  chrome.contextMenus.create({
-    id: MENU_DOWNLOAD_SINGLE,
-    title: 'SocialSnag: Download this (HD)',
-    contexts: ['page', 'image', 'video', 'link'],
-    documentUrlPatterns: SUPPORTED_URL_PATTERNS,
-  });
-  chrome.contextMenus.create({
-    id: MENU_DOWNLOAD_ALL,
-    title: 'SocialSnag: Download all from post',
-    contexts: ['page', 'image', 'video', 'link'],
-    documentUrlPatterns: SUPPORTED_URL_PATTERNS,
-  });
-  chrome.contextMenus.create({
-    id: MENU_DOWNLOAD_ZIP,
-    title: 'SocialSnag: Download all as .zip',
-    contexts: ['page', 'image', 'video', 'link'],
-    documentUrlPatterns: SUPPORTED_URL_PATTERNS,
-  });
-  chrome.contextMenus.create({
-    id: MENU_COPY_URL,
-    title: 'SocialSnag: Copy media URL',
-    contexts: ['page', 'image', 'video', 'link'],
-    documentUrlPatterns: SUPPORTED_URL_PATTERNS,
+  chrome.contextMenus.removeAll(() => {
+    chrome.contextMenus.create({
+      id: MENU_PARENT,
+      title: 'SocialSnag',
+      contexts: ['page', 'image', 'video', 'link'],
+      documentUrlPatterns: SUPPORTED_URL_PATTERNS,
+    });
+    chrome.contextMenus.create({ id: MENU_DOWNLOAD_SINGLE, parentId: MENU_PARENT, title: 'Download this (HD)' });
+    chrome.contextMenus.create({ id: MENU_DOWNLOAD_ALL, parentId: MENU_PARENT, title: 'Download all from post' });
+    chrome.contextMenus.create({ id: MENU_DOWNLOAD_ZIP, parentId: MENU_PARENT, title: 'Download all as .zip' });
+    chrome.contextMenus.create({ id: MENU_COPY_URL, parentId: MENU_PARENT, title: 'Copy media URL' });
   });
 });
 
