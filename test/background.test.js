@@ -237,6 +237,90 @@ describe('context menu click — Instagram total failure', () => {
   });
 });
 
+describe('copy media URL', () => {
+  afterEach(() => resetFetch());
+
+  // Bluesky avoids IG API fetch mocking: resolveViaApi has no bluesky branch, so
+  // resolution falls to the content-script path (chrome.tabs.sendMessage), and
+  // cdn.bsky.app is on the download allowlist.
+  const copyInfo = {
+    menuItemId: 'socialsnag-copy-url',
+    srcUrl: 'https://cdn.bsky.app/img/a.jpg',
+    pageUrl: 'https://bsky.app/profile/x/post/1',
+  };
+  const copyTab = { id: 5, url: 'https://bsky.app/profile/x/post/1' };
+
+  it('copies the resolved URL to the clipboard and does not download', async () => {
+    // Offscreen document already exists, so ensureOffscreen is a no-op.
+    const origGetContexts = globalThis.chrome.runtime.getContexts;
+    globalThis.chrome.runtime.getContexts = async () => [{ contextType: 'OFFSCREEN_DOCUMENT' }];
+
+    // Capture the messages copyViaOffscreen sends to the offscreen document.
+    const sent = [];
+    const origSendMessage = globalThis.chrome.runtime.sendMessage;
+    globalThis.chrome.runtime.sendMessage = async (msg) => { sent.push(msg); return { ok: true }; };
+
+    // Content script resolves a single allowlisted Bluesky image.
+    const origTabsSend = globalThis.chrome.tabs.sendMessage;
+    globalThis.chrome.tabs.sendMessage = async () => ({
+      urls: [{ url: 'https://cdn.bsky.app/img/a.jpg', type: 'image', filename: 'bsky_a' }],
+      platform: 'bluesky',
+    });
+
+    const downloaded = [];
+    const origDownload = globalThis.chrome.downloads.download;
+    globalThis.chrome.downloads.download = async (opts) => { downloaded.push(opts.url); return downloaded.length; };
+
+    try {
+      const handler = globalThis.chrome.contextMenus.onClicked._listeners[0];
+      await handler(copyInfo, copyTab);
+    } finally {
+      globalThis.chrome.runtime.getContexts = origGetContexts;
+      globalThis.chrome.runtime.sendMessage = origSendMessage;
+      globalThis.chrome.tabs.sendMessage = origTabsSend;
+      globalThis.chrome.downloads.download = origDownload;
+    }
+
+    expect(sent).toContainEqual({
+      target: 'offscreen',
+      action: 'clipboard',
+      text: 'https://cdn.bsky.app/img/a.jpg',
+    });
+    expect(downloaded).toEqual([]);
+  });
+
+  it('shows a not-found notification and does not copy when nothing resolves', async () => {
+    const origGetContexts = globalThis.chrome.runtime.getContexts;
+    globalThis.chrome.runtime.getContexts = async () => [{ contextType: 'OFFSCREEN_DOCUMENT' }];
+
+    const sent = [];
+    const origSendMessage = globalThis.chrome.runtime.sendMessage;
+    globalThis.chrome.runtime.sendMessage = async (msg) => { sent.push(msg); return { ok: true }; };
+
+    // Content script resolves nothing.
+    const origTabsSend = globalThis.chrome.tabs.sendMessage;
+    globalThis.chrome.tabs.sendMessage = async () => ({ urls: [], platform: 'bluesky' });
+
+    const notes = [];
+    const origCreate = globalThis.chrome.notifications.create;
+    globalThis.chrome.notifications.create = (opts) => { notes.push(opts.message); };
+
+    try {
+      const handler = globalThis.chrome.contextMenus.onClicked._listeners[0];
+      await handler(copyInfo, copyTab);
+    } finally {
+      globalThis.chrome.runtime.getContexts = origGetContexts;
+      globalThis.chrome.runtime.sendMessage = origSendMessage;
+      globalThis.chrome.tabs.sendMessage = origTabsSend;
+      globalThis.chrome.notifications.create = origCreate;
+    }
+
+    // Copy was never attempted: no clipboard message reached the offscreen target.
+    expect(sent.some((m) => m && m.action === 'clipboard')).toBe(false);
+    expect(notes).toContain('Could not find downloadable media on this element.');
+  });
+});
+
 describe('context menu click — Instagram DOM fallback', () => {
   afterEach(() => resetFetch());
 

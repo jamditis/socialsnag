@@ -2,9 +2,11 @@
 
 import { ALLOWED_DOMAINS } from './platforms/common.js';
 import { IG_APP_ID, shortcodeToMediaId, parsePostMedia, extractStoryRef, parseStoryTray, mapIgStatusToMessage } from './platforms/instagram-api.js';
+import { copyViaOffscreen } from './offscreen-host.js';
 
 const MENU_DOWNLOAD_SINGLE = 'socialsnag-download-single';
 const MENU_DOWNLOAD_ALL = 'socialsnag-download-all';
+const MENU_COPY_URL = 'socialsnag-copy-url';
 
 // Supported platform URL patterns for context menu visibility
 const SUPPORTED_URL_PATTERNS = [
@@ -106,6 +108,12 @@ chrome.runtime.onInstalled.addListener(() => {
     contexts: ['page', 'image', 'video', 'link'],
     documentUrlPatterns: SUPPORTED_URL_PATTERNS,
   });
+  chrome.contextMenus.create({
+    id: MENU_COPY_URL,
+    title: 'SocialSnag: Copy media URL',
+    contexts: ['page', 'image', 'video', 'link'],
+    documentUrlPatterns: SUPPORTED_URL_PATTERNS,
+  });
 });
 
 // On startup, check if advanced mode is enabled and register webRequest if so
@@ -164,7 +172,8 @@ async function handleWebRequestCompleted(details) {
 
 // Handle context menu clicks
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
-  const type = info.menuItemId === MENU_DOWNLOAD_SINGLE ? 'single' : 'all';
+  const isCopy = info.menuItemId === MENU_COPY_URL;
+  const type = info.menuItemId === MENU_DOWNLOAD_ALL ? 'all' : 'single';
 
   const platform = detectPlatform(tab.url);
   if (!platform) {
@@ -254,6 +263,24 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
         ? lastIgError
         : 'Could not find downloadable media on this element.';
       showNotification(msg);
+      return;
+    }
+
+    // Copy media URL: write the resolved best URL to the clipboard instead of downloading.
+    if (isCopy) {
+      const firstUrl = response.urls[0].url;
+      const validation = validateDownloadUrl(firstUrl);
+      if (!validation.valid) {
+        console.warn(`SocialSnag: refused to copy ${validation.reason}`);
+        showNotification('SocialSnag: could not copy this media URL.');
+        return;
+      }
+      const result = await copyViaOffscreen(firstUrl);
+      if (result && result.ok) {
+        if (platformSettings.showNotifications) showNotification('Copied media URL to clipboard.');
+      } else {
+        showNotification('SocialSnag: could not copy to clipboard.');
+      }
       return;
     }
 
