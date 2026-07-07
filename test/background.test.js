@@ -1,9 +1,10 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import {
   detectPlatform,
   guessExtension,
   validateDownloadUrl,
   sanitizeDownloadPath,
+  resolveInstagramPost,
 } from '../src/background.js';
 
 describe('detectPlatform', () => {
@@ -131,5 +132,43 @@ describe('sanitizeDownloadPath', () => {
   it('replaces special characters in filename', () => {
     const path = sanitizeDownloadPath('file<>name', 'instagram', '.jpg');
     expect(path).toBe('SocialSnag/instagram/file__name.jpg');
+  });
+});
+
+// Fetch-shaped Instagram post nodes (media_type mirrors the private web API).
+const igImgSlide = (u) => ({ media_type: 1, image_versions2: { candidates: [{ url: u, width: 1080, height: 1080 }] } });
+const igVidSlide = (u) => ({ media_type: 2, video_versions: [{ url: u, width: 1080 }] });
+
+describe('resolveInstagramPost', () => {
+  afterEach(() => resetFetch());
+
+  it('enumerates every item in a carousel post', async () => {
+    installFetch((url) => {
+      if (!url.includes('i.instagram.com')) return null;
+      return {
+        status: 200,
+        json: { items: [{ carousel_media: [
+          igImgSlide('https://cdn.cdninstagram.com/1.jpg'),
+          igVidSlide('https://cdn.cdninstagram.com/2.mp4'),
+          igImgSlide('https://cdn.cdninstagram.com/3.jpg'),
+        ] }] },
+      };
+    });
+
+    const items = await resolveInstagramPost('ABC');
+    expect(items).toHaveLength(3);
+    expect(items.map((i) => i.url)).toEqual([
+      'https://cdn.cdninstagram.com/1.jpg',
+      'https://cdn.cdninstagram.com/2.mp4',
+      'https://cdn.cdninstagram.com/3.jpg',
+    ]);
+    expect(items.map((i) => i.type)).toEqual(['image', 'video', 'image']);
+    expect(items.map((i) => i.filename)).toEqual(['post_ABC_1', 'post_ABC_2', 'post_ABC_3']);
+  });
+
+  it('returns null when the API rate-limits (429)', async () => {
+    installFetch(() => ({ status: 429, json: {} }));
+    const items = await resolveInstagramPost('ABC');
+    expect(items).toBeNull();
   });
 });

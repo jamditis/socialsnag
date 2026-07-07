@@ -1,6 +1,7 @@
 'use strict';
 
 import { ALLOWED_DOMAINS } from './platforms/common.js';
+import { IG_APP_ID, shortcodeToMediaId, parsePostMedia, mapIgStatusToMessage } from './platforms/instagram-api.js';
 
 const MENU_DOWNLOAD_SINGLE = 'socialsnag-download-single';
 const MENU_DOWNLOAD_ALL = 'socialsnag-download-all';
@@ -178,41 +179,55 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   if (!platformSettings[`platform_${platform}`]) return;
 
   try {
-    // Try API-based video resolution FIRST (works without content script)
     const pageUrl = info.pageUrl || tab.url;
-    const apiResult = await resolveViaApi(platform, pageUrl);
     let response;
 
-    if (apiResult) {
-      // API found a video — use it directly
-      response = { urls: [apiResult], platform };
-    } else {
-      // No video via API — use content script for images
-      try {
-        response = await chrome.tabs.sendMessage(tab.id, {
-          action: 'resolve',
-          type: type,
-          srcUrl: info.srcUrl || '',
-          pageUrl: pageUrl,
-        });
-      } catch (sendErr) {
-        console.warn('SocialSnag: content script unavailable:', sendErr.message);
-        // Try injecting content script on demand
+    // Instagram: for "download all", enumerate the whole post via the API first.
+    if (platform === 'instagram' && type === 'all') {
+      const shortcode = pageUrl.match(/\/(p|reel|tv)\/([A-Za-z0-9_-]+)/)?.[2];
+      if (shortcode) {
+        const apiItems = await resolveInstagramPost(shortcode);
+        if (apiItems && apiItems.length) {
+          response = { urls: apiItems, platform };
+        }
+      }
+    }
+
+    // Fall back to the existing single-video API + content-script path.
+    if (!response) {
+      // Try API-based video resolution FIRST (works without content script)
+      const apiResult = await resolveViaApi(platform, pageUrl);
+      if (apiResult) {
+        // API found a video — use it directly
+        response = { urls: [apiResult], platform };
+      } else {
+        // No video via API — use content script for images
         try {
-          await chrome.scripting.executeScript({
-            target: { tabId: tab.id },
-            files: [`platforms/${platform}.js`],
-          });
-          await new Promise((r) => setTimeout(r, 150));
           response = await chrome.tabs.sendMessage(tab.id, {
             action: 'resolve',
             type: type,
             srcUrl: info.srcUrl || '',
             pageUrl: pageUrl,
           });
-        } catch (injectErr) {
-          showNotification('SocialSnag: could not connect to page. Try refreshing.');
-          return;
+        } catch (sendErr) {
+          console.warn('SocialSnag: content script unavailable:', sendErr.message);
+          // Try injecting content script on demand
+          try {
+            await chrome.scripting.executeScript({
+              target: { tabId: tab.id },
+              files: [`platforms/${platform}.js`],
+            });
+            await new Promise((r) => setTimeout(r, 150));
+            response = await chrome.tabs.sendMessage(tab.id, {
+              action: 'resolve',
+              type: type,
+              srcUrl: info.srcUrl || '',
+              pageUrl: pageUrl,
+            });
+          } catch (injectErr) {
+            showNotification('SocialSnag: could not connect to page. Try refreshing.');
+            return;
+          }
         }
       }
     }
@@ -310,60 +325,54 @@ async function resolveTwitterVideo(tweetId) {
   }
 }
 
-function shortcodeToMediaId(shortcode) {
-  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
-  let id = BigInt(0);
-  for (const char of shortcode) {
-    id = id * BigInt(64) + BigInt(alphabet.indexOf(char));
-  }
-  return id.toString();
-}
+// Tracks the most recent Instagram API failure so the click handler can show a
+// specific reason (login needed, rate limited, expired) instead of a generic message.
+let lastIgError = null;
 
-async function resolveInstagramVideo(shortcode) {
+// Fetch and enumerate every media item in an Instagram post (single image/video
+// or full carousel) via the private web API. Returns an array of media items, or
+// null on failure — recording the reason in lastIgError for the click handler.
+export async function resolveInstagramPost(shortcode) {
   try {
     const mediaId = shortcodeToMediaId(shortcode);
+    if (!mediaId) return null;
 
     const resp = await fetch(
       `https://i.instagram.com/api/v1/media/${mediaId}/info/`,
       {
         headers: {
-          'x-ig-app-id': '936619743392459',
+          'x-ig-app-id': IG_APP_ID,
         },
         credentials: 'include',
       }
     );
     if (!resp.ok) {
+      lastIgError = mapIgStatusToMessage(resp.status);
       console.warn('SocialSnag: Instagram API returned', resp.status);
       return null;
     }
+
     const data = await resp.json();
-
-    const items = data.items || [];
-    if (items.length === 0) return null;
-
-    const media = items[0];
-
-    // Direct video
-    if (media.video_versions?.length > 0) {
-      // Sort by width (largest first) and return best quality
-      const best = media.video_versions.sort((a, b) => (b.width || 0) - (a.width || 0))[0];
-      return best.url;
+    const items = parsePostMedia(data, shortcode);
+    if (items.length === 0) {
+      lastIgError = mapIgStatusToMessage(0);
+      return null;
     }
 
-    // Carousel: find first video in carousel_media
-    const carouselMedia = media.carousel_media || [];
-    for (const cm of carouselMedia) {
-      if (cm.video_versions?.length > 0) {
-        const best = cm.video_versions.sort((a, b) => (b.width || 0) - (a.width || 0))[0];
-        return best.url;
-      }
-    }
-
-    return null;
+    lastIgError = null;
+    return items;
   } catch (e) {
-    console.error('SocialSnag: Instagram video API failed:', e);
+    console.error('SocialSnag: Instagram post API failed:', e);
     return null;
   }
+}
+
+// Resolve the first video URL in an Instagram post (used by single-video flows).
+async function resolveInstagramVideo(shortcode) {
+  const items = await resolveInstagramPost(shortcode);
+  if (!items) return null;
+  const video = items.find((it) => it.type === 'video');
+  return video ? video.url : null;
 }
 
 // Validate and download a single media item
