@@ -7,6 +7,7 @@ import {
   resolveInstagramPost,
   resolveInstagramStories,
   downloadItemsAsZip,
+  resolveItemUrl,
 } from '../src/background.js';
 
 describe('detectPlatform', () => {
@@ -235,6 +236,31 @@ describe('context menu click — Instagram total failure', () => {
     }
 
     expect(notes).toContain('Log in to Instagram to download this.');
+  });
+});
+
+describe('resolveItemUrl', () => {
+  afterEach(() => resetFetch());
+
+  it('passes through an item that already has a url', async () => {
+    expect(await resolveItemUrl({ url: 'https://cdn.example/a.jpg' })).toBe('https://cdn.example/a.jpg');
+  });
+
+  it('resolves a Twitter lookup placeholder via the syndication API', async () => {
+    installFetch((url) => {
+      if (!url.includes('syndication.twimg.com')) return null;
+      return { status: 200, json: { mediaDetails: [{ type: 'video', video_info: { variants: [
+        { content_type: 'video/mp4', url: 'https://video.twimg.com/lo.mp4', bitrate: 256000 },
+        { content_type: 'video/mp4', url: 'https://video.twimg.com/hi.mp4', bitrate: 832000 },
+      ] } }] } };
+    });
+    // A copy or download of this placeholder must resolve to the real MP4, not undefined.
+    const url = await resolveItemUrl({ needsVideoLookup: true, tweetId: '123', type: 'video' });
+    expect(url).toBe('https://video.twimg.com/hi.mp4');
+  });
+
+  it('returns null for a placeholder with no id to resolve', async () => {
+    expect(await resolveItemUrl({ needsVideoLookup: true })).toBeNull();
   });
 });
 

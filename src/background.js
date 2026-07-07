@@ -269,7 +269,9 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 
     // Copy media URL: write the resolved best URL to the clipboard instead of downloading.
     if (isCopy) {
-      const firstUrl = response.urls[0].url;
+      // Resolve a lookup placeholder (e.g. a Twitter/X timeline video identified
+      // only by id) to a real URL first, the same way the download path does.
+      const firstUrl = await resolveItemUrl(response.urls[0]);
       const validation = validateDownloadUrl(firstUrl);
       if (!validation.valid) {
         console.warn(`SocialSnag: refused to copy ${validation.reason}`);
@@ -553,22 +555,26 @@ function revokeBlobWhenComplete(downloadId, blobUrl) {
 }
 
 // Validate and download a single media item
+// Resolve a lookup-placeholder item — a Twitter/X or Instagram video the content
+// script could only identify by id, needing a background API call — to a concrete
+// URL. Items that already carry a url pass straight through. Returns null if a
+// placeholder cannot be resolved. Shared by the download and copy-URL paths so
+// both handle these items identically.
+export async function resolveItemUrl(item) {
+  if (!item.needsVideoLookup) return item.url;
+  if (item.tweetId) return resolveTwitterVideo(item.tweetId);
+  if (item.shortcode) return resolveInstagramVideo(item.shortcode);
+  return null;
+}
+
 async function downloadMedia(item, platform) {
-  // Handle API-based video lookups
+  // Resolve API-based video lookups to a concrete URL before downloading.
   if (item.needsVideoLookup) {
-    let resolvedUrl = null;
-
-    if (item.tweetId) {
-      resolvedUrl = await resolveTwitterVideo(item.tweetId);
-    } else if (item.shortcode) {
-      resolvedUrl = await resolveInstagramVideo(item.shortcode);
-    }
-
+    const resolvedUrl = await resolveItemUrl(item);
     if (!resolvedUrl) {
       console.warn('SocialSnag: video API lookup returned no URL');
       return null;
     }
-
     item = { ...item, url: resolvedUrl, needsVideoLookup: false };
   }
 
