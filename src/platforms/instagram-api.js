@@ -61,3 +61,38 @@ export function parsePostMedia(apiJson, shortcode) {
   const single = mediaFromNode(item, shortcode, 1, false);
   return single ? [single] : [];
 }
+
+// Parse a story page path: /stories/{username}/{storyId}/
+export function extractStoryRef(pathname) {
+  const m = pathname.match(/^\/stories\/([^/]+)\/(\d+)/);
+  return m ? { username: m[1], storyId: m[2] } : null;
+}
+
+// Enumerate story items from a reels_media response. If storyId matches an
+// item pk, return only that one; otherwise return the whole active tray.
+export function parseStoryTray(apiJson, { storyId } = {}) {
+  const items = apiJson?.reels_media?.[0]?.items || [];
+  const mapped = items.map((it, i) => {
+    const base = { pk: String(it.pk ?? i), index: i + 1 };
+    if (Array.isArray(it.video_versions) && it.video_versions.length) {
+      const url = pickBestVideo(it.video_versions);
+      return url ? { url, type: 'video', filename: `story_${base.pk}`, index: base.index, pk: base.pk } : null;
+    }
+    const url = pickBestCandidate(it?.image_versions2?.candidates);
+    return url ? { url, type: 'image', filename: `story_${base.pk}`, index: base.index, pk: base.pk } : null;
+  }).filter(Boolean);
+
+  if (storyId) {
+    const one = mapped.find((m) => m.pk === String(storyId));
+    if (one) return [one];
+  }
+  return mapped.map((m) => ({ url: m.url, type: m.type, filename: m.filename, index: m.index }));
+}
+
+// Map an Instagram API HTTP status to a user-facing message.
+export function mapIgStatusToMessage(status) {
+  if (status === 401 || status === 403) return 'Log in to Instagram to download this.';
+  if (status === 429) return 'Instagram is rate-limiting downloads. Try again in a minute.';
+  if (status === 404) return 'This Instagram media has expired or was not found.';
+  return 'Instagram did not return this media. Try refreshing the page.';
+}

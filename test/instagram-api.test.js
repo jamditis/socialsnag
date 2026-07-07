@@ -75,3 +75,50 @@ describe('parsePostMedia', () => {
     expect(parsePostMedia(json, 'X').map((o) => o.url)).toEqual(['i1']);
   });
 });
+
+import { extractStoryRef, parseStoryTray, mapIgStatusToMessage } from '../src/platforms/instagram-api.js';
+
+describe('extractStoryRef', () => {
+  it('parses /stories/user/123/', () => {
+    expect(extractStoryRef('/stories/natgeo/1234567890/')).toEqual({ username: 'natgeo', storyId: '1234567890' });
+  });
+  it('returns null for non-story paths', () => {
+    expect(extractStoryRef('/p/ABC/')).toBeNull();
+    expect(extractStoryRef('/stories/highlights/99/')).toEqual({ username: 'highlights', storyId: '99' });
+  });
+});
+
+describe('parseStoryTray', () => {
+  const tray = { reels_media: [{ items: [
+    { pk: '111', image_versions2: { candidates: [{ url: 'a', width: 1080, height: 1920 }] } },
+    { pk: '222', video_versions: [{ url: 'b', width: 720 }] },
+  ] }] };
+  it('returns all active stories when no storyId', () => {
+    const out = parseStoryTray(tray, {});
+    expect(out.map((o) => o.url)).toEqual(['a', 'b']);
+    expect(out.map((o) => o.type)).toEqual(['image', 'video']);
+  });
+  it('returns only the matching story when storyId given', () => {
+    const out = parseStoryTray(tray, { storyId: '222' });
+    expect(out).toHaveLength(1);
+    expect(out[0].url).toBe('b');
+  });
+  it('returns all when storyId does not match', () => {
+    expect(parseStoryTray(tray, { storyId: 'nope' })).toHaveLength(2);
+  });
+  it('returns empty for empty tray', () => {
+    expect(parseStoryTray({ reels_media: [] }, {})).toEqual([]);
+  });
+});
+
+describe('mapIgStatusToMessage', () => {
+  it('maps known statuses', () => {
+    expect(mapIgStatusToMessage(401)).toMatch(/log in/i);
+    expect(mapIgStatusToMessage(403)).toMatch(/log in/i);
+    expect(mapIgStatusToMessage(429)).toMatch(/rate/i);
+    expect(mapIgStatusToMessage(404)).toMatch(/expired|not found/i);
+  });
+  it('falls back for unknown statuses', () => {
+    expect(mapIgStatusToMessage(500)).toMatch(/instagram/i);
+  });
+});
