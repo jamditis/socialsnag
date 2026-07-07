@@ -16,8 +16,11 @@ Right-click to download full-resolution images and videos from social media.
 
 - **Right-click download** — context menu on any supported page, no copy-pasting URLs
 - **HD quality** — rewrites CDN URLs to fetch the highest available resolution
-- **Multi-image posts** — download all media from a carousel or gallery in one click
+- **Multi-image posts** — download every slide of an Instagram carousel, in order, resolved through Instagram's media API
+- **Instagram stories** — download the story you're viewing, or the user's whole active tray
 - **Video downloads** — Instagram reels and Twitter/X videos via platform API resolution
+- **Copy media URL** — copy the full-resolution URL to your clipboard instead of downloading
+- **Zip downloads** — bundle a carousel or story into a single .zip, as a default or per download
 - **Download history** — track recent downloads from the popup
 - **Organized folders** — files saved to `SocialSnag/<platform>/` automatically
 - **Platform toggles** — enable or disable individual platforms from settings
@@ -25,7 +28,7 @@ Right-click to download full-resolution images and videos from social media.
 
 ## Supported platforms
 
-- Instagram (images, reels, carousels)
+- Instagram (images, reels, carousels, stories)
 - Twitter/X (images, profile pictures, videos)
 - Facebook (images, videos)
 - Bluesky (images)

@@ -10,6 +10,7 @@ export default [
         document: 'readonly',
         window: 'readonly',
         console: 'readonly',
+        navigator: 'readonly',
         fetch: 'readonly',
         setTimeout: 'readonly',
         clearTimeout: 'readonly',

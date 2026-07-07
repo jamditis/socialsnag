@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.2.0 — 2026-07-07
+
+### New
+- Instagram stories — "download this" grabs the story you're viewing, "download all" grabs the user's full active tray. Stories were previously unsupported.
+- Copy media URL — a right-click action that copies the resolved full-resolution URL to your clipboard instead of downloading the file.
+- Download all as .zip — bundle a carousel or story into a single archive. Available as a global default in settings, or per-download from the right-click menu, which forces a .zip regardless of the default.
+
+### Fixed
+- Instagram carousel and "download all" now return every slide, in order, at full resolution. Resolution goes through Instagram's media API instead of scraping the page, so lazy-loaded slides are no longer missed (previously it often returned only the first image). Falls back to page scraping when the API is unavailable.
+- Instagram failures now name the reason — login required, rate-limited, or the post is expired or deleted — instead of a generic "could not find media."
+
+### Changed
+- The four context-menu actions now nest under one SocialSnag parent submenu instead of sitting at the top level.
+- Added the extension's first offscreen document to build zips and write to the clipboard, neither of which an MV3 service worker can do directly.
+- New permission: `offscreen` (no install warning). `clipboardWrite` is requested only when you first use "Copy media URL", not upfront, so the update installs without disabling the extension for existing users. No new site-access (host) permissions were added.
+- Removed a dead, unreachable TikTok code path from the service worker.
+
 ## 1.1.0 — 2026-03-20
 
 ### New

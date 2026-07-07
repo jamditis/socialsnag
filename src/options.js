@@ -12,6 +12,7 @@ if (typeof document !== 'undefined') {
 
     settings.showNotifications = document.getElementById('notifications-toggle').checked;
     settings.downloadPath = document.getElementById('download-path').value.trim() || 'SocialSnag/{platform}';
+    settings.zipMultiPosts = document.getElementById('zip-toggle').checked;
 
     const advancedCheckbox = document.getElementById('advanced-toggle');
 
@@ -46,12 +47,14 @@ if (typeof document !== 'undefined') {
       showNotifications: true,
       advancedMode: false,
       downloadPath: 'SocialSnag/{platform}',
+      zipMultiPosts: false,
     };
     PLATFORMS.forEach((p) => { defaults[`platform_${p}`] = true; });
 
     chrome.storage.sync.get(defaults, (items) => {
       document.getElementById('advanced-toggle').checked = items.advancedMode;
       document.getElementById('notifications-toggle').checked = items.showNotifications;
+      document.getElementById('zip-toggle').checked = items.zipMultiPosts;
       document.getElementById('download-path').value = items.downloadPath;
       PLATFORMS.forEach((p) => {
         document.getElementById(`${p}-toggle`).checked = items[`platform_${p}`];
@@ -77,6 +80,7 @@ if (typeof document !== 'undefined') {
     });
     document.getElementById('advanced-toggle').addEventListener('change', saveSettings);
     document.getElementById('notifications-toggle').addEventListener('change', saveSettings);
+    document.getElementById('zip-toggle').addEventListener('change', saveSettings);
     document.getElementById('download-path').addEventListener('input', () => {
       updatePathPreview();
       clearTimeout(pathDebounce);

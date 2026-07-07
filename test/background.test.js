@@ -1,9 +1,13 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach } from 'vitest';
 import {
   detectPlatform,
   guessExtension,
   validateDownloadUrl,
   sanitizeDownloadPath,
+  resolveInstagramPost,
+  resolveInstagramStories,
+  downloadItemsAsZip,
+  resolveItemUrl,
 } from '../src/background.js';
 
 describe('detectPlatform', () => {
@@ -131,5 +135,612 @@ describe('sanitizeDownloadPath', () => {
   it('replaces special characters in filename', () => {
     const path = sanitizeDownloadPath('file<>name', 'instagram', '.jpg');
     expect(path).toBe('SocialSnag/instagram/file__name.jpg');
+  });
+});
+
+// Fetch-shaped Instagram post nodes (media_type mirrors the private web API).
+const igImgSlide = (u) => ({ media_type: 1, image_versions2: { candidates: [{ url: u, width: 1080, height: 1080 }] } });
+const igVidSlide = (u) => ({ media_type: 2, video_versions: [{ url: u, width: 1080 }] });
+
+describe('resolveInstagramPost', () => {
+  afterEach(() => resetFetch());
+
+  it('enumerates every item in a carousel post', async () => {
+    installFetch((url) => {
+      if (!url.includes('i.instagram.com')) return null;
+      return {
+        status: 200,
+        json: { items: [{ carousel_media: [
+          igImgSlide('https://cdn.cdninstagram.com/1.jpg'),
+          igVidSlide('https://cdn.cdninstagram.com/2.mp4'),
+          igImgSlide('https://cdn.cdninstagram.com/3.jpg'),
+        ] }] },
+      };
+    });
+
+    const items = await resolveInstagramPost('ABC');
+    expect(items).toHaveLength(3);
+    expect(items.map((i) => i.url)).toEqual([
+      'https://cdn.cdninstagram.com/1.jpg',
+      'https://cdn.cdninstagram.com/2.mp4',
+      'https://cdn.cdninstagram.com/3.jpg',
+    ]);
+    expect(items.map((i) => i.type)).toEqual(['image', 'video', 'image']);
+    expect(items.map((i) => i.filename)).toEqual(['post_ABC_1', 'post_ABC_2', 'post_ABC_3']);
+  });
+
+  it('returns null when the API rate-limits (429)', async () => {
+    installFetch(() => ({ status: 429, json: {} }));
+    const items = await resolveInstagramPost('ABC');
+    expect(items).toBeNull();
+  });
+});
+
+// Fetch-shaped Instagram story item (media_type mirrors the private web API).
+const igStoryImg = (pk, u) => ({ pk, image_versions2: { candidates: [{ url: u, width: 1080, height: 1920 }] } });
+
+describe('resolveInstagramStories', () => {
+  afterEach(() => resetFetch());
+
+  it('derives user id then returns the active tray', async () => {
+    installFetch((url) => {
+      if (url.includes('web_profile_info')) return { status: 200, json: { data: { user: { id: '55' } } } };
+      if (url.includes('reels_media')) {
+        return { status: 200, json: { reels_media: [{ items: [igStoryImg('1', 'https://cdn.cdninstagram.com/s.jpg')] }] } };
+      }
+      return null;
+    });
+
+    const items = await resolveInstagramStories({ username: 'x', storyId: null });
+    expect(items.map((i) => i.url)).toEqual(['https://cdn.cdninstagram.com/s.jpg']);
+  });
+
+  it('returns only the viewed story when storyId matches', async () => {
+    installFetch((url) => {
+      if (url.includes('web_profile_info')) return { status: 200, json: { data: { user: { id: '55' } } } };
+      if (url.includes('reels_media')) {
+        return { status: 200, json: { reels_media: [{ items: [
+          igStoryImg('1', 'https://cdn.cdninstagram.com/1.jpg'),
+          igStoryImg('2', 'https://cdn.cdninstagram.com/2.jpg'),
+        ] }] } };
+      }
+      return null;
+    });
+
+    const items = await resolveInstagramStories({ username: 'x', storyId: '2' });
+    expect(items).toHaveLength(1);
+    expect(items[0].url).toBe('https://cdn.cdninstagram.com/2.jpg');
+  });
+});
+
+describe('context menu click — Instagram total failure', () => {
+  afterEach(() => resetFetch());
+
+  it('shows the login message when the API 401s and the DOM finds nothing', async () => {
+    // API rejects with 401 (not logged in); the default tabs.sendMessage mock
+    // returns {} (no media), so both resolution paths come up empty.
+    installFetch((url) => (url.includes('i.instagram.com') ? { status: 401, json: {} } : null));
+
+    const notes = [];
+    const origCreate = globalThis.chrome.notifications.create;
+    globalThis.chrome.notifications.create = (opts) => { notes.push(opts.message); };
+
+    try {
+      const handler = globalThis.chrome.contextMenus.onClicked._listeners[0];
+      await handler(
+        { menuItemId: 'socialsnag-download-all', pageUrl: 'https://www.instagram.com/p/ABC/', srcUrl: '' },
+        { id: 1, url: 'https://www.instagram.com/p/ABC/' }
+      );
+    } finally {
+      globalThis.chrome.notifications.create = origCreate;
+    }
+
+    expect(notes).toContain('Log in to Instagram to download this.');
+  });
+});
+
+describe('resolveItemUrl', () => {
+  afterEach(() => resetFetch());
+
+  it('passes through an item that already has a url', async () => {
+    expect(await resolveItemUrl({ url: 'https://cdn.example/a.jpg' })).toBe('https://cdn.example/a.jpg');
+  });
+
+  it('resolves a Twitter lookup placeholder via the syndication API', async () => {
+    installFetch((url) => {
+      if (!url.includes('syndication.twimg.com')) return null;
+      return { status: 200, json: { mediaDetails: [{ type: 'video', video_info: { variants: [
+        { content_type: 'video/mp4', url: 'https://video.twimg.com/lo.mp4', bitrate: 256000 },
+        { content_type: 'video/mp4', url: 'https://video.twimg.com/hi.mp4', bitrate: 832000 },
+      ] } }] } };
+    });
+    // A copy or download of this placeholder must resolve to the real MP4, not undefined.
+    const url = await resolveItemUrl({ needsVideoLookup: true, tweetId: '123', type: 'video' });
+    expect(url).toBe('https://video.twimg.com/hi.mp4');
+  });
+
+  it('returns null for a placeholder with no id to resolve', async () => {
+    expect(await resolveItemUrl({ needsVideoLookup: true })).toBeNull();
+  });
+});
+
+describe('copy media URL', () => {
+  afterEach(() => resetFetch());
+
+  // Bluesky avoids IG API fetch mocking: resolveViaApi has no bluesky branch, so
+  // resolution falls to the content-script path (chrome.tabs.sendMessage), and
+  // cdn.bsky.app is on the download allowlist.
+  const copyInfo = {
+    menuItemId: 'socialsnag-copy-url',
+    srcUrl: 'https://cdn.bsky.app/img/a.jpg',
+    pageUrl: 'https://bsky.app/profile/x/post/1',
+  };
+  const copyTab = { id: 5, url: 'https://bsky.app/profile/x/post/1' };
+
+  it('copies the resolved URL to the clipboard and does not download', async () => {
+    // Offscreen document already exists, so ensureOffscreen is a no-op.
+    const origGetContexts = globalThis.chrome.runtime.getContexts;
+    globalThis.chrome.runtime.getContexts = async () => [{ contextType: 'OFFSCREEN_DOCUMENT' }];
+
+    // Capture the messages copyViaOffscreen sends to the offscreen document.
+    const sent = [];
+    const origSendMessage = globalThis.chrome.runtime.sendMessage;
+    globalThis.chrome.runtime.sendMessage = async (msg) => { sent.push(msg); return { ok: true }; };
+
+    // Content script resolves a single allowlisted Bluesky image.
+    const origTabsSend = globalThis.chrome.tabs.sendMessage;
+    globalThis.chrome.tabs.sendMessage = async () => ({
+      urls: [{ url: 'https://cdn.bsky.app/img/a.jpg', type: 'image', filename: 'bsky_a' }],
+      platform: 'bluesky',
+    });
+
+    const downloaded = [];
+    const origDownload = globalThis.chrome.downloads.download;
+    globalThis.chrome.downloads.download = async (opts) => { downloaded.push(opts.url); return downloaded.length; };
+
+    try {
+      const handler = globalThis.chrome.contextMenus.onClicked._listeners[0];
+      await handler(copyInfo, copyTab);
+    } finally {
+      globalThis.chrome.runtime.getContexts = origGetContexts;
+      globalThis.chrome.runtime.sendMessage = origSendMessage;
+      globalThis.chrome.tabs.sendMessage = origTabsSend;
+      globalThis.chrome.downloads.download = origDownload;
+    }
+
+    expect(sent).toContainEqual({
+      target: 'offscreen',
+      action: 'clipboard',
+      text: 'https://cdn.bsky.app/img/a.jpg',
+    });
+    expect(downloaded).toEqual([]);
+  });
+
+  it('aborts the copy and does not resolve when clipboard permission is denied', async () => {
+    // clipboardWrite is optional; if the user declines the request, copy stops
+    // before touching the offscreen document or the content script.
+    const origRequest = globalThis.chrome.permissions.request;
+    globalThis.chrome.permissions.request = async () => false;
+
+    const sent = [];
+    const origSendMessage = globalThis.chrome.runtime.sendMessage;
+    globalThis.chrome.runtime.sendMessage = async (msg) => { sent.push(msg); return { ok: true }; };
+
+    let tabsAsked = false;
+    const origTabsSend = globalThis.chrome.tabs.sendMessage;
+    globalThis.chrome.tabs.sendMessage = async () => { tabsAsked = true; return { urls: [], platform: 'bluesky' }; };
+
+    const notes = [];
+    const origNotify = globalThis.chrome.notifications.create;
+    globalThis.chrome.notifications.create = (opts) => { notes.push(opts); };
+
+    try {
+      const handler = globalThis.chrome.contextMenus.onClicked._listeners[0];
+      await handler(copyInfo, copyTab);
+    } finally {
+      globalThis.chrome.permissions.request = origRequest;
+      globalThis.chrome.runtime.sendMessage = origSendMessage;
+      globalThis.chrome.tabs.sendMessage = origTabsSend;
+      globalThis.chrome.notifications.create = origNotify;
+    }
+
+    // No clipboard message, no resolution attempt, and a permission-specific note.
+    expect(sent).toEqual([]);
+    expect(tabsAsked).toBe(false);
+    expect(notes.some((n) => /permission/i.test(n.message))).toBe(true);
+  });
+
+  it('shows a not-found notification and does not copy when nothing resolves', async () => {
+    const origGetContexts = globalThis.chrome.runtime.getContexts;
+    globalThis.chrome.runtime.getContexts = async () => [{ contextType: 'OFFSCREEN_DOCUMENT' }];
+
+    const sent = [];
+    const origSendMessage = globalThis.chrome.runtime.sendMessage;
+    globalThis.chrome.runtime.sendMessage = async (msg) => { sent.push(msg); return { ok: true }; };
+
+    // Content script resolves nothing.
+    const origTabsSend = globalThis.chrome.tabs.sendMessage;
+    globalThis.chrome.tabs.sendMessage = async () => ({ urls: [], platform: 'bluesky' });
+
+    const notes = [];
+    const origCreate = globalThis.chrome.notifications.create;
+    globalThis.chrome.notifications.create = (opts) => { notes.push(opts.message); };
+
+    try {
+      const handler = globalThis.chrome.contextMenus.onClicked._listeners[0];
+      await handler(copyInfo, copyTab);
+    } finally {
+      globalThis.chrome.runtime.getContexts = origGetContexts;
+      globalThis.chrome.runtime.sendMessage = origSendMessage;
+      globalThis.chrome.tabs.sendMessage = origTabsSend;
+      globalThis.chrome.notifications.create = origCreate;
+    }
+
+    // Copy was never attempted: no clipboard message reached the offscreen target.
+    expect(sent.some((m) => m && m.action === 'clipboard')).toBe(false);
+    expect(notes).toContain('Could not find downloadable media on this element.');
+  });
+});
+
+describe('context menu click — Instagram DOM fallback', () => {
+  afterEach(() => resetFetch());
+
+  it('downloads content-script media when the post API fails but the DOM has media', async () => {
+    // Post API 404s (resolveInstagramPost returns null); the content script
+    // still resolves real CDN images, which must still get downloaded.
+    installFetch((url) => (url.includes('i.instagram.com') ? { status: 404, json: {} } : null));
+
+    const domUrls = [
+      'https://scontent.cdninstagram.com/a.jpg',
+      'https://scontent.cdninstagram.com/b.jpg',
+    ];
+    const origSend = globalThis.chrome.tabs.sendMessage;
+    globalThis.chrome.tabs.sendMessage = async () => ({
+      platform: 'instagram',
+      urls: domUrls.map((url, i) => ({ url, type: 'image', filename: `post_ABC_${i + 1}` })),
+    });
+
+    const downloaded = [];
+    const origDownload = globalThis.chrome.downloads.download;
+    globalThis.chrome.downloads.download = async (opts) => { downloaded.push(opts.url); return downloaded.length; };
+
+    try {
+      const handler = globalThis.chrome.contextMenus.onClicked._listeners[0];
+      await handler(
+        { menuItemId: 'socialsnag-download-all', pageUrl: 'https://www.instagram.com/p/ABC/', srcUrl: '' },
+        { id: 1, url: 'https://www.instagram.com/p/ABC/' }
+      );
+    } finally {
+      globalThis.chrome.tabs.sendMessage = origSend;
+      globalThis.chrome.downloads.download = origDownload;
+    }
+
+    expect(downloaded).toEqual(domUrls);
+  });
+});
+
+describe('zip download flow', () => {
+  // revokeBlobWhenComplete registers a downloads.onChanged listener per zip.
+  // Clear them so _listeners[0] is deterministic and listeners don't leak.
+  beforeEach(() => { globalThis.chrome.downloads.onChanged._listeners.length = 0; });
+  afterEach(() => resetFetch());
+
+  // Pretend the offscreen doc exists and capture every message sent to it. The
+  // 'zip' action resolves to a blob URL (or a failure when zipOk is false);
+  // everything else (revoke) resolves ok. Returns { sent, restore }.
+  function installOffscreenMock(zipOk = true) {
+    const origGetContexts = globalThis.chrome.runtime.getContexts;
+    const origSendMessage = globalThis.chrome.runtime.sendMessage;
+    globalThis.chrome.runtime.getContexts = async () => [{ contextType: 'OFFSCREEN_DOCUMENT' }];
+    const sent = [];
+    globalThis.chrome.runtime.sendMessage = async (msg) => {
+      sent.push(msg);
+      if (msg.action === 'zip') return zipOk ? { ok: true, url: 'blob:zip1' } : { ok: false };
+      return { ok: true };
+    };
+    return {
+      sent,
+      restore() {
+        globalThis.chrome.runtime.getContexts = origGetContexts;
+        globalThis.chrome.runtime.sendMessage = origSendMessage;
+      },
+    };
+  }
+
+  const imgItems = [
+    { url: 'https://cdn.bsky.app/img/a.jpg', type: 'image', filename: 'a' },
+    { url: 'https://cdn.bsky.app/img/b.jpg', type: 'image', filename: 'b' },
+  ];
+
+  it('zips two valid items, downloads one .zip, and revokes the blob on completion', async () => {
+    const off = installOffscreenMock(true);
+    const downloads = [];
+    const origDownload = globalThis.chrome.downloads.download;
+    globalThis.chrome.downloads.download = async (opts) => { downloads.push(opts); return 42; };
+
+    try {
+      const result = await downloadItemsAsZip(imgItems, 'bluesky');
+      expect(result).toBe(2);
+
+      const zipMsg = off.sent.find((m) => m.action === 'zip');
+      expect(zipMsg.files).toHaveLength(2);
+      expect(zipMsg.files.map((f) => f.name)).toEqual(['a.jpg', 'b.jpg']);
+
+      expect(downloads).toHaveLength(1);
+      expect(downloads[0].url).toBe('blob:zip1');
+      expect(downloads[0].filename.endsWith('.zip')).toBe(true);
+
+      // The blob is revoked only once the download reaches a terminal state.
+      expect(off.sent.some((m) => m.action === 'revoke')).toBe(false);
+      globalThis.chrome.downloads.onChanged._listeners[0]({ id: 42, state: { current: 'complete' } });
+      await Promise.resolve();
+      expect(off.sent).toContainEqual({ target: 'offscreen', action: 'revoke', url: 'blob:zip1' });
+    } finally {
+      globalThis.chrome.downloads.download = origDownload;
+      off.restore();
+    }
+  });
+
+  it('skips a url that fails validation before it enters the archive', async () => {
+    const off = installOffscreenMock(true);
+    const origDownload = globalThis.chrome.downloads.download;
+    globalThis.chrome.downloads.download = async () => 7;
+
+    try {
+      const items = [
+        { url: 'https://cdn.bsky.app/img/a.jpg', type: 'image', filename: 'a' },
+        { url: 'https://evil.example/x.jpg', type: 'image', filename: 'x' },
+      ];
+      const result = await downloadItemsAsZip(items, 'bluesky');
+      expect(result).toBe(1);
+
+      const zipMsg = off.sent.find((m) => m.action === 'zip');
+      expect(zipMsg.files).toHaveLength(1);
+      expect(zipMsg.files[0].name).toBe('a.jpg');
+    } finally {
+      globalThis.chrome.downloads.download = origDownload;
+      off.restore();
+    }
+  });
+
+  it('neutralizes a traversal path smuggled through the ?format= extension', async () => {
+    const off = installOffscreenMock(true);
+    const origDownload = globalThis.chrome.downloads.download;
+    globalThis.chrome.downloads.download = async () => 8;
+
+    try {
+      // guessExtension echoes the ?format= value verbatim, so a crafted format
+      // can carry / and .. into the entry name unless the whole name is sanitized.
+      const result = await downloadItemsAsZip([
+        { url: 'https://cdn.bsky.app/img/a?format=../../evil.sh', type: 'image', filename: 'slide' },
+      ], 'bluesky');
+      expect(result).toBe(1);
+
+      const zipMsg = off.sent.find((m) => m.action === 'zip');
+      expect(zipMsg.files[0].name).not.toContain('/');
+      expect(zipMsg.files[0].name).not.toContain('..');
+    } finally {
+      globalThis.chrome.downloads.download = origDownload;
+      off.restore();
+    }
+  });
+
+  it('returns false and does not download when the zip build fails', async () => {
+    const off = installOffscreenMock(false); // 'zip' action resolves { ok:false }
+    const downloads = [];
+    const origDownload = globalThis.chrome.downloads.download;
+    globalThis.chrome.downloads.download = async (opts) => { downloads.push(opts); return 1; };
+
+    try {
+      const result = await downloadItemsAsZip(imgItems, 'bluesky');
+      expect(result).toBe(false);
+      expect(downloads).toHaveLength(0);
+    } finally {
+      globalThis.chrome.downloads.download = origDownload;
+      off.restore();
+    }
+  });
+
+  it('forces a single .zip download from the zip menu item', async () => {
+    const off = installOffscreenMock(true);
+    const origTabsSend = globalThis.chrome.tabs.sendMessage;
+    globalThis.chrome.tabs.sendMessage = async () => ({
+      platform: 'bluesky',
+      urls: [
+        { url: 'https://cdn.bsky.app/img/a.jpg', type: 'image', filename: 'bsky_a' },
+        { url: 'https://cdn.bsky.app/img/b.jpg', type: 'image', filename: 'bsky_b' },
+      ],
+    });
+    const downloads = [];
+    const origDownload = globalThis.chrome.downloads.download;
+    globalThis.chrome.downloads.download = async (opts) => { downloads.push(opts); return 99; };
+
+    try {
+      const handler = globalThis.chrome.contextMenus.onClicked._listeners[0];
+      await handler(
+        { menuItemId: 'socialsnag-download-zip', pageUrl: 'https://bsky.app/profile/x/post/1', srcUrl: '' },
+        { id: 5, url: 'https://bsky.app/profile/x/post/1' }
+      );
+      expect(downloads).toHaveLength(1);
+      expect(downloads[0].filename.endsWith('.zip')).toBe(true);
+    } finally {
+      globalThis.chrome.tabs.sendMessage = origTabsSend;
+      globalThis.chrome.downloads.download = origDownload;
+      off.restore();
+    }
+  });
+
+  it('honors the zipMultiPosts setting for the download-all menu item', async () => {
+    const allInfo = { menuItemId: 'socialsnag-download-all', pageUrl: 'https://bsky.app/profile/x/post/1', srcUrl: '' };
+    const allTab = { id: 5, url: 'https://bsky.app/profile/x/post/1' };
+    const twoItems = () => ({
+      platform: 'bluesky',
+      urls: [
+        { url: 'https://cdn.bsky.app/img/a.jpg', type: 'image', filename: 'bsky_a' },
+        { url: 'https://cdn.bsky.app/img/b.jpg', type: 'image', filename: 'bsky_b' },
+      ],
+    });
+    const origTabsSend = globalThis.chrome.tabs.sendMessage;
+    globalThis.chrome.tabs.sendMessage = async () => twoItems();
+
+    // Part 1: setting on -> one .zip download, a 'zip' message was sent.
+    const offOn = installOffscreenMock(true);
+    const downloadsOn = [];
+    const origDownload = globalThis.chrome.downloads.download;
+    globalThis.chrome.downloads.download = async (opts) => { downloadsOn.push(opts); return 21; };
+    try {
+      await globalThis.chrome.storage.sync.set({ zipMultiPosts: true });
+      const handler = globalThis.chrome.contextMenus.onClicked._listeners[0];
+      await handler(allInfo, allTab);
+      expect(downloadsOn).toHaveLength(1);
+      expect(downloadsOn[0].filename.endsWith('.zip')).toBe(true);
+      expect(offOn.sent.some((m) => m.action === 'zip')).toBe(true);
+    } finally {
+      globalThis.chrome.downloads.download = origDownload;
+      offOn.restore();
+      await globalThis.chrome.storage.sync.remove('zipMultiPosts');
+    }
+
+    // Part 2: setting off -> two individual downloads, no 'zip' message.
+    const offOff = installOffscreenMock(true);
+    const downloadsOff = [];
+    const origDownload2 = globalThis.chrome.downloads.download;
+    globalThis.chrome.downloads.download = async (opts) => { downloadsOff.push(opts); return downloadsOff.length; };
+    try {
+      const handler = globalThis.chrome.contextMenus.onClicked._listeners[0];
+      await handler(allInfo, allTab);
+      expect(downloadsOff).toHaveLength(2);
+      expect(downloadsOff.every((d) => !d.filename.endsWith('.zip'))).toBe(true);
+      expect(offOff.sent.some((m) => m.action === 'zip')).toBe(false);
+    } finally {
+      globalThis.chrome.downloads.download = origDownload2;
+      offOff.restore();
+      globalThis.chrome.tabs.sendMessage = origTabsSend;
+    }
+  });
+
+  it('degrades a forced zip to a normal download when only one item resolves', async () => {
+    const off = installOffscreenMock(true);
+    const origTabsSend = globalThis.chrome.tabs.sendMessage;
+    globalThis.chrome.tabs.sendMessage = async () => ({
+      platform: 'bluesky',
+      urls: [{ url: 'https://cdn.bsky.app/img/a.jpg', type: 'image', filename: 'bsky_a' }],
+    });
+    const downloads = [];
+    const origDownload = globalThis.chrome.downloads.download;
+    globalThis.chrome.downloads.download = async (opts) => { downloads.push(opts); return 3; };
+
+    try {
+      const handler = globalThis.chrome.contextMenus.onClicked._listeners[0];
+      await handler(
+        { menuItemId: 'socialsnag-download-zip', pageUrl: 'https://bsky.app/profile/x/post/1', srcUrl: '' },
+        { id: 5, url: 'https://bsky.app/profile/x/post/1' }
+      );
+      // The >= 2 guard means one item never zips; it downloads directly.
+      expect(off.sent.some((m) => m.action === 'zip')).toBe(false);
+      expect(downloads).toHaveLength(1);
+      expect(downloads[0].filename.endsWith('.zip')).toBe(false);
+    } finally {
+      globalThis.chrome.tabs.sendMessage = origTabsSend;
+      globalThis.chrome.downloads.download = origDownload;
+      off.restore();
+    }
+  });
+
+  it('bails to per-file when any item still needs a video lookup', async () => {
+    const off = installOffscreenMock(true);
+    const downloads = [];
+    const origDownload = globalThis.chrome.downloads.download;
+    globalThis.chrome.downloads.download = async (opts) => { downloads.push(opts); return 1; };
+
+    try {
+      const result = await downloadItemsAsZip([
+        { url: 'https://cdn.bsky.app/img/a.jpg', type: 'image', filename: 'a' },
+        { type: 'video', filename: 'v', needsVideoLookup: true },
+      ], 'bluesky');
+      expect(result).toBe(false);
+      expect(off.sent.some((m) => m.action === 'zip')).toBe(false);
+      expect(downloads).toHaveLength(0);
+    } finally {
+      globalThis.chrome.downloads.download = origDownload;
+      off.restore();
+    }
+  });
+
+  it('records the archive with no url in history', async () => {
+    const off = installOffscreenMock(true);
+    const origDownload = globalThis.chrome.downloads.download;
+    globalThis.chrome.downloads.download = async () => 55;
+
+    try {
+      await globalThis.chrome.storage.local.set({ downloadHistory: [] });
+      const result = await downloadItemsAsZip(imgItems, 'bluesky');
+      expect(result).toBe(2);
+
+      const { downloadHistory } = await globalThis.chrome.storage.local.get({ downloadHistory: [] });
+      expect(downloadHistory).toHaveLength(1);
+      const entry = downloadHistory[0];
+      expect('url' in entry).toBe(false);
+      expect(JSON.stringify(entry)).not.toContain('blob:');
+      expect(entry.filename.endsWith('.zip')).toBe(true);
+    } finally {
+      globalThis.chrome.downloads.download = origDownload;
+      off.restore();
+    }
+  });
+
+  it('revokes the blob on an interrupted download too', async () => {
+    const off = installOffscreenMock(true);
+    const origDownload = globalThis.chrome.downloads.download;
+    globalThis.chrome.downloads.download = async () => 63;
+
+    try {
+      const result = await downloadItemsAsZip(imgItems, 'bluesky');
+      expect(result).toBe(2);
+
+      globalThis.chrome.downloads.onChanged._listeners[0]({ id: 63, state: { current: 'interrupted' } });
+      await Promise.resolve();
+      expect(off.sent).toContainEqual({ target: 'offscreen', action: 'revoke', url: 'blob:zip1' });
+    } finally {
+      globalThis.chrome.downloads.download = origDownload;
+      off.restore();
+    }
+  });
+});
+
+describe('context menu registration', () => {
+  it('nests the four actions under one SocialSnag parent', () => {
+    const created = [];
+    const origCreate = globalThis.chrome.contextMenus.create;
+    globalThis.chrome.contextMenus.create = (opts) => { created.push(opts); };
+    try {
+      // onInstalled listener 0 is the menu registration (listener 1 is
+      // advanced-mode init); firing all is order-independent and safe.
+      globalThis.chrome.runtime.onInstalled._listeners.forEach((fn) => fn());
+    } finally {
+      globalThis.chrome.contextMenus.create = origCreate;
+    }
+
+    const parent = created.find((m) => m.id === 'socialsnag-parent');
+    expect(parent).toBeTruthy();
+    expect(parent.title).toBe('SocialSnag');
+    expect(parent.parentId).toBeUndefined();
+    expect(parent.documentUrlPatterns).toBeTruthy();
+
+    const children = created.filter((m) => m.parentId === 'socialsnag-parent');
+    expect(children.map((c) => c.id).sort()).toEqual([
+      'socialsnag-copy-url',
+      'socialsnag-download-all',
+      'socialsnag-download-single',
+      'socialsnag-download-zip',
+    ]);
+    // Children carry no "SocialSnag:" prefix — the parent supplies it.
+    children.forEach((c) => expect(c.title.startsWith('SocialSnag')).toBe(false));
+    // Every child must repeat the full contexts, or Chrome defaults it to
+    // ['page'] and the action disappears on image/video right-clicks.
+    children.forEach((c) => {
+      expect(c.contexts).toEqual(['page', 'image', 'video', 'link']);
+      expect(c.documentUrlPatterns).toBeTruthy();
+    });
   });
 });
