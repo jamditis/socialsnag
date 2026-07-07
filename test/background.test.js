@@ -676,5 +676,11 @@ describe('context menu registration', () => {
     ]);
     // Children carry no "SocialSnag:" prefix — the parent supplies it.
     children.forEach((c) => expect(c.title.startsWith('SocialSnag')).toBe(false));
+    // Every child must repeat the full contexts, or Chrome defaults it to
+    // ['page'] and the action disappears on image/video right-clicks.
+    children.forEach((c) => {
+      expect(c.contexts).toEqual(['page', 'image', 'video', 'link']);
+      expect(c.documentUrlPatterns).toBeTruthy();
+    });
   });
 });

@@ -10,6 +10,11 @@ const MENU_DOWNLOAD_ALL = 'socialsnag-download-all';
 const MENU_DOWNLOAD_ZIP = 'socialsnag-download-zip';
 const MENU_COPY_URL = 'socialsnag-copy-url';
 
+// Contexts every menu item must appear in. Chrome applies each item's own
+// contexts (an omitted list defaults to ['page']), so children need this too or
+// they vanish when you right-click directly on an image or video.
+const MENU_CONTEXTS = ['page', 'image', 'video', 'link'];
+
 // Supported platform URL patterns for context menu visibility
 const SUPPORTED_URL_PATTERNS = [
   '*://*.instagram.com/*',
@@ -101,16 +106,12 @@ export function sanitizeDownloadPath(rawFilename, platform, ext, downloadPath) {
 // SocialSnag parent; children inherit the parent's contexts and URL patterns.
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.removeAll(() => {
-    chrome.contextMenus.create({
-      id: MENU_PARENT,
-      title: 'SocialSnag',
-      contexts: ['page', 'image', 'video', 'link'],
-      documentUrlPatterns: SUPPORTED_URL_PATTERNS,
-    });
-    chrome.contextMenus.create({ id: MENU_DOWNLOAD_SINGLE, parentId: MENU_PARENT, title: 'Download this (HD)' });
-    chrome.contextMenus.create({ id: MENU_DOWNLOAD_ALL, parentId: MENU_PARENT, title: 'Download all from post' });
-    chrome.contextMenus.create({ id: MENU_DOWNLOAD_ZIP, parentId: MENU_PARENT, title: 'Download all as .zip' });
-    chrome.contextMenus.create({ id: MENU_COPY_URL, parentId: MENU_PARENT, title: 'Copy media URL' });
+    const shared = { contexts: MENU_CONTEXTS, documentUrlPatterns: SUPPORTED_URL_PATTERNS };
+    chrome.contextMenus.create({ id: MENU_PARENT, title: 'SocialSnag', ...shared });
+    chrome.contextMenus.create({ id: MENU_DOWNLOAD_SINGLE, parentId: MENU_PARENT, title: 'Download this (HD)', ...shared });
+    chrome.contextMenus.create({ id: MENU_DOWNLOAD_ALL, parentId: MENU_PARENT, title: 'Download all from post', ...shared });
+    chrome.contextMenus.create({ id: MENU_DOWNLOAD_ZIP, parentId: MENU_PARENT, title: 'Download all as .zip', ...shared });
+    chrome.contextMenus.create({ id: MENU_COPY_URL, parentId: MENU_PARENT, title: 'Copy media URL', ...shared });
   });
 });
 
