@@ -16,6 +16,7 @@ const entryPoints = [
   { in: 'src/platforms/bluesky.js', out: 'platforms/bluesky' },
   { in: 'src/popup.js', out: 'popup' },
   { in: 'src/options.js', out: 'options' },
+  { in: 'src/offscreen.js', out: 'offscreen' },
 ];
 
 await esbuild.build({
@@ -33,6 +34,7 @@ cpSync('src/popup.html', 'dist/popup.html');
 cpSync('src/popup.css', 'dist/popup.css');
 cpSync('src/options.html', 'dist/options.html');
 cpSync('src/options.css', 'dist/options.css');
+cpSync('src/offscreen.html', 'dist/offscreen.html');
 
 // Remove desktop.ini files that Windows creates in copied directories
 function removeDesktopIni(dir) {
