@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.2.1 — 2026-07-07
+
+### Fixed
+- Instagram feed and profile-grid carousels now return every slide in "download all". The content script recovers the post's shortcode from the page permalink and resolves the whole post through the media API, fixing the cap at the two or so slides Instagram lazy-renders in feed and grid views. Post-detail pages already worked; this extends the same coverage to the feed and grid (#32).
+
+### Added
+- Chrome Web Store publish automation: `npm run publish:cws` uploads the built zip and publishes through the Chrome Web Store API v2. Credentials are read from the environment and never committed. One-time setup is in `docs/cws-publishing.md`.
+
 ## 1.2.0 — 2026-07-07
 
 ### New

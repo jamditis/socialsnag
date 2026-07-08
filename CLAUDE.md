@@ -172,6 +172,7 @@ This works without advanced mode (webRequest) enabled.
 
 ### Chrome Web Store
 - **Initial CWS publish date:** 2026-03-23 — Item ID: `llbpeneloehnlaomolbalbmhjncpmnfa`
+- **1.2.1 published and live:** 2026-07-07. Passed Google review; the Instagram feed/grid carousel fix and the CWS publish automation are now on all users' installs.
 - The publish script (`npm run publish:cws`) reads this item id from `package.json` `cws.itemId`; `CWS_ITEM_ID` overrides it. See docs/cws-publishing.md.
 - CWS listing (source of truth for dates/versions): https://chromewebstore.google.com/detail/socialsnag/llbpeneloehnlaomolbalbmhjncpmnfa
 
