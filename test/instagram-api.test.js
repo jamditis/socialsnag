@@ -109,6 +109,23 @@ describe('parseStoryTray', () => {
     // A stale or expired story URL must not dump every currently-active story.
     expect(parseStoryTray(tray, { storyId: 'nope' })).toEqual([]);
   });
+  it('matches a single story by id prefix when pk arrives as a lossy number (#27)', () => {
+    // A ~19-digit story pk exceeds Number.MAX_SAFE_INTEGER, so if the API encodes
+    // pk as a JSON number it loses its low digits. The id field keeps the full pk
+    // as a string (`<pk>_<userid>`), so matching on its prefix rescues the lookup.
+    const bigPk = '3210000000000000123';
+    const numericPkTray = { reels_media: [{ items: [
+      { pk: 3210000000000000123, id: `${bigPk}_55`, image_versions2: { candidates: [{ url: 'x', width: 1080, height: 1920 }] } },
+    ] }] };
+    // Sanity: the pk genuinely loses precision as a number, so a pk-only match misses.
+    expect(String(3210000000000000123)).not.toBe(bigPk);
+    const out = parseStoryTray(numericPkTray, { storyId: bigPk });
+    expect(out).toHaveLength(1);
+    expect(out[0].url).toBe('x');
+    // The filename must carry the full lossless pk (from id), not the rounded
+    // numeric pk — otherwise the download is misnamed and can collide.
+    expect(out[0].filename).toBe(`story_${bigPk}`);
+  });
   it('returns empty for empty tray', () => {
     expect(parseStoryTray({ reels_media: [] }, {})).toEqual([]);
   });
