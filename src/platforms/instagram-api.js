@@ -80,13 +80,19 @@ export function extractStoryRef(pathname) {
 export function parseStoryTray(apiJson, { storyId } = {}) {
   const items = apiJson?.reels_media?.[0]?.items || [];
   const mapped = items.map((it, i) => {
-    const base = { pk: String(it.pk ?? i), index: i + 1 };
+    // Prefer the pk embedded in the string id (`<pk>_<userid>`) over the raw pk
+    // field. When Instagram sends pk as a JSON number it loses its low digits
+    // past 2^53, but id stays a string and keeps the full value — so deriving pk
+    // from id keeps the match, the filename, and the download history all
+    // lossless. Falls back to the pk field, then the index, when id is absent.
+    const pk = it.id != null ? String(it.id).split('_')[0] : String(it.pk ?? i);
+    const base = { pk, id: it.id, index: i + 1 };
     if (Array.isArray(it.video_versions) && it.video_versions.length) {
       const url = pickBestVideo(it.video_versions);
-      return url ? { url, type: 'video', filename: `story_${base.pk}`, index: base.index, pk: base.pk } : null;
+      return url ? { url, type: 'video', filename: `story_${base.pk}`, index: base.index, pk: base.pk, id: base.id } : null;
     }
     const url = pickBestCandidate(it?.image_versions2?.candidates);
-    return url ? { url, type: 'image', filename: `story_${base.pk}`, index: base.index, pk: base.pk } : null;
+    return url ? { url, type: 'image', filename: `story_${base.pk}`, index: base.index, pk: base.pk, id: base.id } : null;
   }).filter(Boolean);
 
   // A single-story request ("download this") must return that exact story or
@@ -95,7 +101,11 @@ export function parseStoryTray(apiJson, { storyId } = {}) {
   // lets the caller show "expired or unavailable" instead of dumping every
   // currently-active story.
   if (storyId) {
-    const one = mapped.find((m) => m.pk === String(storyId));
+    // base.pk is already the lossless pk (derived from the string id above when
+    // present), so a direct compare matches a real ~19-digit story id that would
+    // have been rounded if read from the numeric pk field.
+    const target = String(storyId);
+    const one = mapped.find((m) => m.pk === target);
     return one ? [{ url: one.url, type: one.type, filename: one.filename, index: one.index }] : [];
   }
   return mapped.map((m) => ({ url: m.url, type: m.type, filename: m.filename, index: m.index }));
