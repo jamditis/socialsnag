@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { shortcodeToMediaId, pickBestCandidate, pickBestVideo } from '../src/platforms/instagram-api.js';
+import { shortcodeToMediaId, pickBestCandidate, pickBestVideo, selectByQuality } from '../src/platforms/instagram-api.js';
 
 describe('shortcodeToMediaId', () => {
   it('converts a known shortcode to its media id', () => {
@@ -40,6 +40,72 @@ describe('pickBestVideo', () => {
   });
   it('returns null when none have urls', () => {
     expect(pickBestVideo([{ width: 100 }])).toBeNull();
+  });
+});
+
+// The quality-selection core behind the resolution picker (#19). The default
+// 'largest' path is the historical behavior the pickBest* wrappers already cover
+// above; these lock in the resolution-cap path they now delegate to.
+describe('selectByQuality', () => {
+  const byWidth = (c) => c.width || 0;
+  const items = [
+    { url: 'w480', width: 480 },
+    { url: 'w1080', width: 1080 },
+    { url: 'w1440', width: 1440 },
+  ];
+
+  it('takes the largest by the size metric by default', () => {
+    expect(selectByQuality(items, byWidth)).toBe('w1440');
+    expect(selectByQuality(items, byWidth, 'largest')).toBe('w1440');
+  });
+
+  it('caps at maxWidth, choosing the largest candidate no wider than the cap', () => {
+    expect(selectByQuality(items, byWidth, { maxWidth: 1080 })).toBe('w1080');
+    expect(selectByQuality(items, byWidth, { maxWidth: 1200 })).toBe('w1080');
+    expect(selectByQuality(items, byWidth, { maxWidth: 2000 })).toBe('w1440');
+  });
+
+  it('falls back to the narrowest when every candidate is wider than the cap', () => {
+    expect(selectByQuality(items, byWidth, { maxWidth: 240 })).toBe('w480');
+  });
+
+  it('ignores a non-numeric maxWidth and stays on the largest', () => {
+    expect(selectByQuality(items, byWidth, { maxWidth: 'big' })).toBe('w1440');
+  });
+
+  it('returns null for an empty, url-less, or non-array input', () => {
+    expect(selectByQuality([], byWidth)).toBeNull();
+    expect(selectByQuality([{ width: 100 }], byWidth)).toBeNull();
+    expect(selectByQuality(undefined, byWidth)).toBeNull();
+  });
+});
+
+describe('pickBest* honor a resolution cap', () => {
+  it('pickBestCandidate caps by width but still ranks the pool by area', () => {
+    const candidates = [
+      { url: 'tall1080', width: 1080, height: 1350 },
+      { url: 'square1080', width: 1080, height: 1080 },
+      { url: 'huge', width: 2048, height: 2048 },
+    ];
+    // Cap keeps both 1080-wide candidates; area then prefers the taller one.
+    expect(pickBestCandidate(candidates, { maxWidth: 1080 })).toBe('tall1080');
+  });
+  it('pickBestVideo caps by width', () => {
+    const versions = [
+      { url: 'v480', width: 480 },
+      { url: 'v1080', width: 1080 },
+    ];
+    expect(pickBestVideo(versions, { maxWidth: 720 })).toBe('v480');
+  });
+  it('falls back to the narrowest by width when all images exceed the cap, not the smallest area', () => {
+    // Both exceed a 1000px cap. The narrowest by width (tall, 1200) is the
+    // coherent fallback for a width cap, even though wide has the smaller area
+    // (1,000,000 vs 1,920,000) and an area-ranked fallback would return it.
+    const candidates = [
+      { url: 'wide', width: 2000, height: 500 },
+      { url: 'tall', width: 1200, height: 1600 },
+    ];
+    expect(pickBestCandidate(candidates, { maxWidth: 1000 })).toBe('tall');
   });
 });
 
