@@ -18,21 +18,51 @@ export function shortcodeToMediaId(shortcode) {
   return id.toString();
 }
 
-// Pick the highest-resolution image candidate url (by pixel area).
-export function pickBestCandidate(candidates) {
-  if (!Array.isArray(candidates)) return null;
-  const withUrl = candidates.filter((c) => c && c.url);
+// Choose one media url from a size-ranked candidate list by a quality preference.
+//
+// The default preference, 'largest', is SocialSnag's historical behavior: take the
+// biggest candidate. A resolution cap ({ maxWidth: N }) instead asks for the best
+// candidate no wider than N pixels: the plumbing issue #19 needs so a user can pick
+// a download resolution rather than always the largest. If every candidate is wider
+// than the cap, the smallest one is returned, so a download still happens rather
+// than failing. `size` ranks candidates for the "largest" choice (pixel area for
+// images, width for videos), so each caller keeps its own metric.
+export function selectByQuality(items, size, preference = 'largest') {
+  if (!Array.isArray(items)) return null;
+  const withUrl = items.filter((c) => c && c.url);
   if (withUrl.length === 0) return null;
-  const area = (c) => (c.width || 0) * (c.height || 0);
-  return withUrl.slice().sort((a, b) => area(b) - area(a))[0].url;
+
+  // The cap is always measured by `.width`, independent of the `size` ranking
+  // metric: a resolution cap means pixel width, and each caller's `size` (area
+  // for images, width for videos) only ranks among the candidates that fit.
+  const cap =
+    preference && typeof preference === 'object' && Number.isFinite(preference.maxWidth)
+      ? preference.maxWidth
+      : null;
+
+  let pool = withUrl;
+  if (cap !== null) {
+    const underCap = withUrl.filter((c) => (c.width || 0) <= cap);
+    // When nothing fits under the cap, fall back to the narrowest candidate by
+    // width (the cap dimension) so a download still happens and the result is
+    // the closest thing to the requested width, not the smallest by area.
+    pool = underCap.length > 0
+      ? underCap
+      : [withUrl.slice().sort((a, b) => (a.width || 0) - (b.width || 0))[0]];
+  }
+  return pool.slice().sort((a, b) => size(b) - size(a))[0].url;
 }
 
-// Pick the widest video version url.
-export function pickBestVideo(versions) {
-  if (!Array.isArray(versions)) return null;
-  const withUrl = versions.filter((v) => v && v.url);
-  if (withUrl.length === 0) return null;
-  return withUrl.slice().sort((a, b) => (b.width || 0) - (a.width || 0))[0].url;
+// Pick an image candidate url. Defaults to the highest resolution (by pixel area);
+// pass { maxWidth: N } to cap the resolution. See selectByQuality.
+export function pickBestCandidate(candidates, preference = 'largest') {
+  return selectByQuality(candidates, (c) => (c.width || 0) * (c.height || 0), preference);
+}
+
+// Pick a video version url. Defaults to the widest; pass { maxWidth: N } to cap the
+// resolution. See selectByQuality.
+export function pickBestVideo(versions, preference = 'largest') {
+  return selectByQuality(versions, (v) => v.width || 0, preference);
 }
 
 // Build one media item from a post/carousel node. isCarousel controls naming.
