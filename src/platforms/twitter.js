@@ -2,6 +2,31 @@
 
 import { findNearestMedia, findPostContainer, getCapturedMedia, hostMatches } from './common.js';
 
+// A tweet's outer boundary. All three of the old id/video/media lookups kept
+// their own copy of this list and had drifted apart, so the same click could
+// land inside a container for one check and outside it for the next. The last
+// entry is the non-article `data-testid="tweet"` variant, so the `article` field
+// findTweetScope returns is not guaranteed to be an <article> element.
+export const TWEET_SELECTORS = [
+  'article[data-testid="tweet"]',
+  'article[role="article"]',
+  '[data-testid="tweet"]',
+];
+
+// A quoted tweet is not an article of its own: X renders it as a focusable
+// role="link" block *inside* the quoting tweet's article, which is what makes the
+// whole quote clickable. So walking up from the click reaches the outer article
+// for quoted and quoting media alike, and whoever asks "which tweet was this?"
+// gets the parent either way. Everything below exists to tell the two apart.
+//
+// A link-preview card is also a focusable role="link" block, so the wrapper
+// selector alone would catch cards too. The permalink check in insideQuotedTweet
+// is what separates them: a quoted tweet carries its own /status/ link, a card
+// points at an external URL.
+export const QUOTED_TWEET_SELECTORS = [
+  'div[role="link"][tabindex]',
+];
+
 // --- Pure functions (exported for testing) ---
 
 export function upgradeImageUrl(url) {
@@ -25,36 +50,90 @@ export function filterCapturedVideos(captured) {
     .sort((a, b) => b.timestamp - a.timestamp);
 }
 
-// --- Browser wiring (not exported) ---
+// The quoted tweet `node` sits inside, searching up to but not past `article`,
+// or null if `node` is in the main tweet. A quoted tweet is a focusable
+// role="link" wrapper that carries its own /status/ permalink; the permalink is
+// required so a link-preview card, also role="link", is not mistaken for a quote.
+// Nodes need only `.matches`, `.querySelector`, and `.parentElement`, so plain
+// object stubs exercise it in tests exactly as the real DOM does.
+export function insideQuotedTweet(node, article) {
+  let el = node;
+  while (el && el !== article) {
+    const isWrapper = QUOTED_TWEET_SELECTORS.some((selector) => el.matches?.(selector));
+    if (isWrapper && el.querySelector?.('a[href*="/status/"]')) return el;
+    el = el.parentElement;
+  }
+  return null;
+}
 
-function extractTweetId(target) {
-  const tweet = findPostContainer(target, [
-    'article[data-testid="tweet"]',
-    'article[role="article"]',
-  ]);
-  if (!tweet) return null;
+// Resolve which tweet a click belongs to. `article` is the outer tweet; `scope`
+// is the tightest tweet that owns the click, which is the quoted tweet when the
+// click landed inside one and the article otherwise. Downstream lookups run
+// against `scope`, so quoted media is attributed to the quoted tweet and the
+// main tweet's own media never picks up the quote's images.
+export function findTweetScope(target) {
+  const article = findPostContainer(target, TWEET_SELECTORS);
+  if (!article) return null;
+  const quoted = insideQuotedTweet(target, article);
+  return { article, scope: quoted || article, isQuoted: Boolean(quoted) };
+}
 
-  const link = tweet.querySelector('a[href*="/status/"]');
-  if (link) {
-    const match = link.href.match(/\/status\/(\d+)/);
+// The status id owning `scope`. When the scope is the main article its DOM
+// still contains the quoted tweet's permalink, so quoted-tweet status links are
+// skipped; the first remaining one is the main tweet's. When the scope already
+// is the quoted block, its own permalink is the first and only candidate.
+export function statusIdInScope({ scope, article, isQuoted }) {
+  const links = scope.querySelectorAll?.('a[href*="/status/"]') || [];
+  for (const link of links) {
+    if (!isQuoted && insideQuotedTweet(link, article)) continue;
+    const match = link.href?.match(/\/status\/(\d+)/);
     if (match) return match[1];
   }
   return null;
 }
 
-function tweetHasVideo(target) {
-  const tweet = findPostContainer(target, [
-    'article[data-testid="tweet"]',
-    'article[role="article"]',
-  ]);
-  if (!tweet) return false;
-  return tweet.querySelector('video') || tweet.querySelector('[data-testid="videoComponent"]');
+// True if `scope` contains a playable video. On the main article, a video that
+// lives inside the quoted tweet does not count, so a click on the main tweet is
+// not hijacked into downloading the quote's video. Every video candidate is
+// checked, not just the first: a quoted video can precede the main tweet's own
+// video in the DOM, and stopping at the first match would miss the real one.
+export function scopeHasVideo({ scope, article, isQuoted }) {
+  const videos = [
+    ...(scope.querySelectorAll?.('video') || []),
+    ...(scope.querySelectorAll?.('[data-testid="videoComponent"]') || []),
+  ];
+  if (isQuoted) return videos.length > 0;
+  return videos.some((video) => !insideQuotedTweet(video, article));
+}
+
+// True if `img` belongs to `scope` rather than to a quoted tweet nested inside
+// the main article. querySelectorAll on the quoted block already excludes the
+// rest of the page, so quoted scopes always own their matches.
+export function imageInScope(img, { article, isQuoted }) {
+  if (isQuoted) return true;
+  return !insideQuotedTweet(img, article);
+}
+
+// --- Browser wiring (not exported) ---
+
+// The tweet id owning the click, scoped to the quoted tweet when the click is
+// inside one. Null off any tweet.
+function tweetIdFor(target) {
+  const found = findTweetScope(target);
+  return found ? statusIdInScope(found) : null;
+}
+
+// Whether the clicked tweet — the quoted one, if that is what was clicked — has
+// its own video.
+function targetHasVideo(target) {
+  const found = findTweetScope(target);
+  return found ? scopeHasVideo(found) : false;
 }
 
 function resolveSingle(srcUrl, target) {
   // Check if this tweet contains a video — if so, prioritize video download
   // (Twitter blocks right-click on videos, so users right-click the tweet text instead)
-  if (tweetHasVideo(target)) {
+  if (targetHasVideo(target)) {
     // If srcUrl is just a profile pic or empty, go straight to video
     const isProfilePic = srcUrl && srcUrl.includes('/profile_images/');
     const isMediaImage = srcUrl && srcUrl.includes('/media/');
@@ -66,7 +145,7 @@ function resolveSingle(srcUrl, target) {
   // Try the srcUrl from context menu first (works when right-clicking directly on img)
   const url = upgradeImageUrl(srcUrl);
   if (url) {
-    const id = extractTweetId(target);
+    const id = tweetIdFor(target);
     return [{ url, type: 'image', filename: id ? `tweet_${id}` : null }];
   }
 
@@ -77,8 +156,8 @@ function resolveSingle(srcUrl, target) {
       const upgraded = upgradeImageUrl(nearestMedia.src);
       if (upgraded) {
         // Don't return a profile pic if the tweet has a video
-        if (!tweetHasVideo(target) || !upgraded.includes('/profile_images/')) {
-          const id = extractTweetId(target);
+        if (!targetHasVideo(target) || !upgraded.includes('/profile_images/')) {
+          const id = tweetIdFor(target);
           return [{ url: upgraded, type: 'image', filename: id ? `tweet_${id}` : null }];
         }
       }
@@ -97,18 +176,15 @@ function resolveSingle(srcUrl, target) {
 }
 
 function resolveAll(target) {
-  const tweet = findPostContainer(target, [
-    'article[data-testid="tweet"]',
-    'article[role="article"]',
-    '[data-testid="tweet"]',
-  ]);
-  if (!tweet) return resolveSingle(target?.src || '', target);
+  const found = findTweetScope(target);
+  if (!found) return resolveSingle(target?.src || '', target);
 
   const items = [];
-  const id = extractTweetId(target);
+  const id = statusIdInScope(found);
   let index = 1;
 
-  tweet.querySelectorAll('img[src*="pbs.twimg.com/media/"]').forEach((img) => {
+  found.scope.querySelectorAll('img[src*="pbs.twimg.com/media/"]').forEach((img) => {
+    if (!imageInScope(img, found)) return;
     const url = upgradeImageUrl(img.src);
     if (url) {
       items.push({
@@ -133,7 +209,7 @@ async function resolveVideo(target) {
   }
 
   // Fall back to API lookup via background script
-  const tweetId = extractTweetId(target) || window.location.pathname.match(/\/status\/(\d+)/)?.[1];
+  const tweetId = tweetIdFor(target) || window.location.pathname.match(/\/status\/(\d+)/)?.[1];
   if (tweetId) {
     return [{ type: 'video', filename: `tweet_${tweetId}`, tweetId, needsVideoLookup: true }];
   }
