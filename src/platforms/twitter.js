@@ -13,18 +13,22 @@ export const TWEET_SELECTORS = [
   '[data-testid="tweet"]',
 ];
 
-// A quoted tweet is not an article of its own: X renders it as a focusable
-// role="link" block *inside* the quoting tweet's article, which is what makes the
-// whole quote clickable. So walking up from the click reaches the outer article
-// for quoted and quoting media alike, and whoever asks "which tweet was this?"
-// gets the parent either way. Everything below exists to tell the two apart.
+// A quoted tweet is not an article of its own: X renders it as a role="link"
+// block *inside* the quoting tweet's article, which is what makes the whole quote
+// clickable. So walking up from the click reaches the outer article for quoted
+// and quoting media alike, and whoever asks "which tweet was this?" gets the
+// parent either way. Everything below exists to tell the two apart.
 //
-// A link-preview card is also a focusable role="link" block, so the wrapper
-// selector alone would catch cards too. The permalink check in insideQuotedTweet
-// is what separates them: a quoted tweet carries its own /status/ link, a card
-// points at an external URL.
+// The wrapper is matched on role="link" alone, not div[role="link"][tabindex]: X
+// does not always render the quote wrapper with a tabindex, and a quoted tweet
+// without one would slip past a tabindex-gated selector and be mis-attributed to
+// the outer article. The tabindex is not the discriminator anyway -- the permalink
+// is. A link-preview card is also a role="link" block, so this selector alone
+// would catch cards too; the /status/ permalink check in insideQuotedTweet is what
+// separates them: a quoted tweet carries its own /status/ link, a card points at
+// an external URL.
 export const QUOTED_TWEET_SELECTORS = [
-  'div[role="link"][tabindex]',
+  'div[role="link"]',
 ];
 
 // --- Pure functions (exported for testing) ---
@@ -106,12 +110,17 @@ export function scopeHasVideo({ scope, article, isQuoted }) {
   return videos.some((video) => !insideQuotedTweet(video, article));
 }
 
-// True if `img` belongs to `scope` rather than to a quoted tweet nested inside
-// the main article. querySelectorAll on the quoted block already excludes the
-// rest of the page, so quoted scopes always own their matches.
+// True if `img` belongs to `scope`: inside the quoted block for a quoted scope,
+// or outside every quoted block for the main scope. The resolveAll sweep only
+// passes media it pulled from scope.querySelectorAll, which is always contained,
+// so the check is a no-op there. The nearest-media fallback is the caller that
+// needs it: findNearestMedia climbs to the shared article and can hand back the
+// PARENT tweet's media for a click inside a text-only quote, and an unconditional
+// true for quoted scopes would download that parent image as tweet_<quoteId>.
+// Checking containment both ways keeps media attributed to the tweet it lives in.
 export function imageInScope(img, { article, isQuoted }) {
-  if (isQuoted) return true;
-  return !insideQuotedTweet(img, article);
+  const inQuoted = Boolean(insideQuotedTweet(img, article));
+  return isQuoted ? inQuoted : !inQuoted;
 }
 
 // --- Browser wiring ---

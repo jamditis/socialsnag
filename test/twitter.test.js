@@ -27,6 +27,13 @@ function selMatch(node, sel) {
   if (sel === 'img[src*="pbs.twimg.com/media/"]') {
     return node.tagName === 'IMG' && (node.src || '').includes('pbs.twimg.com/media/');
   }
+  // A real element matching div[role="link"][tabindex] also matches the broader
+  // div[role="link"]. The quoted-wrapper stubs carry the more specific selector in
+  // `is`, so model that subsumption here rather than retagging every stub -- and so
+  // a stub tagged with the plain (no-tabindex) variant matches the same selector.
+  if (sel === 'div[role="link"]') {
+    return (node.is || []).some((s) => s.startsWith('div[role="link"]'));
+  }
   return (node.is || []).includes(sel);
 }
 
@@ -96,6 +103,25 @@ function textOnlyQuotingTree({ quotedVideo = false } = {}) {
     children: [mainText, quoted],
   });
   return { article, mainText, quoted, quotedMedia };
+}
+
+// The mirror of textOnlyQuotingTree: a main tweet with its own media quoting a
+// text-only tweet. A click inside the quote must not pick up the parent's image:
+// findNearestMedia climbs to the shared article and returns MAIN.jpg, so the
+// quoted scope has to reject it rather than name it tweet_222. The quote wrapper
+// deliberately carries the plain div[role="link"] (no tabindex) variant too.
+function mediaMainTextQuoteTree() {
+  const mainStatus = makeNode({ tag: 'A', href: '/main/status/111' });
+  const mainImg = makeNode({ tag: 'IMG', src: 'https://pbs.twimg.com/media/MAIN.jpg' });
+  const quotedStatus = makeNode({ tag: 'A', href: '/other/status/222' });
+  const quotedText = makeNode({ tag: 'DIV' });
+  const quoted = makeNode({ is: ['div[role="link"]'], children: [quotedStatus, quotedText] });
+  const article = makeNode({
+    tag: 'ARTICLE',
+    is: ['article[data-testid="tweet"]', 'article[role="article"]'],
+    children: [mainStatus, mainImg, quoted],
+  });
+  return { article, mainStatus, mainImg, quoted, quotedStatus, quotedText };
 }
 
 describe('upgradeImageUrl', () => {
@@ -212,6 +238,25 @@ describe('insideQuotedTweet', () => {
       children: [card],
     });
     expect(insideQuotedTweet(cardImg, article)).toBeNull();
+  });
+
+  it('detects a quoted tweet whose wrapper has no tabindex', () => {
+    // X does not always render the quote wrapper with a tabindex. Detection keys
+    // on role="link" plus the /status/ permalink, not the tabindex, so a
+    // tabindex-less quote must still scope to itself and not the outer article.
+    const quotedStatus = makeNode({ tag: 'A', href: '/other/status/222' });
+    const quotedImg = makeNode({ tag: 'IMG', src: 'https://pbs.twimg.com/media/QUOTE.jpg' });
+    const quoted = makeNode({ is: ['div[role="link"]'], children: [quotedStatus, quotedImg] });
+    const mainStatus = makeNode({ tag: 'A', href: '/main/status/111' });
+    const article = makeNode({
+      tag: 'ARTICLE',
+      is: ['article[data-testid="tweet"]', 'article[role="article"]'],
+      children: [mainStatus, quoted],
+    });
+    expect(insideQuotedTweet(quotedImg, article)).toBe(quoted);
+    const found = findTweetScope(quotedImg);
+    expect(found.isQuoted).toBe(true);
+    expect(statusIdInScope(found)).toBe('222');
   });
 });
 
@@ -381,5 +426,17 @@ describe('resolveSingle', () => {
     // the fallback terminates empty instead of resolving out-of-scope video.
     const { mainText } = textOnlyQuotingTree({ quotedVideo: true });
     expect(resolveSingle('', mainText, { allowFallback: false })).toEqual([]);
+  });
+
+  it('does not attribute the parent image to a text-only quoted tweet', () => {
+    // The reverse leak: a click inside a text-only quote whose parent tweet has
+    // media. findNearestMedia climbs to the shared article and hands back the
+    // PARENT's image; the quoted scope must reject it rather than download
+    // MAIN.jpg named as tweet_222. imageInScope's old unconditional-true for
+    // quoted scopes let it through.
+    const { quotedText } = mediaMainTextQuoteTree();
+    const items = resolveSingle('', quotedText, { allowFallback: false });
+    expect(items.some((i) => i.url.includes('MAIN.jpg'))).toBe(false);
+    expect(items).toEqual([]);
   });
 });
