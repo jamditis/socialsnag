@@ -24,9 +24,11 @@ export const TWEET_SELECTORS = [
 // without one would slip past a tabindex-gated selector and be mis-attributed to
 // the outer article. The tabindex is not the discriminator anyway -- the permalink
 // is. A link-preview card is also a role="link" block, so this selector alone
-// would catch cards too; the /status/ permalink check in insideQuotedTweet is what
-// separates them: a quoted tweet carries its own /status/ link, a card points at
-// an external URL.
+// would catch cards too; the status-permalink check in insideQuotedTweet is what
+// separates them: a quoted tweet carries its own Twitter/X /status/ link, a card
+// points at an external URL (which can itself contain "/status/", so the check
+// requires a real Twitter/X status link, not just the substring -- see
+// isTwitterStatusHref).
 export const QUOTED_TWEET_SELECTORS = [
   'div[role="link"]',
 ];
@@ -54,17 +56,60 @@ export function filterCapturedVideos(captured) {
     .sort((a, b) => b.timestamp - a.timestamp);
 }
 
+// A genuine Twitter/X status permalink, told apart from a link-preview card whose
+// external URL merely contains "/status/<digits>" (an article, an issue tracker,
+// e.g. https://example.com/status/123). The discriminator is the host: a quoted
+// tweet's permalink is same-origin on X -- a relative path, or an absolute URL on
+// x.com / twitter.com and their subdomains -- while a card links out to another
+// host. The path only has to carry a /status/<id> segment; X emits more than one
+// shape (/<user>/status/<id> and the canonical /i/web/status/<id>), so the check
+// keys on the host, not the path prefix. Without it, a bare "/status/" substring
+// match lets an external card masquerade as a quoted tweet and its path number be
+// read as a tweet id (issue #42).
+const STATUS_PATH = /\/status\/\d+/;
+export function isTwitterStatusHref(href) {
+  if (!href) return false;
+  // A rooted path (/user/status/1) is same-origin, so its path decides. A
+  // protocol-relative //host/... only looks rooted: it names another host, so
+  // fall through to the host check below rather than trusting its path segment.
+  if (href.startsWith('/') && !href.startsWith('//')) return STATUS_PATH.test(href);
+  let url;
+  try {
+    url = new URL(href);
+  } catch {
+    return false;
+  }
+  const host = url.hostname.toLowerCase();
+  const onTwitter =
+    host === 'x.com' ||
+    host === 'twitter.com' ||
+    host.endsWith('.x.com') ||
+    host.endsWith('.twitter.com');
+  return onTwitter && STATUS_PATH.test(url.pathname);
+}
+
+// The first real Twitter/X status link within `el`, or null. The selector matches
+// any "/status/" href; isTwitterStatusHref rejects a card's external one, so a
+// quoted tweet embedding such a card is still recognized by its own permalink.
+function statusLinkWithin(el) {
+  const links = el.querySelectorAll?.('a[href*="/status/"]') || [];
+  for (const link of links) {
+    if (isTwitterStatusHref(link.href)) return link;
+  }
+  return null;
+}
+
 // The quoted tweet `node` sits inside, searching up to but not past `article`,
 // or null if `node` is in the main tweet. A quoted tweet is a focusable
-// role="link" wrapper that carries its own /status/ permalink; the permalink is
-// required so a link-preview card, also role="link", is not mistaken for a quote.
-// Nodes need only `.matches`, `.querySelector`, and `.parentElement`, so plain
-// object stubs exercise it in tests exactly as the real DOM does.
+// role="link" wrapper that carries its own Twitter/X /status/ permalink; that
+// permalink is required so a link-preview card, also role="link", is not mistaken
+// for a quote. Nodes need `.matches`, `.querySelectorAll`, and `.parentElement`,
+// so plain object stubs exercise it in tests exactly as the real DOM does.
 export function insideQuotedTweet(node, article) {
   let el = node;
   while (el && el !== article) {
     const isWrapper = QUOTED_TWEET_SELECTORS.some((selector) => el.matches?.(selector));
-    if (isWrapper && el.querySelector?.('a[href*="/status/"]')) return el;
+    if (isWrapper && statusLinkWithin(el)) return el;
     el = el.parentElement;
   }
   return null;
@@ -89,6 +134,8 @@ export function findTweetScope(target) {
 export function statusIdInScope({ scope, article, isQuoted }) {
   const links = scope.querySelectorAll?.('a[href*="/status/"]') || [];
   for (const link of links) {
+    // A link-preview card's external /status/<digits> URL is not a tweet id.
+    if (!isTwitterStatusHref(link.href)) continue;
     if (!isQuoted && insideQuotedTweet(link, article)) continue;
     const match = link.href?.match(/\/status\/(\d+)/);
     if (match) return match[1];
