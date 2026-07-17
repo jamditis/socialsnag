@@ -7,6 +7,8 @@ import {
   statusIdInScope,
   scopeHasVideo,
   imageInScope,
+  resolveAll,
+  resolveSingle,
 } from '../src/platforms/twitter.js';
 
 // Minimal DOM stub in the same plain-object style as common.test.js. A node
@@ -35,6 +37,14 @@ function makeNode({ tag = 'DIV', is = [], href, src, children = [] } = {}) {
   node.querySelector = (sel) => descendants.find((d) => selMatch(d, sel)) || null;
   node.querySelectorAll = (sel) => descendants.filter((d) => selMatch(d, sel));
   node.parentElement = null;
+  node.closest = (sel) => {
+    let el = node;
+    while (el) {
+      if (selMatch(el, sel)) return el;
+      el = el.parentElement;
+    }
+    return null;
+  };
   return node;
 }
 
@@ -59,6 +69,25 @@ function quotedTweetTree({ mainVideo = false, quotedVideo = false } = {}) {
     children: mainChildren,
   });
   return { article, mainStatus, mainImg, quoted, quotedStatus, quotedImg };
+}
+
+// A text-only main tweet quoting a photo tweet: the main tweet has no media of
+// its own, so a scoped sweep filters the quoted image out and comes back empty.
+// This is the tree that overflowed the stack before the allowFallback guard.
+function textOnlyQuotingTree() {
+  const quotedStatus = makeNode({ tag: 'A', href: '/other/status/222' });
+  const quotedImg = makeNode({ tag: 'IMG', src: 'https://pbs.twimg.com/media/QUOTE.jpg' });
+  const quoted = makeNode({
+    is: ['div[role="link"][tabindex]'],
+    children: [quotedStatus, quotedImg],
+  });
+  const mainText = makeNode({ tag: 'DIV' });
+  const article = makeNode({
+    tag: 'ARTICLE',
+    is: ['article[data-testid="tweet"]', 'article[role="article"]'],
+    children: [mainText, quoted],
+  });
+  return { article, mainText, quoted, quotedImg };
 }
 
 describe('upgradeImageUrl', () => {
@@ -294,5 +323,34 @@ describe('scopeHasVideo', () => {
     expect(found.scope).toBe(article);
     expect(found.isQuoted).toBe(false);
     expect(scopeHasVideo(found)).toBe(true);
+  });
+});
+
+describe('resolveAll', () => {
+  it('returns only the main tweet media, never the quoted tweet image', () => {
+    const t = quotedTweetTree();
+    const items = resolveAll(t.article);
+    expect(items).toHaveLength(1);
+    expect(items[0].url).toContain('MAIN.jpg');
+    expect(items.some((i) => i.url.includes('QUOTE.jpg'))).toBe(false);
+  });
+
+  it('terminates with an empty result when the main tweet only quotes media', () => {
+    // The scoped sweep filters the quoted image out, leaving nothing to download
+    // for the main tweet. Before the allowFallback guard this re-entered
+    // resolveSingle -> resolveAll forever and overflowed the stack; getting a
+    // value back at all proves the loop is cut.
+    const { mainText } = textOnlyQuotingTree();
+    expect(resolveAll(mainText)).toEqual([]);
+  });
+});
+
+describe('resolveSingle', () => {
+  it('terminates on a right-click over a text-only quoting tweet, without overflowing', () => {
+    // The production `single` path: a right-click resolves through resolveSingle
+    // first (allowFallback default on). It bounces once into resolveAll, whose
+    // empty sweep returns via resolveSingle with the guard off, so the loop ends.
+    const { mainText } = textOnlyQuotingTree();
+    expect(resolveSingle('', mainText)).toEqual([]);
   });
 });

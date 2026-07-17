@@ -114,7 +114,10 @@ export function imageInScope(img, { article, isQuoted }) {
   return !insideQuotedTweet(img, article);
 }
 
-// --- Browser wiring (not exported) ---
+// --- Browser wiring ---
+// tweetIdFor/targetHasVideo stay internal; resolveSingle and resolveAll are
+// exported so tests can prove their mutual recursion has a base case (see the
+// allowFallback note below) from both entry points, without standing up a full DOM.
 
 // The tweet id owning the click, scoped to the quoted tweet when the click is
 // inside one. Null off any tweet.
@@ -130,7 +133,15 @@ function targetHasVideo(target) {
   return found ? scopeHasVideo(found) : false;
 }
 
-function resolveSingle(srcUrl, target) {
+// `allowFallback` guards the one edge of the resolveSingle <-> resolveAll
+// recursion that can loop: resolveAll calls this as its empty-sweep fallback, and
+// this function's own last resort calls resolveAll back. A scoped sweep that comes
+// back empty (a main tweet whose only images belong to a quoted tweet, now that
+// imageInScope filters them out) would otherwise re-enter resolveAll forever. When
+// resolveAll is the caller it passes allowFallback:false, so the last resort
+// returns a terminal empty result instead of recursing. Every other terminating
+// path (video detection, nearest-media) still runs, so this only cuts the loop.
+export function resolveSingle(srcUrl, target, { allowFallback = true } = {}) {
   // Check if this tweet contains a video — if so, prioritize video download
   // (Twitter blocks right-click on videos, so users right-click the tweet text instead)
   if (targetHasVideo(target)) {
@@ -171,13 +182,17 @@ function resolveSingle(srcUrl, target) {
     return resolveVideo(target);
   }
 
-  // Last resort: try to find any media in the parent tweet
-  return resolveAll(target);
+  // Last resort: try to find any media in the parent tweet. Skipped when
+  // resolveAll is the caller, so a scoped-empty sweep terminates here instead of
+  // re-entering resolveAll and looping.
+  return allowFallback ? resolveAll(target) : [];
 }
 
-function resolveAll(target) {
+export function resolveAll(target) {
   const found = findTweetScope(target);
-  if (!found) return resolveSingle(target?.src || '', target);
+  // Off any tweet: let resolveSingle try the click target itself, but with the
+  // guard off so its last resort does not bounce back here and loop.
+  if (!found) return resolveSingle(target?.src || '', target, { allowFallback: false });
 
   const items = [];
   const id = statusIdInScope(found);
@@ -196,7 +211,7 @@ function resolveAll(target) {
     }
   });
 
-  return items.length > 0 ? items : resolveSingle(target?.src || '', target);
+  return items.length > 0 ? items : resolveSingle(target?.src || '', target, { allowFallback: false });
 }
 
 async function resolveVideo(target) {
