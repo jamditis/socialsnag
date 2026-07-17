@@ -17,6 +17,10 @@ import {
 // against a real page. selMatch only covers the selectors the resolver uses.
 function selMatch(node, sel) {
   if (sel === 'video') return node.tagName === 'VIDEO';
+  // findNearestMedia walks up calling querySelector('img'); the real DOM matches
+  // any img by bare tag, so the stub must too, or the nearest-media fallback goes
+  // untested (it returned null here, which hid the quoted-image leak below).
+  if (sel === 'img') return node.tagName === 'IMG';
   if (sel === 'a[href*="/status/"]') {
     return node.tagName === 'A' && (node.href || '').includes('/status/');
   }
@@ -352,5 +356,16 @@ describe('resolveSingle', () => {
     // empty sweep returns via resolveSingle with the guard off, so the loop ends.
     const { mainText } = textOnlyQuotingTree();
     expect(resolveSingle('', mainText)).toEqual([]);
+  });
+
+  it('does not leak the quoted image through the nearest-media fallback', () => {
+    // resolveAll's empty sweep enters here with the guard off. findNearestMedia
+    // climbs to the shared article and returns the quoted tweet's img, so this
+    // path must scope-check before returning: without it the quoted photo came
+    // back attributed to the media-less main tweet (the leak the sweep filters).
+    const { mainText } = textOnlyQuotingTree();
+    const items = resolveSingle('', mainText, { allowFallback: false });
+    expect(items.some((i) => i.url.includes('QUOTE.jpg'))).toBe(false);
+    expect(items).toEqual([]);
   });
 });

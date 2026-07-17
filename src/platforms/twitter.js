@@ -166,8 +166,16 @@ export function resolveSingle(srcUrl, target, { allowFallback = true } = {}) {
     if (nearestMedia.tagName === 'IMG') {
       const upgraded = upgradeImageUrl(nearestMedia.src);
       if (upgraded) {
+        // findNearestMedia climbs to the shared article, so on a media-less main
+        // tweet that quotes a photo it returns the quoted tweet's img. Attributing
+        // that to the main tweet is exactly the leak this PR closes, so gate the
+        // return through the same imageInScope the resolveAll sweep uses: keep the
+        // image only when it belongs to the clicked tweet's own scope (the quoted
+        // block itself when the click landed inside one, the main tweet otherwise).
+        const found = findTweetScope(target);
+        const ownScope = !found || imageInScope(nearestMedia, found);
         // Don't return a profile pic if the tweet has a video
-        if (!targetHasVideo(target) || !upgraded.includes('/profile_images/')) {
+        if (ownScope && (!targetHasVideo(target) || !upgraded.includes('/profile_images/'))) {
           const id = tweetIdFor(target);
           return [{ url: upgraded, type: 'image', filename: id ? `tweet_${id}` : null }];
         }
