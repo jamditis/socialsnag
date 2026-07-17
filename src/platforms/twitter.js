@@ -163,26 +163,27 @@ export function resolveSingle(srcUrl, target, { allowFallback = true } = {}) {
   // If click landed on an overlay div, find the nearest media element
   const nearestMedia = findNearestMedia(target);
   if (nearestMedia) {
-    if (nearestMedia.tagName === 'IMG') {
-      const upgraded = upgradeImageUrl(nearestMedia.src);
-      if (upgraded) {
-        // findNearestMedia climbs to the shared article, so on a media-less main
-        // tweet that quotes a photo it returns the quoted tweet's img. Attributing
-        // that to the main tweet is exactly the leak this PR closes, so gate the
-        // return through the same imageInScope the resolveAll sweep uses: keep the
-        // image only when it belongs to the clicked tweet's own scope (the quoted
-        // block itself when the click landed inside one, the main tweet otherwise).
-        const found = findTweetScope(target);
-        const ownScope = !found || imageInScope(nearestMedia, found);
+    // findNearestMedia climbs to the shared article, so it can hand back media that
+    // belongs to a quoted tweet the click is not inside -- a quoted photo, or a quoted
+    // video when the main tweet has none of its own. imageInScope is a DOM-position
+    // check (is this node inside a quoted block?), so it gates a <video> exactly as an
+    // <img>: keep the nearest media only when it belongs to the clicked tweet's own
+    // scope. Without this gate both branches resolve the quote's media as the main
+    // tweet's -- the same leak the resolveAll sweep already filters out.
+    const found = findTweetScope(target);
+    const inOwnScope = !found || imageInScope(nearestMedia, found);
+    if (inOwnScope) {
+      if (nearestMedia.tagName === 'IMG') {
+        const upgraded = upgradeImageUrl(nearestMedia.src);
         // Don't return a profile pic if the tweet has a video
-        if (ownScope && (!targetHasVideo(target) || !upgraded.includes('/profile_images/'))) {
+        if (upgraded && (!targetHasVideo(target) || !upgraded.includes('/profile_images/'))) {
           const id = tweetIdFor(target);
           return [{ url: upgraded, type: 'image', filename: id ? `tweet_${id}` : null }];
         }
       }
-    }
-    if (nearestMedia.tagName === 'VIDEO' || nearestMedia.closest?.('[data-testid="videoComponent"]')) {
-      return resolveVideo(target);
+      if (nearestMedia.tagName === 'VIDEO' || nearestMedia.closest?.('[data-testid="videoComponent"]')) {
+        return resolveVideo(target);
+      }
     }
   }
 

@@ -75,15 +75,19 @@ function quotedTweetTree({ mainVideo = false, quotedVideo = false } = {}) {
   return { article, mainStatus, mainImg, quoted, quotedStatus, quotedImg };
 }
 
-// A text-only main tweet quoting a photo tweet: the main tweet has no media of
-// its own, so a scoped sweep filters the quoted image out and comes back empty.
-// This is the tree that overflowed the stack before the allowFallback guard.
-function textOnlyQuotingTree() {
+// A text-only main tweet quoting a media tweet: the main tweet has no media of
+// its own, so a scoped sweep filters the quoted media out and comes back empty.
+// This is the tree that overflowed the stack before the allowFallback guard, and
+// the one the nearest-media fallback leaked through. quotedVideo swaps the quoted
+// photo for a quoted video so the VIDEO fallback branch can be exercised too.
+function textOnlyQuotingTree({ quotedVideo = false } = {}) {
   const quotedStatus = makeNode({ tag: 'A', href: '/other/status/222' });
-  const quotedImg = makeNode({ tag: 'IMG', src: 'https://pbs.twimg.com/media/QUOTE.jpg' });
+  const quotedMedia = quotedVideo
+    ? makeNode({ tag: 'VIDEO' })
+    : makeNode({ tag: 'IMG', src: 'https://pbs.twimg.com/media/QUOTE.jpg' });
   const quoted = makeNode({
     is: ['div[role="link"][tabindex]'],
-    children: [quotedStatus, quotedImg],
+    children: [quotedStatus, quotedMedia],
   });
   const mainText = makeNode({ tag: 'DIV' });
   const article = makeNode({
@@ -91,7 +95,7 @@ function textOnlyQuotingTree() {
     is: ['article[data-testid="tweet"]', 'article[role="article"]'],
     children: [mainText, quoted],
   });
-  return { article, mainText, quoted, quotedImg };
+  return { article, mainText, quoted, quotedMedia };
 }
 
 describe('upgradeImageUrl', () => {
@@ -367,5 +371,15 @@ describe('resolveSingle', () => {
     const items = resolveSingle('', mainText, { allowFallback: false });
     expect(items.some((i) => i.url.includes('QUOTE.jpg'))).toBe(false);
     expect(items).toEqual([]);
+  });
+
+  it('does not resolve a quoted video through the nearest-media fallback', () => {
+    // Same leak on the VIDEO branch: findNearestMedia returns the quoted <video>
+    // for a media-less main tweet quoting a video. Ungated, the branch called
+    // resolveVideo(target) (a Promise) and would download the quote's video or
+    // emit a failing lookup for the main tweet. The scope gate must skip it, so
+    // the fallback terminates empty instead of resolving out-of-scope video.
+    const { mainText } = textOnlyQuotingTree({ quotedVideo: true });
+    expect(resolveSingle('', mainText, { allowFallback: false })).toEqual([]);
   });
 });
