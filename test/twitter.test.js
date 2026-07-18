@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   upgradeImageUrl,
   filterCapturedVideos,
+  isTwitterStatusHref,
   insideQuotedTweet,
   findTweetScope,
   statusIdInScope,
@@ -240,6 +241,22 @@ describe('insideQuotedTweet', () => {
     expect(insideQuotedTweet(cardImg, article)).toBeNull();
   });
 
+  it('does not treat a card whose external URL contains /status/ as a quoted tweet', () => {
+    // A link-preview card can point at an external URL that itself contains
+    // "/status/<digits>" (an article, an issue tracker). That substring alone must
+    // not mark the card as a quoted tweet, or its path number becomes a tweet id
+    // (issue #42).
+    const cardImg = makeNode({ tag: 'IMG', src: 'https://pbs.twimg.com/card_img/9/x.jpg' });
+    const cardLink = makeNode({ tag: 'A', href: 'https://example.com/status/123' });
+    const card = makeNode({ is: ['div[role="link"][tabindex]'], children: [cardLink, cardImg] });
+    const article = makeNode({
+      tag: 'ARTICLE',
+      is: ['article[data-testid="tweet"]', 'article[role="article"]'],
+      children: [card],
+    });
+    expect(insideQuotedTweet(cardImg, article)).toBeNull();
+  });
+
   it('detects a quoted tweet whose wrapper has no tabindex', () => {
     // X does not always render the quote wrapper with a tabindex. Detection keys
     // on role="link" plus the /status/ permalink, not the tabindex, so a
@@ -247,6 +264,24 @@ describe('insideQuotedTweet', () => {
     const quotedStatus = makeNode({ tag: 'A', href: '/other/status/222' });
     const quotedImg = makeNode({ tag: 'IMG', src: 'https://pbs.twimg.com/media/QUOTE.jpg' });
     const quoted = makeNode({ is: ['div[role="link"]'], children: [quotedStatus, quotedImg] });
+    const mainStatus = makeNode({ tag: 'A', href: '/main/status/111' });
+    const article = makeNode({
+      tag: 'ARTICLE',
+      is: ['article[data-testid="tweet"]', 'article[role="article"]'],
+      children: [mainStatus, quoted],
+    });
+    expect(insideQuotedTweet(quotedImg, article)).toBe(quoted);
+    const found = findTweetScope(quotedImg);
+    expect(found.isQuoted).toBe(true);
+    expect(statusIdInScope(found)).toBe('222');
+  });
+
+  it('detects a quoted tweet whose permalink is the /i/web/status/ shape', () => {
+    // The permalink status id is not the first path segment here. Detection and id
+    // extraction must still work, or quoted media loses its tweet-based filename.
+    const quotedStatus = makeNode({ tag: 'A', href: '/i/web/status/222' });
+    const quotedImg = makeNode({ tag: 'IMG', src: 'https://pbs.twimg.com/media/QUOTE.jpg' });
+    const quoted = makeNode({ is: ['div[role="link"][tabindex]'], children: [quotedStatus, quotedImg] });
     const mainStatus = makeNode({ tag: 'A', href: '/main/status/111' });
     const article = makeNode({
       tag: 'ARTICLE',
@@ -294,6 +329,68 @@ describe('findTweetScope', () => {
     expect(found.scope).toBe(article);
     expect(found.isQuoted).toBe(false);
     expect(statusIdInScope(found)).toBe('111');
+  });
+
+  it('reads the main tweet id, not a card path number, when the card URL has /status/', () => {
+    // The card's external https://example.com/status/123 must neither scope the
+    // click away from the main tweet nor be mistaken for the tweet id (issue #42).
+    const cardImg = makeNode({ tag: 'IMG', src: 'https://pbs.twimg.com/card_img/9/x.jpg' });
+    const cardLink = makeNode({ tag: 'A', href: 'https://example.com/status/123' });
+    const card = makeNode({ is: ['div[role="link"][tabindex]'], children: [cardLink, cardImg] });
+    const mainStatus = makeNode({ tag: 'A', href: '/main/status/111' });
+    const article = makeNode({
+      tag: 'ARTICLE',
+      is: ['article[data-testid="tweet"]', 'article[role="article"]'],
+      children: [mainStatus, card],
+    });
+    const found = findTweetScope(cardImg);
+    expect(found.scope).toBe(article);
+    expect(found.isQuoted).toBe(false);
+    expect(statusIdInScope(found)).toBe('111');
+  });
+});
+
+describe('isTwitterStatusHref', () => {
+  it('accepts a site-relative status permalink', () => {
+    expect(isTwitterStatusHref('/main/status/111')).toBe(true);
+    expect(isTwitterStatusHref('/some_user/status/98765')).toBe(true);
+  });
+
+  it('accepts an absolute x.com or twitter.com status URL', () => {
+    expect(isTwitterStatusHref('https://x.com/user/status/123')).toBe(true);
+    expect(isTwitterStatusHref('https://twitter.com/user/status/123')).toBe(true);
+    expect(isTwitterStatusHref('https://mobile.twitter.com/user/status/123')).toBe(true);
+  });
+
+  it('accepts the canonical /i/web/status/ permalink shape', () => {
+    // X also emits /i/web/status/<id> (status is not the first path segment), both
+    // relative and absolute. Keying on the host, not the path prefix, keeps these
+    // recognized so quoted-tweet scoping and id extraction still work.
+    expect(isTwitterStatusHref('/i/web/status/123')).toBe(true);
+    expect(isTwitterStatusHref('https://x.com/i/web/status/123')).toBe(true);
+  });
+
+  it('rejects an external URL that merely contains /status/', () => {
+    expect(isTwitterStatusHref('https://example.com/status/123')).toBe(false);
+    expect(isTwitterStatusHref('https://notx.com/a/status/1')).toBe(false);
+  });
+
+  it('rejects a look-alike host that only ends in the brand name', () => {
+    expect(isTwitterStatusHref('https://evil-x.com/user/status/123')).toBe(false);
+    expect(isTwitterStatusHref('https://x.com.evil.com/user/status/123')).toBe(false);
+  });
+
+  it('rejects a protocol-relative url that only looks like a rooted path', () => {
+    // //host/... starts with '/' but names another host; the path fast-path must
+    // not accept it on the strength of its /status/ segment alone.
+    expect(isTwitterStatusHref('//evil.com/status/123')).toBe(false);
+  });
+
+  it('rejects a non-status link and empty input', () => {
+    expect(isTwitterStatusHref('https://example.com/article')).toBe(false);
+    expect(isTwitterStatusHref('/user/photo/1')).toBe(false);
+    expect(isTwitterStatusHref('')).toBe(false);
+    expect(isTwitterStatusHref(undefined)).toBe(false);
   });
 });
 
