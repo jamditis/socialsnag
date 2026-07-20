@@ -202,8 +202,8 @@ describe('buildCapturedItems', () => {
   const cap = (url) => ({ url, type: 'image' });
 
   it('dedupes before capping, so the cap counts distinct photos', () => {
-    // The old order capped first, so one repeated photo could fill all five slots
-    // and push out four real ones.
+    // Order matters: capping first lets one repeated photo fill every slot and push
+    // out real ones.
     const captured = [
       cap(`${CDN}/a_111111111111_n.jpg`),
       cap(`${CDN}/a_111111111111_n.jpg`),
@@ -211,7 +211,7 @@ describe('buildCapturedItems', () => {
       cap(`${CDN}/b_222222222222_n.jpg`),
       cap(`${CDN}/c_333333333333_n.jpg`),
     ];
-    const { items, dropped } = buildCapturedItems(captured, 1, 5);
+    const { items, dropped } = buildCapturedItems(captured, 5);
     expect(items.map((i) => i.url)).toEqual([
       `${CDN}/a_111111111111_n.jpg`,
       `${CDN}/b_222222222222_n.jpg`,
@@ -222,7 +222,7 @@ describe('buildCapturedItems', () => {
 
   it('reports how many it dropped rather than truncating silently', () => {
     const captured = Array.from({ length: 8 }, (_, i) => cap(`${CDN}/p${i}_11111111111${i}_n.jpg`));
-    const { items, dropped } = buildCapturedItems(captured, 1, 5);
+    const { items, dropped } = buildCapturedItems(captured, 5);
     expect(items).toHaveLength(5);
     expect(dropped).toBe(3);
   });
@@ -237,7 +237,7 @@ describe('buildCapturedItems', () => {
       cap(`${CDN}/c_333333333333_n.jpg`),
       cap(`${CDN}/old_111111111111_n.jpg`),
     ];
-    const { items } = buildCapturedItems(captured, 1, 2);
+    const { items } = buildCapturedItems(captured, 2);
     expect(items.map((i) => i.url)).toEqual([
       `${CDN}/c_333333333333_n.jpg`,
       `${CDN}/old_111111111111_n.jpg`,
@@ -246,7 +246,7 @@ describe('buildCapturedItems', () => {
 
   it('keeps the most recent captures', () => {
     const captured = [cap(`${CDN}/old_n.jpg`), cap(`${CDN}/mid_n.jpg`), cap(`${CDN}/new_n.jpg`)];
-    const { items } = buildCapturedItems(captured, 1, 2);
+    const { items } = buildCapturedItems(captured, 2);
     expect(items.map((i) => i.url)).toEqual([`${CDN}/mid_n.jpg`, `${CDN}/new_n.jpg`]);
   });
 
@@ -258,24 +258,34 @@ describe('buildCapturedItems', () => {
       cap('https://evil.com/?u=https://scontent.fbcdn.net/photo.jpg'),
       cap(`${CDN}/real_111111111111_n.jpg`),
     ];
-    const { items } = buildCapturedItems(captured, 1, 5);
+    const { items } = buildCapturedItems(captured, 5);
     expect(items.map((i) => i.url)).toEqual([`${CDN}/real_111111111111_n.jpg`]);
   });
 
   it('ignores captured video entries', () => {
     const captured = [{ url: `${CDN}/clip.mp4`, type: 'video' }, cap(`${CDN}/photo_n.jpg`)];
-    const { items } = buildCapturedItems(captured, 1, 5);
+    const { items } = buildCapturedItems(captured, 5);
     expect(items.map((i) => i.url)).toEqual([`${CDN}/photo_n.jpg`]);
   });
 
   it('survives a malformed capture entry', () => {
-    const { items } = buildCapturedItems([null, {}, cap(`${CDN}/photo_n.jpg`)], 1, 5);
+    const { items } = buildCapturedItems([null, {}, cap(`${CDN}/photo_n.jpg`)], 5);
     expect(items).toHaveLength(1);
   });
 
-  it('numbers from the index the DOM walk left off at', () => {
-    const { items, index } = buildCapturedItems([cap(`${CDN}/photo_n.jpg`)], 3, 5);
-    expect(items[0].filename).toBe('photo_3');
-    expect(index).toBe(4);
+  it('collapses size variants the way the DOM path does', () => {
+    // The browser requests whichever size it renders, so one photo shown small and
+    // then large is captured twice. Keying on the raw URL would call that two photos
+    // and hand back the thumbnail to download.
+    const { items } = buildCapturedItems([
+      cap(`${CDN}/s320x320/123456789012_n.jpg`),
+      cap(`${CDN}/p720x720/123456789012_n.jpg`),
+    ], 5);
+    expect(items.map((i) => i.url)).toEqual([`${CDN}/123456789012_n.jpg`]);
+  });
+
+  it('numbers from one, since it only runs when the DOM walk found nothing', () => {
+    const { items } = buildCapturedItems([cap(`${CDN}/a_n.jpg`), cap(`${CDN}/b_n.jpg`)], 5);
+    expect(items.map((i) => i.filename)).toEqual(['photo_1', 'photo_2']);
   });
 });

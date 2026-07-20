@@ -84,11 +84,21 @@ export function buildImageItems(images, startIndex = 1) {
  * Turn webRequest-captured CDN URLs into download items, used when the DOM walk
  * found nothing.
  *
+ * Runs the same upgradeUrl normalization as the DOM path, and for both of its
+ * reasons. The browser requests whichever size it renders, so a photo shown as a
+ * thumbnail and then full size is captured twice, and keying on the raw URL would
+ * treat those as two photos while handing back the thumbnail to download.
+ *
+ * That normalization is partial, and the limit is worth stating rather than implying.
+ * upgradeUrl strips the size segment from the path and nothing else, so two captures
+ * of one photo that also differ in their `oh=` / `oe=` signature parameters survive
+ * as separate entries. This collapses the size-variant case, which is the common one,
+ * and does not claim to collapse every duplicate.
+ *
  * Capture order is network arrival order, not page order, so this cannot recover
  * album ordering the way the DOM path does. What it can do is be deterministic:
- * dedupe first, then cap, so the cap counts distinct photos instead of being spent
- * on repeats of one. Capping before deduping was the old behaviour and it could
- * return a single photo five times while dropping four real ones.
+ * dedupe first, then cap, so the cap is spent on distinct photos rather than on
+ * repeats of one.
  *
  * The cap exists because captures are page-wide and include media from neighbouring
  * posts and ads. It returns how many it dropped so the caller can say so rather than
@@ -102,29 +112,30 @@ export function buildImageItems(images, startIndex = 1) {
  * sighting would age it out of the cap in favour of an older unrelated capture.
  *
  * @param {Array<{url: string, type: string}>} captured
- * @param {number} startIndex first filename suffix to use
  * @param {number} limit most items to return
- * @returns {{items: Array<object>, index: number, dropped: number}}
+ * @returns {{items: Array<object>, dropped: number}}
  */
-export function buildCapturedItems(captured, startIndex = 1, limit = 5) {
-  // A Map keeps insertion order, so deleting before setting moves a repeated URL to
-  // the end and leaves the keys in last-seen order.
+export function buildCapturedItems(captured, limit = 5) {
+  // A Map keeps insertion order, so deleting before setting moves a repeated photo
+  // to the end and leaves the keys in last-seen order.
   const lastSeen = new Map();
 
   for (const c of captured) {
     if (!c?.url || c.type !== 'image') continue;
-    if (!hostMatches(c.url, 'fbcdn.net')) continue;
-    lastSeen.delete(c.url);
-    lastSeen.set(c.url, true);
+    // upgradeUrl carries the host check, so a lookalike host returns null here.
+    const url = upgradeUrl(c.url);
+    if (!url) continue;
+    lastSeen.delete(url);
+    lastSeen.set(url, true);
   }
 
   const distinct = [...lastSeen.keys()];
   // Keep the most recent, which are the likeliest to belong to the post just opened.
   const kept = distinct.slice(-limit);
-  let index = startIndex;
+  let index = 1;
   const items = kept.map((url) => ({ url, type: 'image', filename: `photo_${index++}` }));
 
-  return { items, index, dropped: distinct.length - kept.length };
+  return { items, dropped: distinct.length - kept.length };
 }
 
 // --- Browser wiring (not exported) ---
@@ -180,12 +191,13 @@ async function resolveAll(target) {
 
   // querySelectorAll returns document order, which is the album's own slide order.
   const domImages = Array.from(post.querySelectorAll('img[src*="fbcdn.net"]'));
-  const { items, index } = buildImageItems(domImages);
+  const { items } = buildImageItems(domImages);
 
-  // Fall back to webRequest captures if DOM is sparse
+  // Fall back to webRequest captures if DOM is sparse. Numbering restarts at 1 by
+  // construction: this branch only runs when the DOM walk produced nothing.
   if (items.length === 0) {
     const captured = await getCapturedMedia();
-    const fallback = buildCapturedItems(captured, index);
+    const fallback = buildCapturedItems(captured);
     if (fallback.dropped > 0) {
       console.info(
         `SocialSnag facebook: ${fallback.dropped} older captured image(s) not included; `
