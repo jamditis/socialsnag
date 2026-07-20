@@ -41,6 +41,157 @@ export function sanitizeFilename(name) {
     .replace(/[<>:"/\\|?*\x00-\x1f]/g, '_');
 }
 
+// --- Filename and folder templates ---
+
+// One vocabulary for both the folder template and the filename template, so a
+// token means the same thing wherever it is written and the options page has one
+// list to document.
+//
+// Every token is optional at render time. A post with no id, a platform that does
+// not expose a username, a single-item download with no index: all of those are
+// normal, so a template naming them has to survive them being absent rather than
+// rendering "undefined" into a filename the user then has to clean up.
+export const TEMPLATE_TOKENS = [
+  'platform',
+  'type',
+  'postId',
+  'username',
+  'index',
+  'date',
+];
+
+// The caller supplies these for every item, so a template containing one can never
+// render empty. The rest depend on the post: an id the resolver could not find, a
+// platform with no username in the DOM, a single download with no index.
+export const ALWAYS_PRESENT_TOKENS = ['platform', 'type', 'date'];
+
+/**
+ * Render a template against a field bag.
+ *
+ * A token whose field is missing renders as nothing and takes the one separator
+ * that follows it, so a missing field costs its own segment and nothing more:
+ * `{postId}_{index}` on a post with no id renders `1`, not `_1`.
+ *
+ * Path separators are left in place. Whether they are legal is the caller's call --
+ * they are in a folder template and are not in a filename -- and that belongs with
+ * the caller's validation rather than duplicated here.
+ *
+ * @param {string} template
+ * @param {Record<string, string|number|null|undefined>} fields
+ * @returns {string} the rendered value, possibly empty
+ */
+export function renderTemplate(template, fields) {
+  if (typeof template !== 'string') return '';
+
+  // Split into literals and tokens rather than substituting in place. The reason is
+  // the separator a missing token leaves behind: `{username}_{index}` on a post with
+  // no username must render `1`, not `_1`. Knowing which literal followed which
+  // token is what makes that decidable, and a blanket "squeeze repeated separators"
+  // pass over the finished string cannot tell a gap from a `photo__{index}` the user
+  // typed on purpose.
+  const parts = [];
+  let cursor = 0;
+  for (const match of template.matchAll(/\{(\w+)\}/g)) {
+    if (match.index > cursor) parts.push({ literal: template.slice(cursor, match.index) });
+    const value = fields?.[match[1]];
+    const present = value !== undefined && value !== null && value !== '';
+    parts.push({ token: true, present, text: present ? String(value) : '' });
+    cursor = match.index + match[0].length;
+  }
+  if (cursor < template.length) parts.push({ literal: template.slice(cursor) });
+
+  const out = [];
+  let dropSeparator = false;
+  for (const part of parts) {
+    if (part.token) {
+      if (part.present) out.push(part.text);
+      // A missing token consumes the separator that follows it, and only that one.
+      dropSeparator = part.present ? false : true;
+      continue;
+    }
+    if (dropSeparator && /^[_\-\s]+$/.test(part.literal)) {
+      dropSeparator = false;
+      continue;
+    }
+    dropSeparator = false;
+    out.push(part.literal);
+  }
+
+  // Trim per path segment, so a folder template keeps its slashes while a token
+  // dropping off either end of a segment does not leave it starting or ending on
+  // punctuation.
+  return out
+    .join('')
+    .split('/')
+    .map((segment) => segment.replace(/^[_\-\s]+|[_\-\s]+$/g, ''))
+    .join('/');
+}
+
+/**
+ * Check a user-supplied template before it is saved.
+ *
+ * Unknown tokens are rejected rather than passed through. A user who writes
+ * `{postid}` for `{postId}` would otherwise get the literal text `{postid}` in
+ * every filename from then on, with nothing to explain why, and the mistake is
+ * invisible until they look at their downloads folder.
+ *
+ * @param {string} template
+ * @param {{allowSlash?: boolean}} [options] folder templates may nest, filenames may not
+ * @returns {{valid: true} | {valid: false, reason: string}}
+ */
+export function validateTemplate(template, options = {}) {
+  if (typeof template !== 'string' || template.trim() === '') {
+    return { valid: false, reason: 'Template is empty.' };
+  }
+
+  const unknown = [
+    ...new Set(
+      Array.from(template.matchAll(/\{([^}]*)\}/g))
+        .map((m) => m[1])
+        .filter((name) => !TEMPLATE_TOKENS.includes(name)),
+    ),
+  ];
+  if (unknown.length > 0) {
+    const wrote = unknown.map((u) => `{${u}}`).join(', ');
+    const available = TEMPLATE_TOKENS.map((t) => `{${t}}`).join(', ');
+    return {
+      valid: false,
+      reason: `Unknown token ${wrote}. Available: ${available}. Tokens are case-sensitive.`,
+    };
+  }
+
+  if (!options.allowSlash && /[/\\]/.test(template)) {
+    return {
+      valid: false,
+      reason:
+        'A filename cannot contain / or \\. Use the folder setting above to sort '
+        + 'downloads into subfolders.',
+    };
+  }
+
+  // A template has to render something for every item, or an item supplying none of
+  // its tokens produces a file named for nothing but its extension.
+  //
+  // Ask the renderer rather than re-deriving what counts as fixed text. It trims
+  // separators, so the `_` in `{postId}_{index}` is not a name and a rule written
+  // here would have to know that -- two statements of one thing, free to drift.
+  // Rendering against an empty bag answers it exactly: whatever survives is what a
+  // worst-case item would get.
+  const survivesWithNoFields = renderTemplate(template, {}) !== '';
+  const hasGuaranteedToken = ALWAYS_PRESENT_TOKENS.some((t) => template.includes(`{${t}}`));
+  if (!survivesWithNoFields && !hasGuaranteedToken) {
+    const guaranteed = ALWAYS_PRESENT_TOKENS.map((t) => `{${t}}`).join(', ');
+    return {
+      valid: false,
+      reason:
+        'This can render to nothing. Add some fixed text, or a token that is always '
+        + `available (${guaranteed}) -- the others depend on the post.`,
+    };
+  }
+
+  return { valid: true };
+}
+
 export function extractId(url, pattern) {
   const match = url.match(pattern);
   return match ? match[1] : null;

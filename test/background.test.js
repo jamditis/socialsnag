@@ -4,6 +4,7 @@ import {
   guessExtension,
   validateDownloadUrl,
   sanitizeDownloadPath,
+  resolveBaseFilename,
   resolveInstagramPost,
   resolveInstagramStories,
   downloadItemsAsZip,
@@ -796,5 +797,56 @@ describe('context menu registration', () => {
       expect(c.contexts).toEqual(['page', 'image', 'video', 'link']);
       expect(c.documentUrlPatterns).toBeTruthy();
     });
+  });
+});
+
+describe('resolveBaseFilename', () => {
+  const item = {
+    type: 'image',
+    filename: 'photo_999_2',
+    meta: { postId: '999', username: 'someone', index: 2 },
+  };
+
+  // The opt-in is the whole compatibility story: an update must not rename the
+  // files of every user who never asked for a template.
+  it('keeps the resolver name when no template is configured', () => {
+    expect(resolveBaseFilename(item, 'facebook', '', 2)).toBe('photo_999_2');
+    expect(resolveBaseFilename(item, 'facebook', undefined, 2)).toBe('photo_999_2');
+  });
+
+  it('falls back to platform and index when the resolver named nothing', () => {
+    expect(resolveBaseFilename({ type: 'image' }, 'facebook', '', 3)).toBe('facebook_3');
+  });
+
+  it('renders a configured template from item.meta', () => {
+    expect(resolveBaseFilename(item, 'facebook', '{platform}_{username}_{postId}_{index}', 2))
+      .toBe('facebook_someone_999_2');
+  });
+
+  it('uses the caller index, not the one on meta', () => {
+    // The zip path numbers by position in the archive, which is the number the user
+    // sees; meta.index is whatever the resolver happened to assign.
+    expect(resolveBaseFilename(item, 'facebook', 'photo_{index}', 7)).toBe('photo_7');
+  });
+
+  it('degrades to a shorter name when the resolver supplies no meta', () => {
+    // A template written for a platform that exposes a username must not produce
+    // gaps or the literal word undefined on one that does not.
+    const bare = { type: 'image', filename: 'photo_1' };
+    expect(resolveBaseFilename(bare, 'twitter', '{platform}_{username}_{postId}_{index}', 1))
+      .toBe('twitter_1');
+  });
+
+  it('falls back rather than returning an empty name', () => {
+    // Validation refuses a template that always renders empty, but a single item
+    // missing every token it names is normal, and a file called only ".jpg" is not
+    // an acceptable result.
+    const bare = { type: 'image', filename: 'photo_1' };
+    expect(resolveBaseFilename(bare, 'twitter', '{postId}{username}', 1)).toBe('photo_1');
+  });
+
+  it('includes the type and a date when asked', () => {
+    const out = resolveBaseFilename(item, 'facebook', '{date}_{type}_{postId}', 1);
+    expect(out).toMatch(/^\d{4}-\d{2}-\d{2}_image_999$/);
   });
 });

@@ -6,6 +6,10 @@ import {
   isHttps,
   sanitizeFilename,
   extractId,
+  TEMPLATE_TOKENS,
+  ALWAYS_PRESENT_TOKENS,
+  renderTemplate,
+  validateTemplate,
   findNearestMedia,
 } from '../src/platforms/common.js';
 
@@ -182,5 +186,140 @@ describe('findNearestMedia', () => {
       querySelector: (sel) => (sel === 'video' ? video : null),
     };
     expect(findNearestMedia(div)).toBe(video);
+  });
+});
+
+describe('renderTemplate', () => {
+  const FULL = {
+    platform: 'facebook',
+    type: 'image',
+    postId: '123456',
+    username: 'someone',
+    index: 2,
+    date: '2026-07-20',
+  };
+
+  it('substitutes every token', () => {
+    expect(renderTemplate('{platform}_{type}_{postId}_{username}_{index}_{date}', FULL))
+      .toBe('facebook_image_123456_someone_2_2026-07-20');
+  });
+
+  it('coerces a numeric field rather than dropping it', () => {
+    // index arrives as a number from the resolvers, and 0 is a real value.
+    expect(renderTemplate('photo_{index}', { index: 0 })).toBe('photo_0');
+    expect(renderTemplate('photo_{index}', { index: 7 })).toBe('photo_7');
+  });
+
+  // The separator handling is the whole reason this is a tokenizer rather than a
+  // string replace, so it gets pinned from every direction.
+  describe('a missing token takes its separator, and only its separator', () => {
+    it('drops a leading token cleanly', () => {
+      expect(renderTemplate('{username}_{index}', { index: 1 })).toBe('1');
+    });
+
+    it('drops a trailing token cleanly', () => {
+      expect(renderTemplate('{platform}_{postId}', { platform: 'facebook' })).toBe('facebook');
+    });
+
+    it('closes the gap when a middle token is missing', () => {
+      expect(renderTemplate('{platform}_{postId}_{index}', { platform: 'facebook', index: 3 }))
+        .toBe('facebook_3');
+    });
+
+    it('handles several missing in a row', () => {
+      expect(renderTemplate('{platform}_{username}_{postId}_{index}', { platform: 'facebook' }))
+        .toBe('facebook');
+    });
+
+    it('leaves a separator the user doubled on purpose', () => {
+      expect(renderTemplate('photo__{index}', { index: 1 })).toBe('photo__1');
+    });
+
+    it('does not eat a literal that is not a separator', () => {
+      expect(renderTemplate('{username}post_{index}', { index: 1 })).toBe('post_1');
+    });
+
+    it('treats an empty string and null like a missing field', () => {
+      expect(renderTemplate('{platform}_{postId}', { platform: 'facebook', postId: '' }))
+        .toBe('facebook');
+      expect(renderTemplate('{platform}_{postId}', { platform: 'facebook', postId: null }))
+        .toBe('facebook');
+    });
+  });
+
+  it('keeps folder separators and trims each segment on its own', () => {
+    expect(renderTemplate('{platform}/{username}/post_{index}', { platform: 'facebook', index: 1 }))
+      .toBe('facebook//post_1');
+  });
+
+  it('renders an unknown token as nothing rather than leaking the braces', () => {
+    // validateTemplate rejects these before they can be saved; this is the
+    // belt-and-braces behaviour for a value that reached the renderer anyway.
+    expect(renderTemplate('photo_{nope}', {})).toBe('photo');
+  });
+
+  it('returns an empty string for a non-string template', () => {
+    expect(renderTemplate(undefined, FULL)).toBe('');
+    expect(renderTemplate(null, FULL)).toBe('');
+  });
+});
+
+describe('validateTemplate', () => {
+  it('accepts the shipped defaults', () => {
+    expect(validateTemplate('photo_{postId}_{index}').valid).toBe(true);
+    expect(validateTemplate('SocialSnag/{platform}', { allowSlash: true }).valid).toBe(true);
+  });
+
+  it('rejects an empty or blank template', () => {
+    expect(validateTemplate('').valid).toBe(false);
+    expect(validateTemplate('   ').valid).toBe(false);
+    expect(validateTemplate(undefined).valid).toBe(false);
+  });
+
+  it('rejects an unknown token and names it', () => {
+    const result = validateTemplate('photo_{postid}');
+    expect(result.valid).toBe(false);
+    expect(result.reason).toContain('{postid}');
+    // The likeliest cause of a near-miss is capitalisation, so say so.
+    expect(result.reason).toContain('case-sensitive');
+  });
+
+  it('lists each unknown token once', () => {
+    const result = validateTemplate('{nope}_{nope}_{alsonope}');
+    expect(result.reason).toContain('{nope}');
+    expect(result.reason).toContain('{alsonope}');
+    expect(result.reason.match(/\{nope\}/g)).toHaveLength(1);
+  });
+
+  it('rejects a path separator in a filename but allows it in a folder', () => {
+    expect(validateTemplate('{platform}/{postId}').valid).toBe(false);
+    expect(validateTemplate('{platform}\\{postId}').valid).toBe(false);
+    expect(validateTemplate('{platform}/{postId}', { allowSlash: true }).valid).toBe(true);
+  });
+
+  it('points at the folder setting rather than just saying no', () => {
+    expect(validateTemplate('{platform}/{postId}').reason).toContain('folder setting');
+  });
+
+  it('rejects a template that can render to nothing', () => {
+    // Neither token is guaranteed: a single photo from a post with an unreadable id
+    // supplies neither, and the file would be named for its extension alone.
+    const result = validateTemplate('{postId}_{index}');
+    expect(result.valid).toBe(false);
+    expect(result.reason).toContain('{platform}');
+  });
+
+  it('accepts an all-token template when one token is always present', () => {
+    expect(validateTemplate('{platform}_{postId}').valid).toBe(true);
+    expect(validateTemplate('{type}_{index}').valid).toBe(true);
+  });
+
+  // The guarantee the validator rests on: these are the tokens the caller always
+  // supplies. If one is ever moved out of the always-present list without updating
+  // the caller, this pairing is where it shows up.
+  it('keeps the always-present tokens inside the vocabulary', () => {
+    for (const token of ALWAYS_PRESENT_TOKENS) {
+      expect(TEMPLATE_TOKENS).toContain(token);
+    }
   });
 });

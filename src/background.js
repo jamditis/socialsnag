@@ -1,6 +1,6 @@
 'use strict';
 
-import { ALLOWED_DOMAINS, sanitizeFilename } from './platforms/common.js';
+import { ALLOWED_DOMAINS, sanitizeFilename, renderTemplate } from './platforms/common.js';
 import { IG_APP_ID, shortcodeToMediaId, parsePostMedia, extractStoryRef, parseStoryTray, mapIgStatusToMessage } from './platforms/instagram-api.js';
 import { copyViaOffscreen, zipViaOffscreen, revokeViaOffscreen } from './offscreen-host.js';
 
@@ -80,6 +80,35 @@ export function validateDownloadUrl(url) {
   }
 
   return { valid: true };
+}
+
+
+// Resolve the base filename for an item.
+//
+// An unset template means today's behaviour exactly: the name the platform resolver
+// built. The template is opt-in because changing what every existing user's files
+// are called is not a thing to do on their behalf during an update.
+//
+// {postId} and {username} come from the resolver via item.meta. A resolver that does
+// not supply them yet renders those tokens as nothing, which the renderer absorbs
+// along with their separators rather than leaving gaps -- so a template written for
+// a platform that has the data degrades to a shorter name elsewhere instead of a
+// broken one.
+export function resolveBaseFilename(item, platform, template, index) {
+  const fallback = item.filename || `${platform}_${index}`;
+  if (!template) return fallback;
+  const rendered = renderTemplate(template, {
+    platform,
+    type: item.type || 'file',
+    postId: item.meta?.postId,
+    username: item.meta?.username,
+    index,
+    date: new Date().toISOString().slice(0, 10),
+  });
+  // A template can still render empty for an item carrying none of its tokens. The
+  // validator refuses to save one that always would, but a per-item miss is normal,
+  // and an empty name would produce a file called nothing but its extension.
+  return rendered || fallback;
 }
 
 // Build sanitized download path
@@ -526,7 +555,10 @@ export async function downloadItemsAsZip(items, platform) {
   // per-file so a slide is never silently dropped from the archive.
   if (items.some((it) => it.needsVideoLookup)) return false;
 
-  const { downloadPath } = await chrome.storage.sync.get({ downloadPath: 'SocialSnag/{platform}' });
+  const { downloadPath, filenameTemplate } = await chrome.storage.sync.get({
+    downloadPath: 'SocialSnag/{platform}',
+    filenameTemplate: '',
+  });
 
   const files = [];
   const seen = new Set();
@@ -537,7 +569,9 @@ export async function downloadItemsAsZip(items, platform) {
       continue;
     }
     const ext = guessExtension(item.url, item.type);
-    const base = sanitizeFilename(item.filename || `${platform}_${files.length + 1}`);
+    const base = sanitizeFilename(
+      resolveBaseFilename(item, platform, filenameTemplate, files.length + 1),
+    );
     // Sanitize the whole entry name: guessExtension can echo a ?format= value
     // containing / or .., and client-zip writes entry names verbatim.
     let name = sanitizeFilename(`${base}${ext}`);
@@ -620,9 +654,13 @@ async function downloadMedia(item, platform) {
     return null;
   }
 
-  const { downloadPath } = await chrome.storage.sync.get({ downloadPath: 'SocialSnag/{platform}' });
+  const { downloadPath, filenameTemplate } = await chrome.storage.sync.get({
+    downloadPath: 'SocialSnag/{platform}',
+    filenameTemplate: '',
+  });
   const ext = guessExtension(item.url, item.type);
-  const rawFilename = item.filename || `${Date.now()}`;
+  const rawFilename = resolveBaseFilename(item, platform, filenameTemplate, item.meta?.index ?? 1)
+    || `${Date.now()}`;
   const path = sanitizeDownloadPath(rawFilename, platform, ext, downloadPath);
 
   const downloadUrl = item.url;
