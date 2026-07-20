@@ -43,9 +43,9 @@ export function sanitizeFilename(name) {
 
 // --- Filename and folder templates ---
 
-// One vocabulary for both the folder template and the filename template, so a
-// token means the same thing wherever it is written and the options page has one
-// list to document.
+// The token vocabulary. Used by the filename template today; the folder template
+// still does its own single-token substitution in sanitizeDownloadPath, and moving
+// it onto this list is tracked separately.
 //
 // Every token is optional at render time. A post with no id, a platform that does
 // not expose a username, a single-item download with no index: all of those are
@@ -72,9 +72,9 @@ export const ALWAYS_PRESENT_TOKENS = ['platform', 'type', 'date'];
  * that follows it, so a missing field costs its own segment and nothing more:
  * `{postId}_{index}` on a post with no id renders `1`, not `_1`.
  *
- * Path separators are left in place. Whether they are legal is the caller's call --
- * they are in a folder template and are not in a filename -- and that belongs with
- * the caller's validation rather than duplicated here.
+ * Path separators are left in place. Whether they are legal is the caller's call,
+ * and that belongs with the caller's validation rather than duplicated here. A
+ * filename rejects them; a folder template, once it uses this, would not.
  *
  * @param {string} template
  * @param {Record<string, string|number|null|undefined>} fields

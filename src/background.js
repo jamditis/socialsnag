@@ -82,7 +82,6 @@ export function validateDownloadUrl(url) {
   return { valid: true };
 }
 
-
 // yyyy-mm-dd in the user's own timezone.
 export function formatLocalDate(date) {
   const pad = (n) => String(n).padStart(2, '0');
@@ -91,9 +90,9 @@ export function formatLocalDate(date) {
 
 // Resolve the base filename for an item.
 //
-// An unset template means today's behaviour exactly: the name the platform resolver
-// built. The template is opt-in because changing what every existing user's files
-// are called is not a thing to do on their behalf during an update.
+// An unset template keeps the name the platform resolver built. The template is
+// opt-in because changing what every existing user's files are called is not a
+// thing to do on their behalf during an update.
 //
 // {postId} and {username} come from the resolver via item.meta. A resolver that does
 // not supply them yet renders those tokens as nothing, which the renderer absorbs
@@ -114,10 +113,18 @@ export function resolveBaseFilename(item, platform, template, index) {
     // the one their calendar showed when they saved it.
     date: formatLocalDate(new Date()),
   });
-  // A template can still render empty for an item carrying none of its tokens. The
-  // validator refuses to save one that always would, but a per-item miss is normal,
-  // and an empty name would produce a file called nothing but its extension.
-  return rendered || fallback;
+  // A template can render empty for an item carrying none of its tokens, which is
+  // normal, and a file called nothing but its extension is not an acceptable result.
+  // Say so rather than silently handing back the old name: "why is this one still
+  // named the old way" is otherwise a puzzle with no clue in it.
+  if (!rendered) {
+    console.debug(
+      `SocialSnag: template "${template}" rendered empty for this ${item.type || 'item'}; `
+      + `using ${fallback}. The tokens it names are not available here.`,
+    );
+    return fallback;
+  }
+  return rendered;
 }
 
 // Build sanitized download path
@@ -672,8 +679,9 @@ async function downloadMedia(item, platform, index = 1) {
     filenameTemplate: '',
   });
   const ext = guessExtension(item.url, item.type);
-  const rawFilename = resolveBaseFilename(item, platform, filenameTemplate, index)
-    || `${Date.now()}`;
+  // resolveBaseFilename always returns something: it falls back to the resolver's
+  // name, then to platform and index.
+  const rawFilename = resolveBaseFilename(item, platform, filenameTemplate, index);
   const path = sanitizeDownloadPath(rawFilename, platform, ext, downloadPath);
 
   const downloadUrl = item.url;
