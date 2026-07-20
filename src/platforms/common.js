@@ -47,10 +47,9 @@ export function sanitizeFilename(name) {
 // still does its own single-token substitution in sanitizeDownloadPath, and moving
 // it onto this list is tracked separately.
 //
-// Every token is optional at render time. A post with no id, a platform that does
-// not expose a username, a single-item download with no index: all of those are
-// normal, so a template naming them has to survive them being absent rather than
-// rendering "undefined" into a filename the user then has to clean up.
+// Most tokens are optional at render time: a post with no id, a platform that does
+// not expose a username. A template naming one has to survive it being absent rather
+// than rendering "undefined" into a filename the user then has to clean up.
 export const TEMPLATE_TOKENS = [
   'platform',
   'type',
@@ -61,16 +60,19 @@ export const TEMPLATE_TOKENS = [
 ];
 
 // The caller supplies these for every item, so a template containing one can never
-// render empty. The rest depend on the post: an id the resolver could not find, a
-// platform with no username in the DOM, a single download with no index.
-export const ALWAYS_PRESENT_TOKENS = ['platform', 'type', 'date'];
+// render empty. `index` counts because both download paths pass a position and
+// resolveBaseFilename defaults it to 1 -- that guarantee lives in the signature, not
+// in a convention a later caller could quietly drop. The rest depend on the post: an
+// id the resolver could not find, a platform with no username in the DOM.
+export const ALWAYS_PRESENT_TOKENS = ['platform', 'type', 'index', 'date'];
 
 /**
  * Render a template against a field bag.
  *
- * A token whose field is missing renders as nothing and takes the one separator
- * that follows it, so a missing field costs its own segment and nothing more:
- * `{postId}_{index}` on a post with no id renders `1`, not `_1`.
+ * A token whose field is missing renders as nothing and takes the separator run
+ * directly after it, so a missing field costs its own segment and nothing more:
+ * `{postId}_{index}` renders `1`, not `_1`, and `post_{username}_photo` renders
+ * `post_photo`, not `post__photo`.
  *
  * Path separators are left in place. Whether they are legal is the caller's call,
  * and that belongs with the caller's validation rather than duplicated here. A
@@ -109,12 +111,13 @@ export function renderTemplate(template, fields) {
       dropSeparator = part.present ? false : true;
       continue;
     }
-    if (dropSeparator && /^[_\-\s]+$/.test(part.literal)) {
-      dropSeparator = false;
-      continue;
-    }
+    // The separator run may BE the literal (`{postId}_{index}`) or merely start it
+    // (`post_{username}_photo`), and both are the same gap. Matching only the first
+    // shape leaves `post__photo` behind, which the per-segment trim at the end cannot
+    // reach because the doubled separator is in the middle of the name.
+    const literal = dropSeparator ? part.literal.replace(/^[_\-\s]+/, '') : part.literal;
     dropSeparator = false;
-    out.push(part.literal);
+    out.push(literal);
   }
 
   // Trim per path segment, so a folder template keeps its slashes while a token
@@ -142,6 +145,17 @@ export function renderTemplate(template, fields) {
 export function validateTemplate(template, options = {}) {
   if (typeof template !== 'string' || template.trim() === '') {
     return { valid: false, reason: 'Template is empty.' };
+  }
+
+  // A stray brace changes how every character after it reads, so settle it before
+  // naming tokens. Left alone, `photo_{postId` has no `{...}` for the scan below to
+  // call unknown, survives as fixed text, and names every download with a literal
+  // `{postId` in it -- one keystroke from `{postid}`, which this validator does catch.
+  if (/[{}]/.test(template.replace(/\{[^}]*\}/g, ''))) {
+    return {
+      valid: false,
+      reason: 'Unmatched { or }. A token is a name wrapped in both braces, like {postId}.',
+    };
   }
 
   const unknown = [

@@ -99,7 +99,10 @@ export function formatLocalDate(date) {
 // along with their separators rather than leaving gaps -- so a template written for
 // a platform that has the data degrades to a shorter name elsewhere instead of a
 // broken one.
-export function resolveBaseFilename(item, platform, template, index) {
+// index defaults to 1 so {index} is genuinely always renderable, which is what lets
+// validateTemplate accept `{index}` on its own. Both download paths pass a real
+// position; the default is here so the promise holds even if one later forgets to.
+export function resolveBaseFilename(item, platform, template, index = 1) {
   const fallback = item.filename || `${platform}_${index}`;
   if (!template) return fallback;
   const rendered = renderTemplate(template, {
@@ -380,9 +383,16 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 
     let count = 0;
     for (const [position, item] of response.urls.entries()) {
-      const downloadId = await downloadMedia(item, response.platform, position + 1);
-      if (downloadId) {
-        await recordDownload(item, response.platform, downloadId);
+      const saved = await downloadMedia(item, response.platform, position + 1);
+      if (saved) {
+        // Record the name the file actually landed under, not the resolver's. With a
+        // template configured those differ, and history is how the user finds the
+        // download again -- listing a name no file has is worse than listing nothing.
+        await recordDownload(
+          { ...item, filename: saved.filename },
+          response.platform,
+          saved.downloadId,
+        );
         count++;
       }
     }
@@ -657,6 +667,11 @@ export async function resolveItemUrl(item) {
 // downloadMedia runs in a loop over an album, so defaulting it to 1 would name every
 // file in a ten-photo post identically and leave conflictAction:'uniquify' to tell
 // them apart -- which is how a duplicate gets to look like a numbered set.
+//
+// Returns {downloadId, filename} on success and null on every failure, where
+// `filename` is the basename Chrome was handed. The caller needs it for history and
+// has no way to work it out: the template, the folder setting, and the sanitizer all
+// live in here, so a second derivation out there would be a second answer.
 async function downloadMedia(item, platform, index = 1) {
   // Resolve API-based video lookups to a concrete URL before downloading.
   if (item.needsVideoLookup) {
@@ -692,7 +707,9 @@ async function downloadMedia(item, platform, index = 1) {
       filename: path,
       conflictAction: 'uniquify',
     });
-    return downloadId;
+    // Read the basename back off the path Chrome got rather than rebuilding it. Only
+    // folder separators survive sanitizing in a path, so the last one ends the folder.
+    return { downloadId, filename: path.slice(path.lastIndexOf('/') + 1) };
   } catch (e) {
     console.error('SocialSnag: download failed:', e);
     return null;

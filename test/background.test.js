@@ -871,3 +871,68 @@ describe('formatLocalDate', () => {
     }
   });
 });
+
+// The whole download path, from a context-menu click to what history records. This
+// seam had no harness, which is how the file on disk came to carry the templated name
+// while Recent downloads still listed the one the resolver had picked.
+describe('context-menu download history', () => {
+  // The menu ids are private to background.js; this is the "Download this (HD)" one.
+  const MENU_DOWNLOAD_SINGLE = 'socialsnag-download-single';
+  const PAGE = 'https://www.facebook.com/photo/?fbid=999';
+
+  let origSendMessage;
+  let origDownload;
+
+  function clickDownload() {
+    const [onClicked] = globalThis.chrome.contextMenus.onClicked._listeners;
+    return onClicked({ menuItemId: MENU_DOWNLOAD_SINGLE, pageUrl: PAGE }, { id: 1, url: PAGE });
+  }
+
+  beforeEach(() => {
+    globalThis.chrome.storage.sync._reset();
+    globalThis.chrome.storage.local._reset();
+    origSendMessage = globalThis.chrome.tabs.sendMessage;
+    origDownload = globalThis.chrome.downloads.download;
+    globalThis.chrome.tabs.sendMessage = async () => ({
+      platform: 'facebook',
+      urls: [{
+        url: 'https://scontent.fbcdn.net/v/photo.jpg',
+        type: 'image',
+        filename: 'facebook_resolver_name',
+        meta: { postId: '999' },
+      }],
+    });
+    globalThis.chrome.downloads.download = async () => 7;
+  });
+
+  afterEach(() => {
+    globalThis.chrome.tabs.sendMessage = origSendMessage;
+    globalThis.chrome.downloads.download = origDownload;
+    globalThis.chrome.storage.sync._reset();
+    globalThis.chrome.storage.local._reset();
+  });
+
+  it('records the templated name, which is the name the file has', async () => {
+    await globalThis.chrome.storage.sync.set({ filenameTemplate: '{platform}_{postId}' });
+    await clickDownload();
+
+    const { downloadHistory } = globalThis.chrome.storage.local._data();
+    expect(downloadHistory).toHaveLength(1);
+    expect(downloadHistory[0].filename).toBe('facebook_999.jpg');
+    expect(downloadHistory[0].downloadId).toBe(7);
+  });
+
+  it('records the resolver name when no template is configured', async () => {
+    await clickDownload();
+
+    const { downloadHistory } = globalThis.chrome.storage.local._data();
+    expect(downloadHistory[0].filename).toBe('facebook_resolver_name.jpg');
+  });
+
+  it('records nothing when the download itself fails', async () => {
+    globalThis.chrome.downloads.download = async () => { throw new Error('disk full'); };
+    await clickDownload();
+
+    expect(globalThis.chrome.storage.local._data().downloadHistory).toBeUndefined();
+  });
+});

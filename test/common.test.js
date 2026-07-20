@@ -239,6 +239,18 @@ describe('renderTemplate', () => {
       expect(renderTemplate('{username}post_{index}', { index: 1 })).toBe('post_1');
     });
 
+    // The gap is the same gap whether the separator is the whole literal or just
+    // starts it, and the trim at the end only reaches the ends of a segment, so a
+    // doubled separator stranded mid-name would survive to the filename.
+    it('takes a separator that leads a literal, not only one that is the literal', () => {
+      expect(renderTemplate('post_{username}_photo', { })).toBe('post_photo');
+      expect(renderTemplate('post_{username}_photo', { username: 'bob' })).toBe('post_bob_photo');
+    });
+
+    it('takes the whole separator run in front of a literal', () => {
+      expect(renderTemplate('{username}__photo', { })).toBe('photo');
+    });
+
     it('treats an empty string and null like a missing field', () => {
       expect(renderTemplate('{platform}_{postId}', { platform: 'facebook', postId: '' }))
         .toBe('facebook');
@@ -302,9 +314,10 @@ describe('validateTemplate', () => {
   });
 
   it('rejects a template that can render to nothing', () => {
-    // Neither token is guaranteed: a single photo from a post with an unreadable id
-    // supplies neither, and the file would be named for its extension alone.
-    const result = validateTemplate('{postId}_{index}');
+    // Neither token is guaranteed: a photo from a post with an unreadable id on a
+    // platform that hides the handle supplies neither, and the file would be named
+    // for its extension alone.
+    const result = validateTemplate('{postId}_{username}');
     expect(result.valid).toBe(false);
     expect(result.reason).toContain('{platform}');
   });
@@ -312,6 +325,21 @@ describe('validateTemplate', () => {
   it('accepts an all-token template when one token is always present', () => {
     expect(validateTemplate('{platform}_{postId}').valid).toBe(true);
     expect(validateTemplate('{type}_{index}').valid).toBe(true);
+  });
+
+  // Both download paths pass a position, so numbering an album is a template the
+  // user is entitled to write. Rejecting it told them a working template was broken.
+  it('accepts a template numbered only by index', () => {
+    expect(validateTemplate('{index}').valid).toBe(true);
+    expect(validateTemplate('{postId}_{index}').valid).toBe(true);
+  });
+
+  it('rejects an unmatched brace instead of saving it as fixed text', () => {
+    const result = validateTemplate('photo_{postId');
+    expect(result.valid).toBe(false);
+    expect(result.reason).toContain('{');
+    expect(validateTemplate('photo_postId}').valid).toBe(false);
+    expect(validateTemplate('photo_{postId}').valid).toBe(true);
   });
 
   // The guarantee the validator rests on: these are the tokens the caller always
