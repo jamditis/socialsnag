@@ -3,7 +3,12 @@ import {
   upgradeUrl,
   extractPhotoId,
   extractVideoUrlFromScripts,
+  buildImageItems,
+  buildCapturedItems,
 } from '../src/platforms/facebook.js';
+
+const CDN = 'https://scontent.xx.fbcdn.net/v/t1';
+const img = (src, width = 500) => ({ src, width });
 
 describe('upgradeUrl', () => {
   it('removes /s720x720/ size constraint', () => {
@@ -93,5 +98,184 @@ describe('extractVideoUrlFromScripts', () => {
 
   it('returns null for empty array', () => {
     expect(extractVideoUrlFromScripts([])).toBeNull();
+  });
+});
+
+describe('buildImageItems', () => {
+  it('collapses size variants of one photo into a single item', () => {
+    // What Facebook renders for one album slide: a grid thumbnail and the full view.
+    // upgradeUrl strips the size segment, so both name the same file.
+    const { items } = buildImageItems([
+      img(`${CDN}/s320x320/123456789012_n.jpg`, 320),
+      img(`${CDN}/p720x720/123456789012_n.jpg`, 720),
+    ]);
+    expect(items).toHaveLength(1);
+    expect(items[0].url).toBe(`${CDN}/123456789012_n.jpg`);
+  });
+
+  it('keeps distinct photos and numbers them in document order', () => {
+    const { items } = buildImageItems([
+      img(`${CDN}/s320x320/111111111111_n.jpg`),
+      img(`${CDN}/s320x320/222222222222_n.jpg`),
+      img(`${CDN}/s320x320/333333333333_n.jpg`),
+    ]);
+    expect(items.map((i) => i.filename)).toEqual([
+      'photo_111111111111_1',
+      'photo_222222222222_2',
+      'photo_333333333333_3',
+    ]);
+  });
+
+  it('does not spend an index number on a duplicate', () => {
+    // The suffix is what makes a duplicate look like a separate slide, so a repeat
+    // must not advance the counter either.
+    const { items, index } = buildImageItems([
+      img(`${CDN}/s320x320/111111111111_n.jpg`),
+      img(`${CDN}/p720x720/111111111111_n.jpg`),
+      img(`${CDN}/s320x320/222222222222_n.jpg`),
+    ]);
+    expect(items.map((i) => i.filename)).toEqual([
+      'photo_111111111111_1',
+      'photo_222222222222_2',
+    ]);
+    expect(index).toBe(3);
+  });
+
+  it('preserves the first variant seen, so ordering follows the page', () => {
+    const { items } = buildImageItems([
+      img(`${CDN}/s320x320/222222222222_n.jpg`),
+      img(`${CDN}/s320x320/111111111111_n.jpg`),
+    ]);
+    expect(items.map((i) => i.url)).toEqual([
+      `${CDN}/222222222222_n.jpg`,
+      `${CDN}/111111111111_n.jpg`,
+    ]);
+  });
+
+  it('places a repeated photo where it first appears, not where it repeats', () => {
+    // Only a non-adjacent repeat can tell first-seen from last-seen apart: adjacent
+    // variants collapse to the same URL either way. Facebook renders the full view
+    // of slide one after the rest of the grid, so this is the real layout, and
+    // first-seen is what keeps the download order matching the album.
+    const { items } = buildImageItems([
+      img(`${CDN}/s320x320/111111111111_n.jpg`),
+      img(`${CDN}/s320x320/222222222222_n.jpg`),
+      img(`${CDN}/p720x720/111111111111_n.jpg`),
+    ]);
+    expect(items.map((i) => i.url)).toEqual([
+      `${CDN}/111111111111_n.jpg`,
+      `${CDN}/222222222222_n.jpg`,
+    ]);
+  });
+
+  it('skips reaction icons and avatars by size', () => {
+    const { items } = buildImageItems([
+      img(`${CDN}/s320x320/111111111111_n.jpg`, 16),
+      img(`${CDN}/s320x320/222222222222_n.jpg`, 500),
+    ]);
+    expect(items.map((i) => i.url)).toEqual([`${CDN}/222222222222_n.jpg`]);
+  });
+
+  it('keeps an image that has not laid out yet', () => {
+    // Below-the-fold images report width 0; dropping them would lose real slides.
+    const { items } = buildImageItems([{ src: `${CDN}/s320x320/111111111111_n.jpg`, width: 0 }]);
+    expect(items).toHaveLength(1);
+  });
+
+  it('ignores non-fbcdn images', () => {
+    const { items } = buildImageItems([img('https://example.com/photo.jpg')]);
+    expect(items).toEqual([]);
+  });
+
+  it('leaves the filename null when no photo id is present', () => {
+    const { items } = buildImageItems([img(`${CDN}/s320x320/short_n.jpg`)]);
+    expect(items[0].filename).toBeNull();
+  });
+
+  it('continues numbering from the index it is given', () => {
+    const { items } = buildImageItems([img(`${CDN}/s320x320/111111111111_n.jpg`)], 4);
+    expect(items[0].filename).toBe('photo_111111111111_4');
+  });
+});
+
+describe('buildCapturedItems', () => {
+  const cap = (url) => ({ url, type: 'image' });
+
+  it('dedupes before capping, so the cap counts distinct photos', () => {
+    // The old order capped first, so one repeated photo could fill all five slots
+    // and push out four real ones.
+    const captured = [
+      cap(`${CDN}/a_111111111111_n.jpg`),
+      cap(`${CDN}/a_111111111111_n.jpg`),
+      cap(`${CDN}/a_111111111111_n.jpg`),
+      cap(`${CDN}/b_222222222222_n.jpg`),
+      cap(`${CDN}/c_333333333333_n.jpg`),
+    ];
+    const { items, dropped } = buildCapturedItems(captured, 1, 5);
+    expect(items.map((i) => i.url)).toEqual([
+      `${CDN}/a_111111111111_n.jpg`,
+      `${CDN}/b_222222222222_n.jpg`,
+      `${CDN}/c_333333333333_n.jpg`,
+    ]);
+    expect(dropped).toBe(0);
+  });
+
+  it('reports how many it dropped rather than truncating silently', () => {
+    const captured = Array.from({ length: 8 }, (_, i) => cap(`${CDN}/p${i}_11111111111${i}_n.jpg`));
+    const { items, dropped } = buildCapturedItems(captured, 1, 5);
+    expect(items).toHaveLength(5);
+    expect(dropped).toBe(3);
+  });
+
+  it('lets a re-requested photo keep its place near the front of the queue', () => {
+    // The capture store spans posts already scrolled past. A photo requested again
+    // belongs to what is on screen now, so its latest sighting is what counts:
+    // ranking it by its first sighting would age it out in favour of an older one.
+    const captured = [
+      cap(`${CDN}/old_111111111111_n.jpg`),
+      cap(`${CDN}/b_222222222222_n.jpg`),
+      cap(`${CDN}/c_333333333333_n.jpg`),
+      cap(`${CDN}/old_111111111111_n.jpg`),
+    ];
+    const { items } = buildCapturedItems(captured, 1, 2);
+    expect(items.map((i) => i.url)).toEqual([
+      `${CDN}/c_333333333333_n.jpg`,
+      `${CDN}/old_111111111111_n.jpg`,
+    ]);
+  });
+
+  it('keeps the most recent captures', () => {
+    const captured = [cap(`${CDN}/old_n.jpg`), cap(`${CDN}/mid_n.jpg`), cap(`${CDN}/new_n.jpg`)];
+    const { items } = buildCapturedItems(captured, 1, 2);
+    expect(items.map((i) => i.url)).toEqual([`${CDN}/mid_n.jpg`, `${CDN}/new_n.jpg`]);
+  });
+
+  it('rejects a lookalike host rather than matching the string anywhere', () => {
+    // Same host check upgradeUrl already applies. The capture path used a bare
+    // substring match, so these two reached the download list.
+    const captured = [
+      cap('https://evilfbcdn.net/photo.jpg'),
+      cap('https://evil.com/?u=https://scontent.fbcdn.net/photo.jpg'),
+      cap(`${CDN}/real_111111111111_n.jpg`),
+    ];
+    const { items } = buildCapturedItems(captured, 1, 5);
+    expect(items.map((i) => i.url)).toEqual([`${CDN}/real_111111111111_n.jpg`]);
+  });
+
+  it('ignores captured video entries', () => {
+    const captured = [{ url: `${CDN}/clip.mp4`, type: 'video' }, cap(`${CDN}/photo_n.jpg`)];
+    const { items } = buildCapturedItems(captured, 1, 5);
+    expect(items.map((i) => i.url)).toEqual([`${CDN}/photo_n.jpg`]);
+  });
+
+  it('survives a malformed capture entry', () => {
+    const { items } = buildCapturedItems([null, {}, cap(`${CDN}/photo_n.jpg`)], 1, 5);
+    expect(items).toHaveLength(1);
+  });
+
+  it('numbers from the index the DOM walk left off at', () => {
+    const { items, index } = buildCapturedItems([cap(`${CDN}/photo_n.jpg`)], 3, 5);
+    expect(items[0].filename).toBe('photo_3');
+    expect(index).toBe(4);
   });
 });
