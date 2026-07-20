@@ -663,15 +663,42 @@ export async function resolveItemUrl(item) {
   return null;
 }
 
+// The basename Chrome actually wrote, which is not always the one it was handed:
+// conflictAction:'uniquify' is applied after download() takes the path, so a second
+// `facebook.jpg` lands as `facebook (1).jpg` and the requested path never learns it.
+// Asking the download item is the only way to see that counter.
+//
+// Falls back to the requested basename, because Chrome assigns the name
+// asynchronously and an item can exist before it has one. That window cannot be
+// closed from here, so the choice is between the name we asked for and no name at
+// all, and the requested name is the closer guess -- it differs only where Chrome
+// changed it, chiefly the collision this function exists to catch, and its own
+// sanitizing and length limits.
+async function savedBasename(downloadId, requestedPath) {
+  // Only folder separators survive sanitizing in a path, so the last one ends the
+  // folder. A DownloadItem filename is an absolute local path from the OS, so it can
+  // carry either separator regardless of what we asked for.
+  const fallback = requestedPath.slice(requestedPath.lastIndexOf('/') + 1);
+  try {
+    const [saved] = await chrome.downloads.search({ id: downloadId });
+    const p = saved?.filename;
+    if (!p) return fallback;
+    return p.slice(Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\')) + 1);
+  } catch (e) {
+    console.debug('SocialSnag: could not read the saved filename; using the requested one', e);
+    return fallback;
+  }
+}
+
 // `index` is this item's position in the batch the user asked for, counting from 1.
 // downloadMedia runs in a loop over an album, so defaulting it to 1 would name every
 // file in a ten-photo post identically and leave conflictAction:'uniquify' to tell
 // them apart -- which is how a duplicate gets to look like a numbered set.
 //
 // Returns {downloadId, filename} on success and null on every failure, where
-// `filename` is the basename Chrome was handed. The caller needs it for history and
-// has no way to work it out: the template, the folder setting, and the sanitizer all
-// live in here, so a second derivation out there would be a second answer.
+// `filename` is the basename on disk. The caller needs it for history and has no way
+// to work it out: the template, the folder setting, and the sanitizer all live in
+// here, so a second derivation out there would be a second answer.
 async function downloadMedia(item, platform, index = 1) {
   // Resolve API-based video lookups to a concrete URL before downloading.
   if (item.needsVideoLookup) {
@@ -707,9 +734,7 @@ async function downloadMedia(item, platform, index = 1) {
       filename: path,
       conflictAction: 'uniquify',
     });
-    // Read the basename back off the path Chrome got rather than rebuilding it. Only
-    // folder separators survive sanitizing in a path, so the last one ends the folder.
-    return { downloadId, filename: path.slice(path.lastIndexOf('/') + 1) };
+    return { downloadId, filename: await savedBasename(downloadId, path) };
   } catch (e) {
     console.error('SocialSnag: download failed:', e);
     return null;

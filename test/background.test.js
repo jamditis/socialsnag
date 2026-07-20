@@ -882,6 +882,7 @@ describe('context-menu download history', () => {
 
   let origSendMessage;
   let origDownload;
+  let origSearch;
 
   function clickDownload() {
     const [onClicked] = globalThis.chrome.contextMenus.onClicked._listeners;
@@ -893,6 +894,7 @@ describe('context-menu download history', () => {
     globalThis.chrome.storage.local._reset();
     origSendMessage = globalThis.chrome.tabs.sendMessage;
     origDownload = globalThis.chrome.downloads.download;
+    origSearch = globalThis.chrome.downloads.search;
     globalThis.chrome.tabs.sendMessage = async () => ({
       platform: 'facebook',
       urls: [{
@@ -908,6 +910,7 @@ describe('context-menu download history', () => {
   afterEach(() => {
     globalThis.chrome.tabs.sendMessage = origSendMessage;
     globalThis.chrome.downloads.download = origDownload;
+    globalThis.chrome.downloads.search = origSearch;
     globalThis.chrome.storage.sync._reset();
     globalThis.chrome.storage.local._reset();
   });
@@ -923,6 +926,51 @@ describe('context-menu download history', () => {
   });
 
   it('records the resolver name when no template is configured', async () => {
+    await clickDownload();
+
+    const { downloadHistory } = globalThis.chrome.storage.local._data();
+    expect(downloadHistory[0].filename).toBe('facebook_resolver_name.jpg');
+  });
+
+  // The name we ask for and the name on disk part company exactly when a template is
+  // non-unique: conflictAction:'uniquify' renames the second `facebook_999.jpg` and
+  // never tells the requested path. History listing a file that does not exist is the
+  // failure this whole return value exists to prevent, so it has to survive the rename.
+  it('records the uniquified name when the requested one was already taken', async () => {
+    globalThis.chrome.downloads.search = async () => [
+      { filename: '/home/joe/Downloads/SocialSnag/facebook/facebook_999 (1).jpg' },
+    ];
+    await globalThis.chrome.storage.sync.set({ filenameTemplate: '{platform}_{postId}' });
+    await clickDownload();
+
+    const { downloadHistory } = globalThis.chrome.storage.local._data();
+    expect(downloadHistory[0].filename).toBe('facebook_999 (1).jpg');
+  });
+
+  it('reads a Windows path back to its basename', async () => {
+    globalThis.chrome.downloads.search = async () => [
+      { filename: 'C:\\Users\\joe\\Downloads\\SocialSnag\\facebook\\facebook_999 (2).jpg' },
+    ];
+    await globalThis.chrome.storage.sync.set({ filenameTemplate: '{platform}_{postId}' });
+    await clickDownload();
+
+    const { downloadHistory } = globalThis.chrome.storage.local._data();
+    expect(downloadHistory[0].filename).toBe('facebook_999 (2).jpg');
+  });
+
+  // Chrome names the file asynchronously, so an item can exist with no filename yet.
+  // The requested name is right in every case but the collision above, so falling back
+  // to it beats recording nothing.
+  it('falls back to the requested name while the item has none yet', async () => {
+    globalThis.chrome.downloads.search = async () => [{}];
+    await clickDownload();
+
+    const { downloadHistory } = globalThis.chrome.storage.local._data();
+    expect(downloadHistory[0].filename).toBe('facebook_resolver_name.jpg');
+  });
+
+  it('falls back to the requested name when the lookup itself fails', async () => {
+    globalThis.chrome.downloads.search = async () => { throw new Error('no such id'); };
     await clickDownload();
 
     const { downloadHistory } = globalThis.chrome.storage.local._data();
