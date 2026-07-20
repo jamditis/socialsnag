@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach, beforeEach } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import {
   detectPlatform,
   guessExtension,
@@ -895,6 +895,9 @@ describe('context-menu download history', () => {
     origSendMessage = globalThis.chrome.tabs.sendMessage;
     origDownload = globalThis.chrome.downloads.download;
     origSearch = globalThis.chrome.downloads.search;
+    // The mock's listener array is shared across the file, so the attach/detach
+    // assertions below only mean something from a known-empty start.
+    globalThis.chrome.downloads.onChanged._listeners.length = 0;
     globalThis.chrome.tabs.sendMessage = async () => ({
       platform: 'facebook',
       urls: [{
@@ -958,15 +961,87 @@ describe('context-menu download history', () => {
     expect(downloadHistory[0].filename).toBe('facebook_999 (2).jpg');
   });
 
-  // Chrome names the file asynchronously, so an item can exist with no filename yet.
-  // The requested name is right in every case but the collision above, so falling back
-  // to it beats recording nothing.
-  it('falls back to the requested name while the item has none yet', async () => {
-    globalThis.chrome.downloads.search = async () => [{}];
+  // Chrome names the file asynchronously, so the lookup can land before there is a
+  // name -- and that is likeliest on exactly the collisions above, where a template
+  // without {index} sends a whole album at one path. The name arrives on onChanged, so
+  // waiting for it is what makes the uniquified name recordable at all.
+  it('waits for the name Chrome assigns when the immediate lookup has none', async () => {
+    globalThis.chrome.downloads.search = async () => {
+      // Fire the way Chrome does: after the lookup, onto the listener already attached.
+      queueMicrotask(() => {
+        for (const l of [...globalThis.chrome.downloads.onChanged._listeners]) {
+          l({
+            id: 7,
+            filename: { current: '/home/joe/Downloads/SocialSnag/facebook/facebook_999 (1).jpg' },
+          });
+        }
+      });
+      return [{ state: 'in_progress' }];
+    };
+    await globalThis.chrome.storage.sync.set({ filenameTemplate: '{platform}_{postId}' });
     await clickDownload();
 
     const { downloadHistory } = globalThis.chrome.storage.local._data();
+    expect(downloadHistory[0].filename).toBe('facebook_999 (1).jpg');
+  });
+
+  // Attaching after the search would drop a delta that fired in between, and onChanged
+  // does not replay -- the wait above would then sit until it timed out and record the
+  // wrong name. This ordering is the thing that makes it work.
+  it('attaches the filename listener before it looks the download up', async () => {
+    let listenersAtSearch = -1;
+    globalThis.chrome.downloads.search = async () => {
+      listenersAtSearch = globalThis.chrome.downloads.onChanged._listeners.length;
+      return [{ filename: '/home/joe/Downloads/SocialSnag/facebook/facebook_999.jpg' }];
+    };
+    await clickDownload();
+
+    expect(listenersAtSearch).toBe(1);
+  });
+
+  // The listener and its timer must not outlive the download. One leaks per item
+  // otherwise, which on an album is the whole batch.
+  it('detaches the filename listener once it has an answer', async () => {
+    globalThis.chrome.downloads.search = async () => [
+      { filename: '/home/joe/Downloads/SocialSnag/facebook/facebook_999 (1).jpg' },
+    ];
+    await clickDownload();
+
+    expect(globalThis.chrome.downloads.onChanged._listeners).toHaveLength(0);
+  });
+
+  // A download that fails before Chrome ever names it has no delta coming, so the wait
+  // has to end by itself rather than hanging the history write. The requested name is
+  // the closest thing left: it differs only where Chrome changed it, and Chrome never
+  // got that far.
+  it('falls back to the requested name when no name ever arrives', async () => {
+    vi.useFakeTimers();
+    try {
+      globalThis.chrome.downloads.search = async () => [{ state: 'in_progress' }];
+      const done = clickDownload();
+      await vi.advanceTimersByTimeAsync(5000);
+      await done;
+    } finally {
+      vi.useRealTimers();
+    }
+
+    const { downloadHistory } = globalThis.chrome.storage.local._data();
     expect(downloadHistory[0].filename).toBe('facebook_resolver_name.jpg');
+  });
+
+  // A download Chrome has already given up on will never fire a filename delta, so
+  // waiting on one buys nothing and costs the whole timeout -- and the album loop is
+  // sequential, so every item behind it waits too. Real timers here on purpose: if the
+  // wait ever came back, this test would take seconds instead of failing on the clock.
+  it('does not wait for a name on a download that already failed', async () => {
+    globalThis.chrome.downloads.search = async () => [{ state: 'interrupted' }];
+    const startedAt = Date.now();
+    await clickDownload();
+    const elapsed = Date.now() - startedAt;
+
+    const { downloadHistory } = globalThis.chrome.storage.local._data();
+    expect(downloadHistory[0].filename).toBe('facebook_resolver_name.jpg');
+    expect(elapsed).toBeLessThan(500);
   });
 
   it('falls back to the requested name when the lookup itself fails', async () => {
