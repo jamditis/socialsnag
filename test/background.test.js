@@ -5,6 +5,7 @@ import {
   validateDownloadUrl,
   sanitizeDownloadPath,
   resolveBaseFilename,
+  formatLocalDate,
   resolveInstagramPost,
   resolveInstagramStories,
   downloadItemsAsZip,
@@ -848,5 +849,25 @@ describe('resolveBaseFilename', () => {
   it('includes the type and a date when asked', () => {
     const out = resolveBaseFilename(item, 'facebook', '{date}_{type}_{postId}', 1);
     expect(out).toMatch(/^\d{4}-\d{2}-\d{2}_image_999$/);
+  });
+});
+
+describe('formatLocalDate', () => {
+  it('formats yyyy-mm-dd with zero padding', () => {
+    expect(formatLocalDate(new Date(2026, 0, 5))).toBe('2026-01-05');
+    expect(formatLocalDate(new Date(2026, 11, 31))).toBe('2026-12-31');
+  });
+
+  // The reason this is not toISOString(): that reports UTC, so an evening download
+  // west of UTC lands on tomorrow's date. Late local evening is the case where the
+  // two disagree, so it is the case worth pinning.
+  it('uses the local day, not the UTC one', () => {
+    const lateEvening = new Date(2026, 6, 20, 23, 30);
+    expect(formatLocalDate(lateEvening)).toBe('2026-07-20');
+    // Asserted as a relationship rather than a fixed string, so this holds in CI
+    // whatever timezone the runner is set to.
+    if (lateEvening.toISOString().slice(0, 10) !== '2026-07-20') {
+      expect(formatLocalDate(lateEvening)).not.toBe(lateEvening.toISOString().slice(0, 10));
+    }
   });
 });

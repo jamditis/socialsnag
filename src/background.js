@@ -83,6 +83,12 @@ export function validateDownloadUrl(url) {
 }
 
 
+// yyyy-mm-dd in the user's own timezone.
+export function formatLocalDate(date) {
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
 // Resolve the base filename for an item.
 //
 // An unset template means today's behaviour exactly: the name the platform resolver
@@ -103,7 +109,10 @@ export function resolveBaseFilename(item, platform, template, index) {
     postId: item.meta?.postId,
     username: item.meta?.username,
     index,
-    date: new Date().toISOString().slice(0, 10),
+    // Local date, not toISOString(): that is UTC, so an evening download west of
+    // UTC would be filed under tomorrow. The date a user wants in a filename is
+    // the one their calendar showed when they saved it.
+    date: formatLocalDate(new Date()),
   });
   // A template can still render empty for an item carrying none of its tokens. The
   // validator refuses to save one that always would, but a per-item miss is normal,
@@ -363,8 +372,8 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     }
 
     let count = 0;
-    for (const item of response.urls) {
-      const downloadId = await downloadMedia(item, response.platform);
+    for (const [position, item] of response.urls.entries()) {
+      const downloadId = await downloadMedia(item, response.platform, position + 1);
       if (downloadId) {
         await recordDownload(item, response.platform, downloadId);
         count++;
@@ -637,7 +646,11 @@ export async function resolveItemUrl(item) {
   return null;
 }
 
-async function downloadMedia(item, platform) {
+// `index` is this item's position in the batch the user asked for, counting from 1.
+// downloadMedia runs in a loop over an album, so defaulting it to 1 would name every
+// file in a ten-photo post identically and leave conflictAction:'uniquify' to tell
+// them apart -- which is how a duplicate gets to look like a numbered set.
+async function downloadMedia(item, platform, index = 1) {
   // Resolve API-based video lookups to a concrete URL before downloading.
   if (item.needsVideoLookup) {
     const resolvedUrl = await resolveItemUrl(item);
@@ -659,7 +672,7 @@ async function downloadMedia(item, platform) {
     filenameTemplate: '',
   });
   const ext = guessExtension(item.url, item.type);
-  const rawFilename = resolveBaseFilename(item, platform, filenameTemplate, item.meta?.index ?? 1)
+  const rawFilename = resolveBaseFilename(item, platform, filenameTemplate, index)
     || `${Date.now()}`;
   const path = sanitizeDownloadPath(rawFilename, platform, ext, downloadPath);
 
