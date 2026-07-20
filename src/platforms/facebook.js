@@ -35,6 +35,109 @@ export function extractVideoUrlFromScripts(scriptTexts) {
   return null;
 }
 
+// An <img> is content rather than chrome when it is big enough to be worth saving.
+// A zero or absent width means the element has not laid out yet, which is common for
+// images below the fold, so that case is kept rather than guessed away.
+function isContentSized(img) {
+  return img.width > 50 || img.naturalWidth > 50 || !img.width;
+}
+
+/**
+ * Turn a post's <img> elements into download items, in document order.
+ *
+ * Deduping is the point. upgradeUrl strips the size segment from an fbcdn path, so
+ * it is a normalizer: the grid thumbnail `/s320x320/123_n.jpg` and the full view
+ * `/p720x720/123_n.jpg` are different `src` values that name the same photo and
+ * upgrade to one identical URL. Facebook renders both for a single album slide, so
+ * without a dedupe the normalizer manufactures duplicates, and the `_${index}`
+ * suffix hides them: one photo saved twice reads as a two-photo album.
+ *
+ * The first variant seen wins, which keeps document order intact. Document order is
+ * what makes album ordering stable, since querySelectorAll returns it and it matches
+ * how the slides read on the page.
+ *
+ * @param {Array<{src: string, width?: number, naturalWidth?: number}>} images
+ * @param {number} startIndex first filename suffix to use
+ * @returns {{items: Array<object>, index: number}} items and the next free index
+ */
+export function buildImageItems(images, startIndex = 1) {
+  const items = [];
+  const seen = new Set();
+  let index = startIndex;
+
+  for (const img of images) {
+    const url = upgradeUrl(img.src);
+    if (!url) continue;
+    if (!isContentSized(img)) continue;
+    if (seen.has(url)) continue;
+    seen.add(url);
+
+    const id = extractPhotoId(url);
+    items.push({ url, type: 'image', filename: id ? `photo_${id}_${index}` : null });
+    index++;
+  }
+
+  return { items, index };
+}
+
+/**
+ * Turn webRequest-captured CDN URLs into download items, used when the DOM walk
+ * found nothing.
+ *
+ * Runs the same upgradeUrl normalization as the DOM path, and for both of its
+ * reasons. The browser requests whichever size it renders, so a photo shown as a
+ * thumbnail and then full size is captured twice, and keying on the raw URL would
+ * treat those as two photos while handing back the thumbnail to download.
+ *
+ * That normalization is partial, and the limit is worth stating rather than implying.
+ * upgradeUrl strips the size segment from the path and nothing else, so two captures
+ * of one photo that also differ in their `oh=` / `oe=` signature parameters survive
+ * as separate entries. This collapses the size-variant case, which is the common one,
+ * and does not claim to collapse every duplicate.
+ *
+ * Capture order is network arrival order, not page order, so this cannot recover
+ * album ordering the way the DOM path does. What it can do is be deterministic:
+ * dedupe first, then cap, so the cap is spent on distinct photos rather than on
+ * repeats of one.
+ *
+ * The cap exists because captures are page-wide and include media from neighbouring
+ * posts and ads. It returns how many it dropped so the caller can say so rather than
+ * silently truncating.
+ *
+ * Note the tie-break runs the opposite way from buildImageItems, and deliberately.
+ * There, a repeat is the same slide rendered twice and the first sighting carries
+ * the document position, so first wins. Here the ordering means recency: the store
+ * is page-wide and spans posts the user already scrolled past, so a photo being
+ * requested again is evidence it belongs to what is on screen now. Keeping its first
+ * sighting would age it out of the cap in favour of an older unrelated capture.
+ *
+ * @param {Array<{url: string, type: string}>} captured
+ * @param {number} limit most items to return
+ * @returns {{items: Array<object>, dropped: number}}
+ */
+export function buildCapturedItems(captured, limit = 5) {
+  // A Map keeps insertion order, so deleting before setting moves a repeated photo
+  // to the end and leaves the keys in last-seen order.
+  const lastSeen = new Map();
+
+  for (const c of captured) {
+    if (!c?.url || c.type !== 'image') continue;
+    // upgradeUrl carries the host check, so a lookalike host returns null here.
+    const url = upgradeUrl(c.url);
+    if (!url) continue;
+    lastSeen.delete(url);
+    lastSeen.set(url, true);
+  }
+
+  const distinct = [...lastSeen.keys()];
+  // Keep the most recent, which are the likeliest to belong to the post just opened.
+  const kept = distinct.slice(-limit);
+  let index = 1;
+  const items = kept.map((url) => ({ url, type: 'image', filename: `photo_${index++}` }));
+
+  return { items, dropped: distinct.length - kept.length };
+}
+
 // --- Browser wiring (not exported) ---
 
 function findVideoUrl(target) {
@@ -86,43 +189,27 @@ async function resolveAll(target) {
   ]);
   if (!post) return resolveSingle(target?.src || '', target);
 
-  const items = [];
-  let index = 1;
+  // querySelectorAll returns document order, which is the album's own slide order.
+  const domImages = Array.from(post.querySelectorAll('img[src*="fbcdn.net"]'));
+  const { items } = buildImageItems(domImages);
 
-  post.querySelectorAll('img[src*="fbcdn.net"]').forEach((img) => {
-    const url = upgradeUrl(img.src);
-    if (url) {
-      // Skip tiny images (profile pics, reaction icons)
-      if (img.width > 50 || img.naturalWidth > 50 || !img.width) {
-        const id = extractPhotoId(img.src);
-        items.push({
-          url,
-          type: 'image',
-          filename: id ? `photo_${id}_${index}` : null,
-        });
-        index++;
-      }
-    }
-  });
-
-  // Fall back to webRequest captures if DOM is sparse
+  // Fall back to webRequest captures if DOM is sparse. Numbering restarts at 1 by
+  // construction: this branch only runs when the DOM walk produced nothing.
   if (items.length === 0) {
     const captured = await getCapturedMedia();
-    const fbImages = captured
-      .filter((c) => c.url.includes('fbcdn.net') && c.type === 'image')
-      .slice(-5);
-
-    fbImages.forEach((c) => {
-      items.push({
-        url: c.url,
-        type: 'image',
-        filename: `photo_${index}`,
-      });
-      index++;
-    });
+    const fallback = buildCapturedItems(captured);
+    if (fallback.dropped > 0) {
+      console.info(
+        `SocialSnag facebook: ${fallback.dropped} older captured image(s) not included; `
+        + 'captures are page-wide, so only the most recent are treated as this post.',
+      );
+    }
+    return fallback.items.length > 0
+      ? fallback.items
+      : resolveSingle(target?.src || '', target);
   }
 
-  return items.length > 0 ? items : resolveSingle(target?.src || '', target);
+  return items;
 }
 
 function initContentScript() {
