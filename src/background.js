@@ -445,7 +445,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 // reader which kind of miss they are looking at.
 const API_RESOLVED_PLATFORMS = new Set(['twitter', 'instagram']);
 
-async function resolveViaApi(platform, pageUrl) {
+export async function resolveViaApi(platform, pageUrl) {
   // Whether the url actually carried an id this resolver understands. Without
   // this the miss below cannot tell "no id to look up" from "looked it up and
   // got nothing", and would report an image-only post as a url-parsing failure.

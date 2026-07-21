@@ -10,6 +10,7 @@ import {
   resolveInstagramStories,
   downloadItemsAsZip,
   resolveItemUrl,
+  resolveViaApi,
 } from '../src/background.js';
 
 describe('detectPlatform', () => {
@@ -1057,5 +1058,69 @@ describe('context-menu download history', () => {
     await clickDownload();
 
     expect(globalThis.chrome.storage.local._data().downloadHistory).toBeUndefined();
+  });
+});
+
+describe('resolveViaApi miss classification', () => {
+  // The debug trace exists so a failed download names its own cause. Getting the
+  // cause wrong is worse than staying quiet, because it sends the reader after a
+  // parsing bug that is not there -- so each of the three misses is pinned here.
+  // Without these, deleting one `foundId = true` line leaves the suite green.
+  let logged;
+
+  beforeEach(async () => {
+    logged = [];
+    vi.spyOn(console, 'log').mockImplementation((line) => logged.push(line));
+    globalThis.chrome.storage.sync._reset();
+    await globalThis.chrome.storage.sync.set({ resolverDebug: true });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    globalThis.resetFetch();
+    globalThis.chrome.storage.sync._reset();
+  });
+
+  const dispatchLine = () => logged.find((l) => l.includes('api-dispatch'));
+
+  it('says there is no api path at all for a platform that has none', async () => {
+    await expect(resolveViaApi('bluesky', 'https://bsky.app/profile/a/post/b')).resolves.toBeNull();
+    expect(dispatchLine()).toBe('socialsnag[bluesky] api-dispatch: empty (no api path for platform)');
+  });
+
+  it('blames the url only when the url really carries no id', async () => {
+    await expect(resolveViaApi('twitter', 'https://x.com/someone')).resolves.toBeNull();
+    expect(dispatchLine()).toBe('socialsnag[twitter] api-dispatch: empty (no id in url)');
+  });
+
+  it('does not blame the url when the id was found but the api had no video', async () => {
+    // An image-only tweet: the id parsed fine, the syndication response simply
+    // carries no video media. Reporting this as a url problem was the bug.
+    globalThis.installFetch(() => ({ status: 200, json: { mediaDetails: [] } }));
+
+    await expect(resolveViaApi('twitter', 'https://x.com/a/status/123')).resolves.toBeNull();
+    expect(dispatchLine()).toBe('socialsnag[twitter] api-dispatch: empty (id found, no video from api)');
+  });
+
+  it('reports the hit without a miss line when the api does return a video', async () => {
+    globalThis.installFetch(() => ({
+      status: 200,
+      json: {
+        mediaDetails: [{
+          type: 'video',
+          video_info: { variants: [{ content_type: 'video/mp4', url: 'https://video.twimg.com/x.mp4', bitrate: 832000 }] },
+        }],
+      },
+    }));
+
+    const result = await resolveViaApi('twitter', 'https://x.com/a/status/123');
+    expect(result?.url).toBe('https://video.twimg.com/x.mp4');
+    expect(dispatchLine()).toBe('socialsnag[twitter] api-dispatch: ok (1 item)');
+  });
+
+  it('stays silent when the user has not enabled debug', async () => {
+    globalThis.chrome.storage.sync._reset();
+    await resolveViaApi('bluesky', 'https://bsky.app/profile/a/post/b');
+    expect(logged).toEqual([]);
   });
 });
