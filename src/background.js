@@ -446,9 +446,15 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 const API_RESOLVED_PLATFORMS = new Set(['twitter', 'instagram']);
 
 async function resolveViaApi(platform, pageUrl) {
+  // Whether the url actually carried an id this resolver understands. Without
+  // this the miss below cannot tell "no id to look up" from "looked it up and
+  // got nothing", and would report an image-only post as a url-parsing failure.
+  let foundId = false;
+
   if (platform === 'twitter') {
     const match = pageUrl.match(/\/status\/(\d+)/);
     if (match) {
+      foundId = true;
       const tweetId = match[1];
       const videoUrl = await resolveTwitterVideo(tweetId);
       if (videoUrl) {
@@ -461,6 +467,7 @@ async function resolveViaApi(platform, pageUrl) {
   if (platform === 'instagram') {
     const match = pageUrl.match(/\/(p|reel|tv)\/([A-Za-z0-9_-]+)/);
     if (match) {
+      foundId = true;
       const shortcode = match[2];
       const videoUrl = await resolveInstagramVideo(shortcode);
       if (videoUrl) {
@@ -470,15 +477,16 @@ async function resolveViaApi(platform, pageUrl) {
     }
   }
 
-  // "The API found nothing" and "there was never an API to try" look identical
-  // from the outside, and they need opposite responses from whoever is reading
-  // the log, so name which one happened.
-  await traceResolver({
-    platform,
-    path: 'api-dispatch',
-    outcome: 'empty',
-    detail: API_RESOLVED_PLATFORMS.has(platform) ? 'no id in url' : 'no api path for platform',
-  });
+  // Three different misses that look identical from the outside and call for
+  // three different responses: fix the url, accept that there is no video here,
+  // or stop expecting an api path at all. Saying the wrong one sends the reader
+  // hunting for a parsing bug that does not exist.
+  let detail;
+  if (!API_RESOLVED_PLATFORMS.has(platform)) detail = 'no api path for platform';
+  else if (foundId) detail = 'id found, no video from api';
+  else detail = 'no id in url';
+
+  await traceResolver({ platform, path: 'api-dispatch', outcome: 'empty', detail });
   return null;
 }
 

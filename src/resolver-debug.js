@@ -45,8 +45,15 @@ export function statusBucket(status) {
 // The word-boundary anchor belongs only on the bare-host alternative. Leading it
 // across the whole group would stop the protocol-relative form matching at all,
 // because `//` opens with a non-word character and there is no boundary to find.
+//
+// The bare-host arm takes any dotted host rather than a fixed list of TLDs. A list
+// has to be kept in step with the download allowlist and silently stops redacting
+// the day a platform is added -- cdn.bsky.app and video.bsky.app are already
+// allowed download hosts that a `com|net|org|io|co` list would have missed. The
+// cost is that a dotted token like a filename gets redacted too, which is the
+// direction to fail in.
 const URL_SHAPED =
-  /[a-z][a-z0-9+.-]*:\/\/\S+|\/\/\S+|\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:com|net|org|io|co)\b\S*/gi;
+  /[a-z][a-z0-9+.-]*:\/\/\S+|\/\/\S+|\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}\b\S*/gi;
 
 /** Replace anything URL-shaped with a marker, so a leak shows up instead of shipping. */
 export function redactUrls(value) {

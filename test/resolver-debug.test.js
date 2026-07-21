@@ -48,6 +48,22 @@ describe('redactUrls', () => {
     expect(redactUrls('host was scontent.cdninstagram.com')).toBe('host was [url removed]');
   });
 
+  it('redacts CDN hosts outside the common TLDs', () => {
+    // cdn.bsky.app and video.bsky.app are allowed download hosts, so a TLD list
+    // that stops at com/net/org/io/co would leak exactly the platform that was
+    // added last.
+    expect(redactUrls('host was cdn.bsky.app')).toBe('host was [url removed]');
+    expect(redactUrls('//video.bsky.app/x.mp4')).toBe('[url removed]');
+  });
+
+  it('redacts a dotted token that is not a host, and that is the intended trade', () => {
+    // The bare-host arm cannot tell a filename from a CDN host, so it takes both.
+    // Pinned deliberately: this is the accepted cost of not keeping a TLD list in
+    // step with the download allowlist, and a future widening that breaks it
+    // should fail here rather than pass quietly.
+    expect(redactUrls('failed in background.js')).toBe('failed in [url removed]');
+  });
+
   it('leaves ordinary debug text alone', () => {
     expect(redactUrls('carousel with 4 items, shortcode C1a2b3')).toBe(
       'carousel with 4 items, shortcode C1a2b3',
