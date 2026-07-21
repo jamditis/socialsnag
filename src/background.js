@@ -425,7 +425,15 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
         showNotification(msg);
       }
     } else {
-      console.warn('SocialSnag: all download attempts failed for', response.urls);
+      // Logs what failed without logging where it lives. The whole item carries a
+      // CDN url, and this is the one console line a user is most likely to be
+      // reading (and pasting into a bug report) when a download breaks -- which is
+      // exactly when the no-url promise has to hold. Type and filename are what
+      // actually help diagnose it.
+      console.warn(
+        `SocialSnag: all ${response.urls.length} download attempt(s) failed for ${response.platform}`,
+        response.urls.map((item) => ({ type: item.type, filename: item.filename })),
+      );
       if (platformSettings.showNotifications) {
         showNotification('SocialSnag: download failed. Check the browser console for details.');
       }

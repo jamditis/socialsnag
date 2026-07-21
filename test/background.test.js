@@ -1059,6 +1059,22 @@ describe('context-menu download history', () => {
 
     expect(globalThis.chrome.storage.local._data().downloadHistory).toBeUndefined();
   });
+
+  it('does not print media urls when every download fails', async () => {
+    // This is the console line a user is most likely to be reading, and pasting
+    // into a bug report, at the moment a download breaks -- so it is where the
+    // no-url promise in options actually gets tested.
+    const warnings = [];
+    vi.spyOn(console, 'warn').mockImplementation((...args) => warnings.push(args));
+    globalThis.chrome.downloads.download = async () => { throw new Error('disk full'); };
+
+    await clickDownload();
+
+    const printed = JSON.stringify(warnings);
+    expect(printed).not.toMatch(/https?:\/\//);
+    expect(printed).not.toMatch(/fbcdn|cdninstagram|twimg|bsky/);
+    expect(printed).toContain('facebook_resolver_name');
+  });
 });
 
 describe('resolveViaApi miss classification', () => {
