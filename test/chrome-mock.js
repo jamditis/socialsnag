@@ -67,6 +67,11 @@ globalThis.chrome = {
     download: async () => 1,
     show: () => {},
     onChanged: createEventTarget(),
+    // Returns no filename by default, which is the real pre-assignment state rather
+    // than a convenient one: production code has to cope with an item that exists
+    // before Chrome has named it. A test that cares overrides this to hand back the
+    // name uniquify settled on.
+    search: async () => [{}],
   },
   notifications: {
     create: () => {},

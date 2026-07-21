@@ -1,6 +1,6 @@
 'use strict';
 
-import { ALLOWED_DOMAINS, sanitizeFilename } from './platforms/common.js';
+import { ALLOWED_DOMAINS, sanitizeFilename, renderTemplate } from './platforms/common.js';
 import { IG_APP_ID, shortcodeToMediaId, parsePostMedia, extractStoryRef, parseStoryTray, mapIgStatusToMessage } from './platforms/instagram-api.js';
 import { copyViaOffscreen, zipViaOffscreen, revokeViaOffscreen } from './offscreen-host.js';
 
@@ -80,6 +80,54 @@ export function validateDownloadUrl(url) {
   }
 
   return { valid: true };
+}
+
+// yyyy-mm-dd in the user's own timezone.
+export function formatLocalDate(date) {
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+// Resolve the base filename for an item.
+//
+// An unset template keeps the name the platform resolver built. The template is
+// opt-in because changing what every existing user's files are called is not a
+// thing to do on their behalf during an update.
+//
+// {postId} and {username} come from the resolver via item.meta. A resolver that does
+// not supply them yet renders those tokens as nothing, which the renderer absorbs
+// along with their separators rather than leaving gaps -- so a template written for
+// a platform that has the data degrades to a shorter name elsewhere instead of a
+// broken one.
+// index defaults to 1 so {index} is genuinely always renderable, which is what lets
+// validateTemplate accept `{index}` on its own. Both download paths pass a real
+// position; the default is here so the promise holds even if one later forgets to.
+export function resolveBaseFilename(item, platform, template, index = 1) {
+  const fallback = item.filename || `${platform}_${index}`;
+  if (!template) return fallback;
+  const rendered = renderTemplate(template, {
+    platform,
+    type: item.type || 'file',
+    postId: item.meta?.postId,
+    username: item.meta?.username,
+    index,
+    // Local date, not toISOString(): that is UTC, so an evening download west of
+    // UTC would be filed under tomorrow. The date a user wants in a filename is
+    // the one their calendar showed when they saved it.
+    date: formatLocalDate(new Date()),
+  });
+  // A template can render empty for an item carrying none of its tokens, which is
+  // normal, and a file called nothing but its extension is not an acceptable result.
+  // Say so rather than silently handing back the old name: "why is this one still
+  // named the old way" is otherwise a puzzle with no clue in it.
+  if (!rendered) {
+    console.debug(
+      `SocialSnag: template "${template}" rendered empty for this ${item.type || 'item'}; `
+      + `using ${fallback}. The tokens it names are not available here.`,
+    );
+    return fallback;
+  }
+  return rendered;
 }
 
 // Build sanitized download path
@@ -334,10 +382,17 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     }
 
     let count = 0;
-    for (const item of response.urls) {
-      const downloadId = await downloadMedia(item, response.platform);
-      if (downloadId) {
-        await recordDownload(item, response.platform, downloadId);
+    for (const [position, item] of response.urls.entries()) {
+      const saved = await downloadMedia(item, response.platform, position + 1);
+      if (saved) {
+        // Record the name the file actually landed under, not the resolver's. With a
+        // template configured those differ, and history is how the user finds the
+        // download again -- listing a name no file has is worse than listing nothing.
+        await recordDownload(
+          { ...item, filename: saved.filename },
+          response.platform,
+          saved.downloadId,
+        );
         count++;
       }
     }
@@ -526,7 +581,10 @@ export async function downloadItemsAsZip(items, platform) {
   // per-file so a slide is never silently dropped from the archive.
   if (items.some((it) => it.needsVideoLookup)) return false;
 
-  const { downloadPath } = await chrome.storage.sync.get({ downloadPath: 'SocialSnag/{platform}' });
+  const { downloadPath, filenameTemplate } = await chrome.storage.sync.get({
+    downloadPath: 'SocialSnag/{platform}',
+    filenameTemplate: '',
+  });
 
   const files = [];
   const seen = new Set();
@@ -537,7 +595,9 @@ export async function downloadItemsAsZip(items, platform) {
       continue;
     }
     const ext = guessExtension(item.url, item.type);
-    const base = sanitizeFilename(item.filename || `${platform}_${files.length + 1}`);
+    const base = sanitizeFilename(
+      resolveBaseFilename(item, platform, filenameTemplate, files.length + 1),
+    );
     // Sanitize the whole entry name: guessExtension can echo a ?format= value
     // containing / or .., and client-zip writes entry names verbatim.
     let name = sanitizeFilename(`${base}${ext}`);
@@ -603,7 +663,84 @@ export async function resolveItemUrl(item) {
   return null;
 }
 
-async function downloadMedia(item, platform) {
+// How long to wait for Chrome to report the name it chose. Assignment is normally
+// immediate, so this is the ceiling on a download that errors before ever being
+// named, not a typical wait -- nothing is named after that and no delta is coming.
+const FILENAME_ASSIGN_TIMEOUT_MS = 2000;
+
+// Resolves with the filename Chrome assigns to this download, or null if none
+// arrives before the timeout. Returns a cancel alongside it: the caller has to call
+// it on every exit, or the listener and its timer outlive the download.
+function awaitFilenameDelta(downloadId, timeoutMs) {
+  let cancel;
+  const promise = new Promise((resolve) => {
+    const finish = (value) => { cancel(); resolve(value); };
+    const listener = (delta) => {
+      if (delta.id === downloadId && delta.filename?.current) finish(delta.filename.current);
+    };
+    const timer = setTimeout(() => finish(null), timeoutMs);
+    cancel = () => {
+      clearTimeout(timer);
+      chrome.downloads.onChanged.removeListener(listener);
+    };
+    chrome.downloads.onChanged.addListener(listener);
+  });
+  return { promise, cancel };
+}
+
+// The basename Chrome actually wrote, which is not always the one it was handed:
+// conflictAction:'uniquify' is applied after download() takes the path, so a second
+// `facebook.jpg` lands as `facebook (1).jpg` and the requested path never learns it.
+// Asking the download item is the only way to see that counter.
+//
+// Chrome names the file asynchronously, so the lookup can land in the window before
+// it has one -- and that window is likeliest on exactly the downloads this function
+// exists for. A template without {index} renders the same path for every item in an
+// album, so a ten-photo post fires ten collisions at once, which is both the case
+// where the requested name is wrong and the case where the queue is deepest. Waiting
+// for the name is therefore the whole point rather than a refinement of it.
+//
+// Only a download that fails before being named leaves nothing to wait for. Then the
+// requested basename is the closest thing available: it differs from the real one
+// only where Chrome changed it, and Chrome never got that far.
+async function savedBasename(downloadId, requestedPath) {
+  // Only folder separators survive sanitizing in a path, so the last one ends the
+  // folder. A DownloadItem filename is an absolute local path from the OS, so it can
+  // carry either separator regardless of what we asked for.
+  const fallback = requestedPath.slice(requestedPath.lastIndexOf('/') + 1);
+  // Listen before looking. Chrome can assign the name in the gap between a search
+  // that comes back empty and a listener attaching, and onChanged does not replay
+  // what it already fired -- so searching first would drop exactly the delta we are
+  // waiting for and sit here until the timeout.
+  const waiter = awaitFilenameDelta(downloadId, FILENAME_ASSIGN_TIMEOUT_MS);
+  try {
+    const [saved] = await chrome.downloads.search({ id: downloadId });
+    // Wait only on positive evidence that a name is still coming. An item Chrome has
+    // already finished with, or one it does not know about, will never fire a filename
+    // delta, and the album loop downloads sequentially -- so blocking on a name that
+    // is not coming stalls every item behind it for the full timeout.
+    const stillNaming = saved?.state === 'in_progress';
+    const p = saved?.filename || (stillNaming ? await waiter.promise : null);
+    if (!p) return fallback;
+    return p.slice(Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\')) + 1);
+  } catch (e) {
+    console.debug('SocialSnag: could not read the saved filename; using the requested one', e);
+    return fallback;
+  } finally {
+    waiter.cancel();
+  }
+}
+
+// `index` is this item's position in the batch the user asked for, counting from 1.
+// downloadMedia runs in a loop over an album, so defaulting it to 1 would name every
+// file in a ten-photo post identically and leave conflictAction:'uniquify' to tell
+// them apart -- which is how a duplicate gets to look like a numbered set.
+//
+// Returns {downloadId, filename} on success and null on every failure, where
+// `filename` is the basename on disk. The caller needs it for history and has no way
+// to work it out: the template, the folder setting, and the sanitizer all live in
+// here, so a second derivation out there would be a second answer.
+async function downloadMedia(item, platform, index = 1) {
   // Resolve API-based video lookups to a concrete URL before downloading.
   if (item.needsVideoLookup) {
     const resolvedUrl = await resolveItemUrl(item);
@@ -620,9 +757,14 @@ async function downloadMedia(item, platform) {
     return null;
   }
 
-  const { downloadPath } = await chrome.storage.sync.get({ downloadPath: 'SocialSnag/{platform}' });
+  const { downloadPath, filenameTemplate } = await chrome.storage.sync.get({
+    downloadPath: 'SocialSnag/{platform}',
+    filenameTemplate: '',
+  });
   const ext = guessExtension(item.url, item.type);
-  const rawFilename = item.filename || `${Date.now()}`;
+  // resolveBaseFilename always returns something: it falls back to the resolver's
+  // name, then to platform and index.
+  const rawFilename = resolveBaseFilename(item, platform, filenameTemplate, index);
   const path = sanitizeDownloadPath(rawFilename, platform, ext, downloadPath);
 
   const downloadUrl = item.url;
@@ -633,7 +775,7 @@ async function downloadMedia(item, platform) {
       filename: path,
       conflictAction: 'uniquify',
     });
-    return downloadId;
+    return { downloadId, filename: await savedBasename(downloadId, path) };
   } catch (e) {
     console.error('SocialSnag: download failed:', e);
     return null;
