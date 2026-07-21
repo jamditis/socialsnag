@@ -2,6 +2,11 @@
 
 import { ALLOWED_DOMAINS, sanitizeFilename, renderTemplate } from './platforms/common.js';
 import { IG_APP_ID, shortcodeToMediaId, parsePostMedia, extractStoryRef, parseStoryTray, mapIgStatusToMessage } from './platforms/instagram-api.js';
+import { createTracer } from './resolver-debug.js';
+
+// Opt-in resolver tracing (#25). Off unless the user enables it in options; it
+// reports which resolver path ran and the HTTP status bucket, never a media URL.
+const traceResolver = createTracer({ storage: chrome.storage });
 import { copyViaOffscreen, zipViaOffscreen, revokeViaOffscreen } from './offscreen-host.js';
 
 const MENU_PARENT = 'socialsnag-parent';
@@ -297,8 +302,15 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
             srcUrl: info.srcUrl || '',
             pageUrl: pageUrl,
           });
+          await traceResolver({
+            platform,
+            path: 'dom',
+            outcome: response?.urls?.length ? 'ok' : 'empty',
+            itemCount: response?.urls?.length || 0,
+          });
         } catch (sendErr) {
           console.warn('SocialSnag: content script unavailable:', sendErr.message);
+          await traceResolver({ platform, path: 'dom', outcome: 'unavailable', detail: 'content script not loaded' });
           // Try injecting content script on demand
           try {
             await chrome.scripting.executeScript({
@@ -312,7 +324,14 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
               srcUrl: info.srcUrl || '',
               pageUrl: pageUrl,
             });
+            await traceResolver({
+              platform,
+              path: 'dom-injected',
+              outcome: response?.urls?.length ? 'ok' : 'empty',
+              itemCount: response?.urls?.length || 0,
+            });
           } catch (injectErr) {
+            await traceResolver({ platform, path: 'dom-injected', outcome: 'threw' });
             showNotification('SocialSnag: could not connect to page. Try refreshing.');
             return;
           }
@@ -422,6 +441,10 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 
 // --- Background-only fallback resolver (no content script needed) ---
 
+// Platforms this resolver has an API path for at all. Used only to tell a debug
+// reader which kind of miss they are looking at.
+const API_RESOLVED_PLATFORMS = new Set(['twitter', 'instagram']);
+
 async function resolveViaApi(platform, pageUrl) {
   if (platform === 'twitter') {
     const match = pageUrl.match(/\/status\/(\d+)/);
@@ -429,6 +452,7 @@ async function resolveViaApi(platform, pageUrl) {
       const tweetId = match[1];
       const videoUrl = await resolveTwitterVideo(tweetId);
       if (videoUrl) {
+        await traceResolver({ platform, path: 'api-dispatch', outcome: 'ok', itemCount: 1 });
         return { url: videoUrl, type: 'video', filename: `tweet_${tweetId}`, needsVideoLookup: false };
       }
     }
@@ -440,11 +464,21 @@ async function resolveViaApi(platform, pageUrl) {
       const shortcode = match[2];
       const videoUrl = await resolveInstagramVideo(shortcode);
       if (videoUrl) {
+        await traceResolver({ platform, path: 'api-dispatch', outcome: 'ok', itemCount: 1 });
         return { url: videoUrl, type: 'video', filename: `reel_${shortcode}`, needsVideoLookup: false };
       }
     }
   }
 
+  // "The API found nothing" and "there was never an API to try" look identical
+  // from the outside, and they need opposite responses from whoever is reading
+  // the log, so name which one happened.
+  await traceResolver({
+    platform,
+    path: 'api-dispatch',
+    outcome: 'empty',
+    detail: API_RESOLVED_PLATFORMS.has(platform) ? 'no id in url' : 'no api path for platform',
+  });
   return null;
 }
 
@@ -457,6 +491,7 @@ async function resolveTwitterVideo(tweetId) {
     );
     if (!resp.ok) {
       console.warn('SocialSnag: syndication API returned', resp.status);
+      await traceResolver({ platform: 'twitter', path: 'syndication', outcome: 'http-error', status: resp.status });
       return null;
     }
     const data = await resp.json();
@@ -464,7 +499,16 @@ async function resolveTwitterVideo(tweetId) {
     // Find video media in mediaDetails
     const media = data.mediaDetails || [];
     const videoMedia = media.find((m) => m.type === 'video' || m.type === 'animated_gif');
-    if (!videoMedia?.video_info?.variants) return null;
+    if (!videoMedia?.video_info?.variants) {
+      await traceResolver({
+        platform: 'twitter',
+        path: 'syndication',
+        outcome: 'empty',
+        status: resp.status,
+        detail: 'no video media',
+      });
+      return null;
+    }
 
     // Pick the highest bitrate MP4 variant
     const mp4s = videoMedia.video_info.variants
@@ -472,12 +516,28 @@ async function resolveTwitterVideo(tweetId) {
       .sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
 
     if (mp4s.length > 0) {
+      await traceResolver({
+        platform: 'twitter',
+        path: 'syndication',
+        outcome: 'ok',
+        status: resp.status,
+        itemCount: mp4s.length,
+      });
       return mp4s[0].url;
     }
     console.warn('SocialSnag: no MP4 variants in syndication response');
+    await traceResolver({
+      platform: 'twitter',
+      path: 'syndication',
+      outcome: 'empty',
+      status: resp.status,
+      itemCount: 0,
+      detail: 'no mp4 variants',
+    });
     return null;
   } catch (e) {
     console.error('SocialSnag: Twitter video API failed:', e);
+    await traceResolver({ platform: 'twitter', path: 'syndication', outcome: 'threw' });
     return null;
   }
 }
@@ -506,6 +566,7 @@ export async function resolveInstagramPost(shortcode) {
     if (!resp.ok) {
       lastIgError = mapIgStatusToMessage(resp.status);
       console.warn('SocialSnag: Instagram API returned', resp.status);
+      await traceResolver({ platform: 'instagram', path: 'post-api', outcome: 'http-error', status: resp.status });
       return null;
     }
 
@@ -513,13 +574,18 @@ export async function resolveInstagramPost(shortcode) {
     const items = parsePostMedia(data, shortcode);
     if (items.length === 0) {
       lastIgError = mapIgStatusToMessage(0);
+      // The case #25 was filed for: a 200 that parses to nothing looks identical to
+      // a network failure from the outside.
+      await traceResolver({ platform: 'instagram', path: 'post-api', outcome: 'empty', status: resp.status, itemCount: 0 });
       return null;
     }
 
     lastIgError = null;
+    await traceResolver({ platform: 'instagram', path: 'post-api', outcome: 'ok', status: resp.status, itemCount: items.length });
     return items;
   } catch (e) {
     console.error('SocialSnag: Instagram post API failed:', e);
+    await traceResolver({ platform: 'instagram', path: 'post-api', outcome: 'threw' });
     return null;
   }
 }
@@ -532,11 +598,18 @@ async function fetchInstagramUserId(username) {
       `https://www.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(username)}`,
       { headers: { 'x-ig-app-id': IG_APP_ID }, credentials: 'include' },
     );
-    if (!resp.ok) { lastIgError = mapIgStatusToMessage(resp.status); return null; }
+    if (!resp.ok) {
+      lastIgError = mapIgStatusToMessage(resp.status);
+      await traceResolver({ platform: 'instagram', path: 'user-lookup', outcome: 'http-error', status: resp.status });
+      return null;
+    }
     const data = await resp.json();
-    return data?.data?.user?.id || null;
+    const userId = data?.data?.user?.id || null;
+    if (!userId) await traceResolver({ platform: 'instagram', path: 'user-lookup', outcome: 'empty', status: resp.status });
+    return userId;
   } catch (e) {
     console.error('SocialSnag: IG user lookup failed:', e);
+    await traceResolver({ platform: 'instagram', path: 'user-lookup', outcome: 'threw' });
     return null;
   }
 }
@@ -552,14 +625,26 @@ export async function resolveInstagramStories({ username, storyId }) {
       `https://i.instagram.com/api/v1/feed/reels_media/?reel_ids=${userId}`,
       { headers: { 'x-ig-app-id': IG_APP_ID }, credentials: 'include' },
     );
-    if (!resp.ok) { lastIgError = mapIgStatusToMessage(resp.status); return null; }
+    if (!resp.ok) {
+      lastIgError = mapIgStatusToMessage(resp.status);
+      await traceResolver({ platform: 'instagram', path: 'story-api', outcome: 'http-error', status: resp.status });
+      return null;
+    }
     const data = await resp.json();
     const items = parseStoryTray(data, { storyId });
-    if (items.length === 0) { lastIgError = mapIgStatusToMessage(0); return null; }
+    if (items.length === 0) {
+      lastIgError = mapIgStatusToMessage(0);
+      // Expected when a story has aged out of the 24h window, and indistinguishable
+      // from a lookup bug without this line.
+      await traceResolver({ platform: 'instagram', path: 'story-api', outcome: 'empty', status: resp.status, itemCount: 0, detail: storyId ? 'single story' : 'full tray' });
+      return null;
+    }
     lastIgError = null;
+    await traceResolver({ platform: 'instagram', path: 'story-api', outcome: 'ok', status: resp.status, itemCount: items.length });
     return items;
   } catch (e) {
     console.error('SocialSnag: IG stories API failed:', e);
+    await traceResolver({ platform: 'instagram', path: 'story-api', outcome: 'threw' });
     return null;
   }
 }
