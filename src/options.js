@@ -13,6 +13,7 @@ if (typeof document !== 'undefined') {
     settings.showNotifications = document.getElementById('notifications-toggle').checked;
     settings.downloadPath = document.getElementById('download-path').value.trim() || 'SocialSnag/{platform}';
     settings.zipMultiPosts = document.getElementById('zip-toggle').checked;
+    settings.resolverDebug = document.getElementById('resolver-debug-toggle').checked;
 
     const advancedCheckbox = document.getElementById('advanced-toggle');
 
@@ -48,6 +49,7 @@ if (typeof document !== 'undefined') {
       advancedMode: false,
       downloadPath: 'SocialSnag/{platform}',
       zipMultiPosts: false,
+      resolverDebug: false,
     };
     PLATFORMS.forEach((p) => { defaults[`platform_${p}`] = true; });
 
@@ -55,6 +57,7 @@ if (typeof document !== 'undefined') {
       document.getElementById('advanced-toggle').checked = items.advancedMode;
       document.getElementById('notifications-toggle').checked = items.showNotifications;
       document.getElementById('zip-toggle').checked = items.zipMultiPosts;
+      document.getElementById('resolver-debug-toggle').checked = items.resolverDebug;
       document.getElementById('download-path').value = items.downloadPath;
       PLATFORMS.forEach((p) => {
         document.getElementById(`${p}-toggle`).checked = items[`platform_${p}`];
@@ -81,6 +84,7 @@ if (typeof document !== 'undefined') {
     document.getElementById('advanced-toggle').addEventListener('change', saveSettings);
     document.getElementById('notifications-toggle').addEventListener('change', saveSettings);
     document.getElementById('zip-toggle').addEventListener('change', saveSettings);
+    document.getElementById('resolver-debug-toggle').addEventListener('change', saveSettings);
     document.getElementById('download-path').addEventListener('input', () => {
       updatePathPreview();
       clearTimeout(pathDebounce);
