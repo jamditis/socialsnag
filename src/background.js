@@ -728,28 +728,110 @@ export async function downloadItemsAsZip(items, platform) {
     return false;
   }
 
-  // Revoke only after the download finishes reading the blob (see helper).
-  revokeBlobWhenComplete(downloadId, zip.url);
+  // Revoke only after the download finishes reading the blob (see below).
+  await trackBlobForDownload(downloadId, zip.url);
 
   // Record one history entry for the archive; no url is stored.
   await recordDownload({ type: 'zip', filename: `${zipBase}.zip` }, platform, downloadId);
   return zip.count ?? files.length;
 }
 
-// Revoke a blob URL once its download reaches a terminal state. Revoking
-// earlier can truncate the file, because chrome.downloads.download resolves
-// when the download STARTS, not when it finishes reading the blob.
-function revokeBlobWhenComplete(downloadId, blobUrl) {
-  const listener = (delta) => {
-    if (delta.id !== downloadId || !delta.state) return;
-    const s = delta.state.current;
-    if (s === 'complete' || s === 'interrupted') {
-      chrome.downloads.onChanged.removeListener(listener);
-      revokeViaOffscreen(blobUrl);
-    }
-  };
-  chrome.downloads.onChanged.addListener(listener);
+// Blob URLs whose download has not finished reading them yet, as
+// { [downloadId]: blobUrl }. Revoking earlier truncates the file, because
+// chrome.downloads.download resolves when the download STARTS, not when it
+// finishes reading the blob.
+//
+// This lives in session storage rather than a module variable, and the listener
+// below is registered at top level rather than per-download, because an MV3
+// service worker can be torn down while a large zip is still downloading. The
+// download itself survives (the blob belongs to the offscreen document, which
+// outlives the worker), so a per-download listener would die with the worker and
+// leave the blob to accumulate in an offscreen document that is never closed.
+const PENDING_BLOBS_KEY = 'pendingBlobRevokes';
+
+// Read-modify-write of the map above, serialized. Two zip downloads started
+// close together would otherwise both read the same object and each write back
+// its own copy, and the later write would drop the earlier download's entry --
+// leaking exactly the blob this map exists to revoke.
+let pendingBlobWrites = Promise.resolve();
+
+function updatePendingBlobs(mutate) {
+  const next = pendingBlobWrites.then(async () => {
+    const { [PENDING_BLOBS_KEY]: stored } = await chrome.storage.session.get(PENDING_BLOBS_KEY);
+    const pending = stored || {};
+    const result = mutate(pending);
+    await chrome.storage.session.set({ [PENDING_BLOBS_KEY]: pending });
+    return result;
+  });
+  // Keep the chain alive even if one update throws, or every later write stalls.
+  pendingBlobWrites = next.catch(() => {});
+  return next;
 }
+
+async function trackBlobForDownload(downloadId, blobUrl) {
+  await updatePendingBlobs((pending) => {
+    pending[downloadId] = blobUrl;
+  });
+  // A short download can reach its terminal state before the write above lands,
+  // and the listener would have found nothing to revoke. Catch that up here.
+  const item = await findDownload(downloadId);
+  if (isTerminalDownload(item)) {
+    await revokePendingBlob(downloadId);
+  }
+}
+
+async function revokePendingBlob(downloadId) {
+  // Claim the entry inside the serialized update so a duplicate event cannot
+  // revoke the same URL twice.
+  const blobUrl = await updatePendingBlobs((pending) => {
+    const url = pending[downloadId];
+    delete pending[downloadId];
+    return url;
+  });
+  if (!blobUrl) return;
+  await revokeViaOffscreen(blobUrl);
+}
+
+async function findDownload(downloadId) {
+  try {
+    const [item] = await chrome.downloads.search({ id: downloadId });
+    return item || null;
+  } catch (e) {
+    console.warn('SocialSnag: could not query download state:', e);
+    return undefined;
+  }
+}
+
+function isTerminalDownload(item) {
+  return item === null
+    || item?.state === 'complete'
+    || (item?.state === 'interrupted' && !item.canResume);
+}
+
+async function revokeBlobIfTerminal(downloadId) {
+  const item = await findDownload(downloadId);
+  if (isTerminalDownload(item)) await revokePendingBlob(downloadId);
+}
+
+chrome.downloads.onChanged.addListener(async (delta) => {
+  const state = delta.state?.current;
+  if (state === 'complete') {
+    await revokePendingBlob(delta.id);
+    return;
+  }
+  const stoppedBeingResumable = delta.canResume && delta.canResume.current !== true;
+  if (state !== 'interrupted' && !stoppedBeingResumable) return;
+  // An interrupted download may still be resumable, and resuming reads the blob
+  // again -- revoking here would make the resume fail with the source gone. Only
+  // an interruption it cannot come back from is really terminal. If the download
+  // cannot be found at all, its record is gone and no resume is possible. Query
+  // failures stay distinct from a missing record so transient errors keep the blob.
+  await revokeBlobIfTerminal(delta.id);
+});
+
+chrome.downloads.onErased.addListener(async (downloadId) => {
+  await revokePendingBlob(downloadId);
+});
 
 // Validate and download a single media item
 // Resolve a lookup-placeholder item — a Twitter/X or Instagram video the content
