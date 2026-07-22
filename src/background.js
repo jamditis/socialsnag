@@ -255,8 +255,9 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   if (!platformSettings[`platform_${platform}`]) return;
 
   try {
-    // Reset per click so a stale reason from a prior click can never be shown.
-    lastIgError = null;
+    // Scoped to this click, so a concurrent click in another tab cannot
+    // overwrite the reason before this one reaches its notification (#30).
+    let igError = null;
     const pageUrl = info.pageUrl || tab.url;
     let response;
     let triedIgPostApi = false;
@@ -266,9 +267,11 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       const shortcode = pageUrl.match(/\/(p|reel|tv)\/([A-Za-z0-9_-]+)/)?.[2];
       if (shortcode) {
         triedIgPostApi = true;
-        const apiItems = await resolveInstagramPost(shortcode);
-        if (apiItems && apiItems.length) {
-          response = { urls: apiItems, platform };
+        const post = await resolveInstagramPost(shortcode);
+        if (post.items) {
+          response = { urls: post.items, platform };
+        } else if (post.error) {
+          igError = post.error;
         }
       }
     }
@@ -279,8 +282,9 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       if (storyRef) {
         // "single" grabs the viewed story; "all" grabs the whole tray.
         const ref = type === 'all' ? { ...storyRef, storyId: null } : storyRef;
-        const storyItems = await resolveInstagramStories(ref);
-        if (storyItems && storyItems.length) response = { urls: storyItems, platform };
+        const stories = await resolveInstagramStories(ref);
+        if (stories.items) response = { urls: stories.items, platform };
+        else if (stories.error) igError = stories.error;
       }
     }
 
@@ -290,9 +294,10 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       // Skip it if the post API already ran this click — resolveViaApi would
       // only repeat the identical i.instagram.com fetch for the same shortcode.
       const apiResult = triedIgPostApi ? null : await resolveViaApi(platform, pageUrl);
-      if (apiResult) {
+      if (apiResult?.error) igError = apiResult.error;
+      if (apiResult?.item) {
         // API found a video — use it directly
-        response = { urls: [apiResult], platform };
+        response = { urls: [apiResult.item], platform };
       } else {
         // No video via API — use content script for images
         try {
@@ -347,15 +352,17 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     // the fallback when the API comes up empty.
     if (platform === 'instagram' && type === 'all' && !triedIgPostApi
         && response && response.shortcode) {
-      const apiItems = await resolveInstagramPost(response.shortcode);
-      if (apiItems && apiItems.length) {
-        response = { urls: apiItems, platform };
+      const post = await resolveInstagramPost(response.shortcode);
+      if (post.items) {
+        response = { urls: post.items, platform };
+      } else if (post.error) {
+        igError = post.error;
       }
     }
 
     if (!response || !response.urls || response.urls.length === 0) {
-      const msg = (platform === 'instagram' && lastIgError)
-        ? lastIgError
+      const msg = (platform === 'instagram' && igError)
+        ? igError
         : 'Could not find downloadable media on this element.';
       showNotification(msg);
       return;
@@ -453,11 +460,16 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 // reader which kind of miss they are looking at.
 const API_RESOLVED_PLATFORMS = new Set(['twitter', 'instagram']);
 
+// Returns `{ item }` when the API resolved a video, otherwise `{ item: null }`
+// plus any platform-specific reason for the miss. The reason rides the return
+// value rather than shared state so it stays tied to this call (#30); it is null
+// for platforms whose resolvers classify nothing.
 export async function resolveViaApi(platform, pageUrl) {
   // Whether the url actually carried an id this resolver understands. Without
   // this the miss below cannot tell "no id to look up" from "looked it up and
   // got nothing", and would report an image-only post as a url-parsing failure.
   let foundId = false;
+  let error = null;
 
   if (platform === 'twitter') {
     const match = pageUrl.match(/\/status\/(\d+)/);
@@ -467,7 +479,7 @@ export async function resolveViaApi(platform, pageUrl) {
       const videoUrl = await resolveTwitterVideo(tweetId);
       if (videoUrl) {
         await traceResolver({ platform, path: 'api-dispatch', outcome: 'ok', itemCount: 1 });
-        return { url: videoUrl, type: 'video', filename: `tweet_${tweetId}`, needsVideoLookup: false };
+        return { item: { url: videoUrl, type: 'video', filename: `tweet_${tweetId}`, needsVideoLookup: false } };
       }
     }
   }
@@ -477,11 +489,12 @@ export async function resolveViaApi(platform, pageUrl) {
     if (match) {
       foundId = true;
       const shortcode = match[2];
-      const videoUrl = await resolveInstagramVideo(shortcode);
-      if (videoUrl) {
+      const video = await resolveInstagramVideo(shortcode);
+      if (video.url) {
         await traceResolver({ platform, path: 'api-dispatch', outcome: 'ok', itemCount: 1 });
-        return { url: videoUrl, type: 'video', filename: `reel_${shortcode}`, needsVideoLookup: false };
+        return { item: { url: video.url, type: 'video', filename: `reel_${shortcode}`, needsVideoLookup: false } };
       }
+      error = video.error;
     }
   }
 
@@ -495,7 +508,7 @@ export async function resolveViaApi(platform, pageUrl) {
   else detail = 'no id in url';
 
   await traceResolver({ platform, path: 'api-dispatch', outcome: 'empty', detail });
-  return null;
+  return { item: null, error };
 }
 
 // --- API-based video resolvers ---
@@ -558,17 +571,25 @@ async function resolveTwitterVideo(tweetId) {
   }
 }
 
-// Tracks the most recent Instagram API failure so the click handler can show a
-// specific reason (login needed, rate limited, expired) instead of a generic message.
-let lastIgError = null;
+// A failure reason rides the return value of the call that produced it, so a
+// click reads only its own reason even when another tab is failing at the same
+// moment for a different one (#30).
+//
+// The post and story resolvers return `{ items }` on success and `{ error }` on
+// failure. Their helpers keep the same `error` field alongside their own success
+// key: `fetchInstagramUserId` returns `{ userId }`, `resolveInstagramVideo`
+// returns `{ url }`.
+//
+// `error` is a user-facing string when the failure is classified, and null when
+// it is not (a malformed shortcode, a thrown fetch), in which case the handler
+// falls back to its generic message.
 
 // Fetch and enumerate every media item in an Instagram post (single image/video
-// or full carousel) via the private web API. Returns an array of media items, or
-// null on failure — recording the reason in lastIgError for the click handler.
+// or full carousel) via the private web API.
 export async function resolveInstagramPost(shortcode) {
   try {
     const mediaId = shortcodeToMediaId(shortcode);
-    if (!mediaId) return null;
+    if (!mediaId) return { error: null };
 
     const resp = await fetch(
       `https://i.instagram.com/api/v1/media/${mediaId}/info/`,
@@ -580,34 +601,32 @@ export async function resolveInstagramPost(shortcode) {
       }
     );
     if (!resp.ok) {
-      lastIgError = mapIgStatusToMessage(resp.status);
       console.warn('SocialSnag: Instagram API returned', resp.status);
       await traceResolver({ platform: 'instagram', path: 'post-api', outcome: 'http-error', status: resp.status });
-      return null;
+      return { error: mapIgStatusToMessage(resp.status) };
     }
 
     const data = await resp.json();
     const items = parsePostMedia(data, shortcode);
     if (items.length === 0) {
-      lastIgError = mapIgStatusToMessage(0);
       // The case #25 was filed for: a 200 that parses to nothing looks identical to
       // a network failure from the outside.
       await traceResolver({ platform: 'instagram', path: 'post-api', outcome: 'empty', status: resp.status, itemCount: 0 });
-      return null;
+      return { error: mapIgStatusToMessage(0) };
     }
 
-    lastIgError = null;
     await traceResolver({ platform: 'instagram', path: 'post-api', outcome: 'ok', status: resp.status, itemCount: items.length });
-    return items;
+    return { items };
   } catch (e) {
     console.error('SocialSnag: Instagram post API failed:', e);
     await traceResolver({ platform: 'instagram', path: 'post-api', outcome: 'threw' });
-    return null;
+    return { error: null };
   }
 }
 
 // Look up an Instagram username's numeric user id via the private web API.
-// Returns the id string, or null on failure — recording the reason in lastIgError.
+// Returns `{ userId }` or `{ error }`, so a story lookup that fails at this step
+// still carries its reason back to the click that asked for it.
 async function fetchInstagramUserId(username) {
   try {
     const resp = await fetch(
@@ -615,62 +634,65 @@ async function fetchInstagramUserId(username) {
       { headers: { 'x-ig-app-id': IG_APP_ID }, credentials: 'include' },
     );
     if (!resp.ok) {
-      lastIgError = mapIgStatusToMessage(resp.status);
       await traceResolver({ platform: 'instagram', path: 'user-lookup', outcome: 'http-error', status: resp.status });
-      return null;
+      return { error: mapIgStatusToMessage(resp.status) };
     }
     const data = await resp.json();
     const userId = data?.data?.user?.id || null;
-    if (!userId) await traceResolver({ platform: 'instagram', path: 'user-lookup', outcome: 'empty', status: resp.status });
-    return userId;
+    if (!userId) {
+      await traceResolver({ platform: 'instagram', path: 'user-lookup', outcome: 'empty', status: resp.status });
+      return { error: null };
+    }
+    return { userId };
   } catch (e) {
     console.error('SocialSnag: IG user lookup failed:', e);
     await traceResolver({ platform: 'instagram', path: 'user-lookup', outcome: 'threw' });
-    return null;
+    return { error: null };
   }
 }
 
 // Resolve a story ref to its media via the reels_media API. storyId null means
-// the whole active tray. Returns an array of media items, or null on failure —
-// recording the reason in lastIgError for the click handler.
+// the whole active tray.
 export async function resolveInstagramStories({ username, storyId }) {
-  const userId = await fetchInstagramUserId(username);
-  if (!userId) return null;
+  const lookup = await fetchInstagramUserId(username);
+  if (!lookup.userId) return { error: lookup.error };
+  const userId = lookup.userId;
   try {
     const resp = await fetch(
       `https://i.instagram.com/api/v1/feed/reels_media/?reel_ids=${userId}`,
       { headers: { 'x-ig-app-id': IG_APP_ID }, credentials: 'include' },
     );
     if (!resp.ok) {
-      lastIgError = mapIgStatusToMessage(resp.status);
       await traceResolver({ platform: 'instagram', path: 'story-api', outcome: 'http-error', status: resp.status });
-      return null;
+      return { error: mapIgStatusToMessage(resp.status) };
     }
     const data = await resp.json();
     const items = parseStoryTray(data, { storyId });
     if (items.length === 0) {
-      lastIgError = mapIgStatusToMessage(0);
       // Expected when a story has aged out of the 24h window, and indistinguishable
       // from a lookup bug without this line.
       await traceResolver({ platform: 'instagram', path: 'story-api', outcome: 'empty', status: resp.status, itemCount: 0, detail: storyId ? 'single story' : 'full tray' });
-      return null;
+      return { error: mapIgStatusToMessage(0) };
     }
-    lastIgError = null;
     await traceResolver({ platform: 'instagram', path: 'story-api', outcome: 'ok', status: resp.status, itemCount: items.length });
-    return items;
+    return { items };
   } catch (e) {
     console.error('SocialSnag: IG stories API failed:', e);
     await traceResolver({ platform: 'instagram', path: 'story-api', outcome: 'threw' });
-    return null;
+    return { error: null };
   }
 }
 
 // Resolve the first video URL in an Instagram post (used by single-video flows).
+// Returns `{ url }` or `{ error }`, carrying the post API's reason through so a
+// single-video click reports "log in" rather than the generic miss message.
 async function resolveInstagramVideo(shortcode) {
-  const items = await resolveInstagramPost(shortcode);
-  if (!items) return null;
-  const video = items.find((it) => it.type === 'video');
-  return video ? video.url : null;
+  const post = await resolveInstagramPost(shortcode);
+  if (!post.items) return { error: post.error };
+  const video = post.items.find((it) => it.type === 'video');
+  // A post that resolved fine but holds no video is a miss, not a failure: the
+  // caller falls through to the DOM path for images, so there is no reason here.
+  return video ? { url: video.url } : { error: null };
 }
 
 // Bundle multiple resolved media items into one .zip via the offscreen document.
@@ -842,7 +864,11 @@ chrome.downloads.onErased.addListener(async (downloadId) => {
 export async function resolveItemUrl(item) {
   if (!item.needsVideoLookup) return item.url;
   if (item.tweetId) return resolveTwitterVideo(item.tweetId);
-  if (item.shortcode) return resolveInstagramVideo(item.shortcode);
+  // The reason is dropped here, not reported. This runs after the handler's
+  // notification branch, so a lookup that fails at this point (logged out,
+  // rate-limited) reaches the user as the generic copy-failure message rather
+  // than the Instagram-specific one a download would have shown.
+  if (item.shortcode) return (await resolveInstagramVideo(item.shortcode)).url ?? null;
   return null;
 }
 
