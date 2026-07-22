@@ -12,6 +12,7 @@ import {
   resolveItemUrl,
   resolveViaApi,
 } from '../src/background.js';
+import { mapIgStatusToMessage } from '../src/platforms/instagram-api.js';
 
 describe('detectPlatform', () => {
   it('detects instagram', () => {
@@ -161,7 +162,7 @@ describe('resolveInstagramPost', () => {
       };
     });
 
-    const items = await resolveInstagramPost('ABC');
+    const { items } = await resolveInstagramPost('ABC');
     expect(items).toHaveLength(3);
     expect(items.map((i) => i.url)).toEqual([
       'https://cdn.cdninstagram.com/1.jpg',
@@ -172,10 +173,33 @@ describe('resolveInstagramPost', () => {
     expect(items.map((i) => i.filename)).toEqual(['post_ABC_1', 'post_ABC_2', 'post_ABC_3']);
   });
 
-  it('returns null when the API rate-limits (429)', async () => {
+  it('reports the rate-limit reason instead of items when the API 429s', async () => {
     installFetch(() => ({ status: 429, json: {} }));
-    const items = await resolveInstagramPost('ABC');
-    expect(items).toBeNull();
+    const result = await resolveInstagramPost('ABC');
+    expect(result.items).toBeUndefined();
+    // The reason rides the return value, so a concurrent click cannot claim it (#30).
+    expect(result.error).toBe(mapIgStatusToMessage(429));
+  });
+
+  it('gives each concurrent lookup its own failure reason (#30)', async () => {
+    // The race the module-level lastIgError lost: two clicks in different tabs
+    // fail for different reasons at once. Both resolvers wrote the one shared
+    // slot, so whichever finished last decided what BOTH notifications said.
+    // Reasons now ride the return values, so neither call can claim the other's.
+    const statuses = [401, 429];
+    let call = 0;
+    installFetch(() => ({ status: statuses[call++], json: {} }));
+
+    const [first, second] = await Promise.all([
+      resolveInstagramPost('AAA'),
+      resolveInstagramPost('BBB'),
+    ]);
+
+    expect(first.error).toBe(mapIgStatusToMessage(401));
+    expect(second.error).toBe(mapIgStatusToMessage(429));
+    // Guards the assertion above: if the two statuses ever mapped to the same
+    // copy, the test would pass while proving nothing about attribution.
+    expect(first.error).not.toBe(second.error);
   });
 });
 
@@ -194,7 +218,7 @@ describe('resolveInstagramStories', () => {
       return null;
     });
 
-    const items = await resolveInstagramStories({ username: 'x', storyId: null });
+    const { items } = await resolveInstagramStories({ username: 'x', storyId: null });
     expect(items.map((i) => i.url)).toEqual(['https://cdn.cdninstagram.com/s.jpg']);
   });
 
@@ -210,7 +234,7 @@ describe('resolveInstagramStories', () => {
       return null;
     });
 
-    const items = await resolveInstagramStories({ username: 'x', storyId: '2' });
+    const { items } = await resolveInstagramStories({ username: 'x', storyId: '2' });
     expect(items).toHaveLength(1);
     expect(items[0].url).toBe('https://cdn.cdninstagram.com/2.jpg');
   });
@@ -239,6 +263,44 @@ describe('context menu click — Instagram total failure', () => {
     }
 
     expect(notes).toContain('Log in to Instagram to download this.');
+  });
+
+  it('tells two concurrent clicks apart when they fail differently (#30)', async () => {
+    // The reported bug, at the surface that had it. Two tabs fail at once for
+    // different reasons; the handler used to read the reason out of one shared
+    // module variable, so the resolver that finished last decided what BOTH
+    // notifications said and one tab got the other tab's message.
+    const statuses = [401, 429];
+    let call = 0;
+    installFetch((url) => (url.includes('i.instagram.com')
+      ? { status: statuses[call++] ?? 429, json: {} }
+      : null));
+
+    const notes = [];
+    const origCreate = globalThis.chrome.notifications.create;
+    globalThis.chrome.notifications.create = (opts) => { notes.push(opts.message); };
+
+    try {
+      const handler = globalThis.chrome.contextMenus.onClicked._listeners[0];
+      await Promise.all([
+        handler(
+          { menuItemId: 'socialsnag-download-all', pageUrl: 'https://www.instagram.com/p/AAA/', srcUrl: '' },
+          { id: 1, url: 'https://www.instagram.com/p/AAA/' }
+        ),
+        handler(
+          { menuItemId: 'socialsnag-download-all', pageUrl: 'https://www.instagram.com/p/BBB/', srcUrl: '' },
+          { id: 2, url: 'https://www.instagram.com/p/BBB/' }
+        ),
+      ]);
+    } finally {
+      globalThis.chrome.notifications.create = origCreate;
+    }
+
+    // Asserted as a set, not per-click: which tab draws which status depends on
+    // fetch ordering, and the bug is that both notifications collapse onto one
+    // message. Pre-fix, both of these read the rate-limit copy.
+    expect(notes).toContain(mapIgStatusToMessage(401));
+    expect(notes).toContain(mapIgStatusToMessage(429));
   });
 });
 
@@ -1225,12 +1287,12 @@ describe('resolveViaApi miss classification', () => {
   const dispatchLine = () => logged.find((l) => l.includes('api-dispatch'));
 
   it('says there is no api path at all for a platform that has none', async () => {
-    await expect(resolveViaApi('bluesky', 'https://bsky.app/profile/a/post/b')).resolves.toBeNull();
+    expect((await resolveViaApi('bluesky', 'https://bsky.app/profile/a/post/b')).item).toBeNull();
     expect(dispatchLine()).toBe('socialsnag[bluesky] api-dispatch: empty (no api path for platform)');
   });
 
   it('blames the url only when the url really carries no id', async () => {
-    await expect(resolveViaApi('twitter', 'https://x.com/someone')).resolves.toBeNull();
+    expect((await resolveViaApi('twitter', 'https://x.com/someone')).item).toBeNull();
     expect(dispatchLine()).toBe('socialsnag[twitter] api-dispatch: empty (no id in url)');
   });
 
@@ -1239,7 +1301,7 @@ describe('resolveViaApi miss classification', () => {
     // carries no video media. Reporting this as a url problem was the bug.
     globalThis.installFetch(() => ({ status: 200, json: { mediaDetails: [] } }));
 
-    await expect(resolveViaApi('twitter', 'https://x.com/a/status/123')).resolves.toBeNull();
+    expect((await resolveViaApi('twitter', 'https://x.com/a/status/123')).item).toBeNull();
     expect(dispatchLine()).toBe('socialsnag[twitter] api-dispatch: empty (id found, no video from api)');
   });
 
@@ -1255,7 +1317,7 @@ describe('resolveViaApi miss classification', () => {
     }));
 
     const result = await resolveViaApi('twitter', 'https://x.com/a/status/123');
-    expect(result?.url).toBe('https://video.twimg.com/x.mp4');
+    expect(result.item?.url).toBe('https://video.twimg.com/x.mp4');
     expect(dispatchLine()).toBe('socialsnag[twitter] api-dispatch: ok (1 item)');
   });
 
