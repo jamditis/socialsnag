@@ -1,7 +1,12 @@
 'use strict';
 
-import { ALLOWED_DOMAINS, sanitizeFilename } from './platforms/common.js';
+import { ALLOWED_DOMAINS, sanitizeFilename, renderTemplate } from './platforms/common.js';
 import { IG_APP_ID, shortcodeToMediaId, parsePostMedia, extractStoryRef, parseStoryTray, mapIgStatusToMessage } from './platforms/instagram-api.js';
+import { createTracer } from './resolver-debug.js';
+
+// Opt-in resolver tracing (#25). Off unless the user enables it in options; it
+// reports which resolver path ran and the HTTP status bucket, never a media URL.
+const traceResolver = createTracer({ storage: chrome.storage });
 import { copyViaOffscreen, zipViaOffscreen, revokeViaOffscreen } from './offscreen-host.js';
 
 const MENU_PARENT = 'socialsnag-parent';
@@ -80,6 +85,54 @@ export function validateDownloadUrl(url) {
   }
 
   return { valid: true };
+}
+
+// yyyy-mm-dd in the user's own timezone.
+export function formatLocalDate(date) {
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+// Resolve the base filename for an item.
+//
+// An unset template keeps the name the platform resolver built. The template is
+// opt-in because changing what every existing user's files are called is not a
+// thing to do on their behalf during an update.
+//
+// {postId} and {username} come from the resolver via item.meta. A resolver that does
+// not supply them yet renders those tokens as nothing, which the renderer absorbs
+// along with their separators rather than leaving gaps -- so a template written for
+// a platform that has the data degrades to a shorter name elsewhere instead of a
+// broken one.
+// index defaults to 1 so {index} is genuinely always renderable, which is what lets
+// validateTemplate accept `{index}` on its own. Both download paths pass a real
+// position; the default is here so the promise holds even if one later forgets to.
+export function resolveBaseFilename(item, platform, template, index = 1) {
+  const fallback = item.filename || `${platform}_${index}`;
+  if (!template) return fallback;
+  const rendered = renderTemplate(template, {
+    platform,
+    type: item.type || 'file',
+    postId: item.meta?.postId,
+    username: item.meta?.username,
+    index,
+    // Local date, not toISOString(): that is UTC, so an evening download west of
+    // UTC would be filed under tomorrow. The date a user wants in a filename is
+    // the one their calendar showed when they saved it.
+    date: formatLocalDate(new Date()),
+  });
+  // A template can render empty for an item carrying none of its tokens, which is
+  // normal, and a file called nothing but its extension is not an acceptable result.
+  // Say so rather than silently handing back the old name: "why is this one still
+  // named the old way" is otherwise a puzzle with no clue in it.
+  if (!rendered) {
+    console.debug(
+      `SocialSnag: template "${template}" rendered empty for this ${item.type || 'item'}; `
+      + `using ${fallback}. The tokens it names are not available here.`,
+    );
+    return fallback;
+  }
+  return rendered;
 }
 
 // Build sanitized download path
@@ -249,8 +302,15 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
             srcUrl: info.srcUrl || '',
             pageUrl: pageUrl,
           });
+          await traceResolver({
+            platform,
+            path: 'dom',
+            outcome: response?.urls?.length ? 'ok' : 'empty',
+            itemCount: response?.urls?.length || 0,
+          });
         } catch (sendErr) {
           console.warn('SocialSnag: content script unavailable:', sendErr.message);
+          await traceResolver({ platform, path: 'dom', outcome: 'unavailable', detail: 'content script not loaded' });
           // Try injecting content script on demand
           try {
             await chrome.scripting.executeScript({
@@ -264,7 +324,14 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
               srcUrl: info.srcUrl || '',
               pageUrl: pageUrl,
             });
+            await traceResolver({
+              platform,
+              path: 'dom-injected',
+              outcome: response?.urls?.length ? 'ok' : 'empty',
+              itemCount: response?.urls?.length || 0,
+            });
           } catch (injectErr) {
+            await traceResolver({ platform, path: 'dom-injected', outcome: 'threw' });
             showNotification('SocialSnag: could not connect to page. Try refreshing.');
             return;
           }
@@ -334,10 +401,17 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     }
 
     let count = 0;
-    for (const item of response.urls) {
-      const downloadId = await downloadMedia(item, response.platform);
-      if (downloadId) {
-        await recordDownload(item, response.platform, downloadId);
+    for (const [position, item] of response.urls.entries()) {
+      const saved = await downloadMedia(item, response.platform, position + 1);
+      if (saved) {
+        // Record the name the file actually landed under, not the resolver's. With a
+        // template configured those differ, and history is how the user finds the
+        // download again -- listing a name no file has is worse than listing nothing.
+        await recordDownload(
+          { ...item, filename: saved.filename },
+          response.platform,
+          saved.downloadId,
+        );
         count++;
       }
     }
@@ -351,7 +425,15 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
         showNotification(msg);
       }
     } else {
-      console.warn('SocialSnag: all download attempts failed for', response.urls);
+      // Logs what failed without logging where it lives. The whole item carries a
+      // CDN url, and this is the one console line a user is most likely to be
+      // reading (and pasting into a bug report) when a download breaks -- which is
+      // exactly when the no-url promise has to hold. Type and filename are what
+      // actually help diagnose it.
+      console.warn(
+        `SocialSnag: all ${response.urls.length} download attempt(s) failed for ${response.platform}`,
+        response.urls.map((item) => ({ type: item.type, filename: item.filename })),
+      );
       if (platformSettings.showNotifications) {
         showNotification('SocialSnag: download failed. Check the browser console for details.');
       }
@@ -367,13 +449,24 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 
 // --- Background-only fallback resolver (no content script needed) ---
 
-async function resolveViaApi(platform, pageUrl) {
+// Platforms this resolver has an API path for at all. Used only to tell a debug
+// reader which kind of miss they are looking at.
+const API_RESOLVED_PLATFORMS = new Set(['twitter', 'instagram']);
+
+export async function resolveViaApi(platform, pageUrl) {
+  // Whether the url actually carried an id this resolver understands. Without
+  // this the miss below cannot tell "no id to look up" from "looked it up and
+  // got nothing", and would report an image-only post as a url-parsing failure.
+  let foundId = false;
+
   if (platform === 'twitter') {
     const match = pageUrl.match(/\/status\/(\d+)/);
     if (match) {
+      foundId = true;
       const tweetId = match[1];
       const videoUrl = await resolveTwitterVideo(tweetId);
       if (videoUrl) {
+        await traceResolver({ platform, path: 'api-dispatch', outcome: 'ok', itemCount: 1 });
         return { url: videoUrl, type: 'video', filename: `tweet_${tweetId}`, needsVideoLookup: false };
       }
     }
@@ -382,14 +475,26 @@ async function resolveViaApi(platform, pageUrl) {
   if (platform === 'instagram') {
     const match = pageUrl.match(/\/(p|reel|tv)\/([A-Za-z0-9_-]+)/);
     if (match) {
+      foundId = true;
       const shortcode = match[2];
       const videoUrl = await resolveInstagramVideo(shortcode);
       if (videoUrl) {
+        await traceResolver({ platform, path: 'api-dispatch', outcome: 'ok', itemCount: 1 });
         return { url: videoUrl, type: 'video', filename: `reel_${shortcode}`, needsVideoLookup: false };
       }
     }
   }
 
+  // Three different misses that look identical from the outside and call for
+  // three different responses: fix the url, accept that there is no video here,
+  // or stop expecting an api path at all. Saying the wrong one sends the reader
+  // hunting for a parsing bug that does not exist.
+  let detail;
+  if (!API_RESOLVED_PLATFORMS.has(platform)) detail = 'no api path for platform';
+  else if (foundId) detail = 'id found, no video from api';
+  else detail = 'no id in url';
+
+  await traceResolver({ platform, path: 'api-dispatch', outcome: 'empty', detail });
   return null;
 }
 
@@ -402,6 +507,7 @@ async function resolveTwitterVideo(tweetId) {
     );
     if (!resp.ok) {
       console.warn('SocialSnag: syndication API returned', resp.status);
+      await traceResolver({ platform: 'twitter', path: 'syndication', outcome: 'http-error', status: resp.status });
       return null;
     }
     const data = await resp.json();
@@ -409,7 +515,16 @@ async function resolveTwitterVideo(tweetId) {
     // Find video media in mediaDetails
     const media = data.mediaDetails || [];
     const videoMedia = media.find((m) => m.type === 'video' || m.type === 'animated_gif');
-    if (!videoMedia?.video_info?.variants) return null;
+    if (!videoMedia?.video_info?.variants) {
+      await traceResolver({
+        platform: 'twitter',
+        path: 'syndication',
+        outcome: 'empty',
+        status: resp.status,
+        detail: 'no video media',
+      });
+      return null;
+    }
 
     // Pick the highest bitrate MP4 variant
     const mp4s = videoMedia.video_info.variants
@@ -417,12 +532,28 @@ async function resolveTwitterVideo(tweetId) {
       .sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
 
     if (mp4s.length > 0) {
+      await traceResolver({
+        platform: 'twitter',
+        path: 'syndication',
+        outcome: 'ok',
+        status: resp.status,
+        itemCount: mp4s.length,
+      });
       return mp4s[0].url;
     }
     console.warn('SocialSnag: no MP4 variants in syndication response');
+    await traceResolver({
+      platform: 'twitter',
+      path: 'syndication',
+      outcome: 'empty',
+      status: resp.status,
+      itemCount: 0,
+      detail: 'no mp4 variants',
+    });
     return null;
   } catch (e) {
     console.error('SocialSnag: Twitter video API failed:', e);
+    await traceResolver({ platform: 'twitter', path: 'syndication', outcome: 'threw' });
     return null;
   }
 }
@@ -451,6 +582,7 @@ export async function resolveInstagramPost(shortcode) {
     if (!resp.ok) {
       lastIgError = mapIgStatusToMessage(resp.status);
       console.warn('SocialSnag: Instagram API returned', resp.status);
+      await traceResolver({ platform: 'instagram', path: 'post-api', outcome: 'http-error', status: resp.status });
       return null;
     }
 
@@ -458,13 +590,18 @@ export async function resolveInstagramPost(shortcode) {
     const items = parsePostMedia(data, shortcode);
     if (items.length === 0) {
       lastIgError = mapIgStatusToMessage(0);
+      // The case #25 was filed for: a 200 that parses to nothing looks identical to
+      // a network failure from the outside.
+      await traceResolver({ platform: 'instagram', path: 'post-api', outcome: 'empty', status: resp.status, itemCount: 0 });
       return null;
     }
 
     lastIgError = null;
+    await traceResolver({ platform: 'instagram', path: 'post-api', outcome: 'ok', status: resp.status, itemCount: items.length });
     return items;
   } catch (e) {
     console.error('SocialSnag: Instagram post API failed:', e);
+    await traceResolver({ platform: 'instagram', path: 'post-api', outcome: 'threw' });
     return null;
   }
 }
@@ -477,11 +614,18 @@ async function fetchInstagramUserId(username) {
       `https://www.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(username)}`,
       { headers: { 'x-ig-app-id': IG_APP_ID }, credentials: 'include' },
     );
-    if (!resp.ok) { lastIgError = mapIgStatusToMessage(resp.status); return null; }
+    if (!resp.ok) {
+      lastIgError = mapIgStatusToMessage(resp.status);
+      await traceResolver({ platform: 'instagram', path: 'user-lookup', outcome: 'http-error', status: resp.status });
+      return null;
+    }
     const data = await resp.json();
-    return data?.data?.user?.id || null;
+    const userId = data?.data?.user?.id || null;
+    if (!userId) await traceResolver({ platform: 'instagram', path: 'user-lookup', outcome: 'empty', status: resp.status });
+    return userId;
   } catch (e) {
     console.error('SocialSnag: IG user lookup failed:', e);
+    await traceResolver({ platform: 'instagram', path: 'user-lookup', outcome: 'threw' });
     return null;
   }
 }
@@ -497,14 +641,26 @@ export async function resolveInstagramStories({ username, storyId }) {
       `https://i.instagram.com/api/v1/feed/reels_media/?reel_ids=${userId}`,
       { headers: { 'x-ig-app-id': IG_APP_ID }, credentials: 'include' },
     );
-    if (!resp.ok) { lastIgError = mapIgStatusToMessage(resp.status); return null; }
+    if (!resp.ok) {
+      lastIgError = mapIgStatusToMessage(resp.status);
+      await traceResolver({ platform: 'instagram', path: 'story-api', outcome: 'http-error', status: resp.status });
+      return null;
+    }
     const data = await resp.json();
     const items = parseStoryTray(data, { storyId });
-    if (items.length === 0) { lastIgError = mapIgStatusToMessage(0); return null; }
+    if (items.length === 0) {
+      lastIgError = mapIgStatusToMessage(0);
+      // Expected when a story has aged out of the 24h window, and indistinguishable
+      // from a lookup bug without this line.
+      await traceResolver({ platform: 'instagram', path: 'story-api', outcome: 'empty', status: resp.status, itemCount: 0, detail: storyId ? 'single story' : 'full tray' });
+      return null;
+    }
     lastIgError = null;
+    await traceResolver({ platform: 'instagram', path: 'story-api', outcome: 'ok', status: resp.status, itemCount: items.length });
     return items;
   } catch (e) {
     console.error('SocialSnag: IG stories API failed:', e);
+    await traceResolver({ platform: 'instagram', path: 'story-api', outcome: 'threw' });
     return null;
   }
 }
@@ -526,7 +682,10 @@ export async function downloadItemsAsZip(items, platform) {
   // per-file so a slide is never silently dropped from the archive.
   if (items.some((it) => it.needsVideoLookup)) return false;
 
-  const { downloadPath } = await chrome.storage.sync.get({ downloadPath: 'SocialSnag/{platform}' });
+  const { downloadPath, filenameTemplate } = await chrome.storage.sync.get({
+    downloadPath: 'SocialSnag/{platform}',
+    filenameTemplate: '',
+  });
 
   const files = [];
   const seen = new Set();
@@ -537,7 +696,9 @@ export async function downloadItemsAsZip(items, platform) {
       continue;
     }
     const ext = guessExtension(item.url, item.type);
-    const base = sanitizeFilename(item.filename || `${platform}_${files.length + 1}`);
+    const base = sanitizeFilename(
+      resolveBaseFilename(item, platform, filenameTemplate, files.length + 1),
+    );
     // Sanitize the whole entry name: guessExtension can echo a ?format= value
     // containing / or .., and client-zip writes entry names verbatim.
     let name = sanitizeFilename(`${base}${ext}`);
@@ -614,7 +775,7 @@ async function trackBlobForDownload(downloadId, blobUrl) {
   // A short download can reach its terminal state before the write above lands,
   // and the listener would have found nothing to revoke. Catch that up here.
   const item = await findDownload(downloadId);
-  if (item && item.state !== 'in_progress' && !item.canResume) {
+  if (isTerminalDownload(item)) {
     await revokePendingBlob(downloadId);
   }
 }
@@ -637,26 +798,39 @@ async function findDownload(downloadId) {
     return item || null;
   } catch (e) {
     console.warn('SocialSnag: could not query download state:', e);
-    return null;
+    return undefined;
   }
 }
 
+function isTerminalDownload(item) {
+  return item === null
+    || item?.state === 'complete'
+    || (item?.state === 'interrupted' && !item.canResume);
+}
+
+async function revokeBlobIfTerminal(downloadId) {
+  const item = await findDownload(downloadId);
+  if (isTerminalDownload(item)) await revokePendingBlob(downloadId);
+}
+
 chrome.downloads.onChanged.addListener(async (delta) => {
-  if (!delta.state) return;
-  const state = delta.state.current;
+  const state = delta.state?.current;
   if (state === 'complete') {
     await revokePendingBlob(delta.id);
     return;
   }
-  if (state !== 'interrupted') return;
+  const stoppedBeingResumable = delta.canResume && delta.canResume.current !== true;
+  if (state !== 'interrupted' && !stoppedBeingResumable) return;
   // An interrupted download may still be resumable, and resuming reads the blob
   // again -- revoking here would make the resume fail with the source gone. Only
   // an interruption it cannot come back from is really terminal. If the download
-  // cannot be found at all, its record is gone and no resume is possible, so
-  // revoking is the right call.
-  const item = await findDownload(delta.id);
-  if (item?.canResume) return;
-  await revokePendingBlob(delta.id);
+  // cannot be found at all, its record is gone and no resume is possible. Query
+  // failures stay distinct from a missing record so transient errors keep the blob.
+  await revokeBlobIfTerminal(delta.id);
+});
+
+chrome.downloads.onErased.addListener(async (downloadId) => {
+  await revokePendingBlob(downloadId);
 });
 
 // Validate and download a single media item
@@ -672,7 +846,84 @@ export async function resolveItemUrl(item) {
   return null;
 }
 
-async function downloadMedia(item, platform) {
+// How long to wait for Chrome to report the name it chose. Assignment is normally
+// immediate, so this is the ceiling on a download that errors before ever being
+// named, not a typical wait -- nothing is named after that and no delta is coming.
+const FILENAME_ASSIGN_TIMEOUT_MS = 2000;
+
+// Resolves with the filename Chrome assigns to this download, or null if none
+// arrives before the timeout. Returns a cancel alongside it: the caller has to call
+// it on every exit, or the listener and its timer outlive the download.
+function awaitFilenameDelta(downloadId, timeoutMs) {
+  let cancel;
+  const promise = new Promise((resolve) => {
+    const finish = (value) => { cancel(); resolve(value); };
+    const listener = (delta) => {
+      if (delta.id === downloadId && delta.filename?.current) finish(delta.filename.current);
+    };
+    const timer = setTimeout(() => finish(null), timeoutMs);
+    cancel = () => {
+      clearTimeout(timer);
+      chrome.downloads.onChanged.removeListener(listener);
+    };
+    chrome.downloads.onChanged.addListener(listener);
+  });
+  return { promise, cancel };
+}
+
+// The basename Chrome actually wrote, which is not always the one it was handed:
+// conflictAction:'uniquify' is applied after download() takes the path, so a second
+// `facebook.jpg` lands as `facebook (1).jpg` and the requested path never learns it.
+// Asking the download item is the only way to see that counter.
+//
+// Chrome names the file asynchronously, so the lookup can land in the window before
+// it has one -- and that window is likeliest on exactly the downloads this function
+// exists for. A template without {index} renders the same path for every item in an
+// album, so a ten-photo post fires ten collisions at once, which is both the case
+// where the requested name is wrong and the case where the queue is deepest. Waiting
+// for the name is therefore the whole point rather than a refinement of it.
+//
+// Only a download that fails before being named leaves nothing to wait for. Then the
+// requested basename is the closest thing available: it differs from the real one
+// only where Chrome changed it, and Chrome never got that far.
+async function savedBasename(downloadId, requestedPath) {
+  // Only folder separators survive sanitizing in a path, so the last one ends the
+  // folder. A DownloadItem filename is an absolute local path from the OS, so it can
+  // carry either separator regardless of what we asked for.
+  const fallback = requestedPath.slice(requestedPath.lastIndexOf('/') + 1);
+  // Listen before looking. Chrome can assign the name in the gap between a search
+  // that comes back empty and a listener attaching, and onChanged does not replay
+  // what it already fired -- so searching first would drop exactly the delta we are
+  // waiting for and sit here until the timeout.
+  const waiter = awaitFilenameDelta(downloadId, FILENAME_ASSIGN_TIMEOUT_MS);
+  try {
+    const [saved] = await chrome.downloads.search({ id: downloadId });
+    // Wait only on positive evidence that a name is still coming. An item Chrome has
+    // already finished with, or one it does not know about, will never fire a filename
+    // delta, and the album loop downloads sequentially -- so blocking on a name that
+    // is not coming stalls every item behind it for the full timeout.
+    const stillNaming = saved?.state === 'in_progress';
+    const p = saved?.filename || (stillNaming ? await waiter.promise : null);
+    if (!p) return fallback;
+    return p.slice(Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\')) + 1);
+  } catch (e) {
+    console.debug('SocialSnag: could not read the saved filename; using the requested one', e);
+    return fallback;
+  } finally {
+    waiter.cancel();
+  }
+}
+
+// `index` is this item's position in the batch the user asked for, counting from 1.
+// downloadMedia runs in a loop over an album, so defaulting it to 1 would name every
+// file in a ten-photo post identically and leave conflictAction:'uniquify' to tell
+// them apart -- which is how a duplicate gets to look like a numbered set.
+//
+// Returns {downloadId, filename} on success and null on every failure, where
+// `filename` is the basename on disk. The caller needs it for history and has no way
+// to work it out: the template, the folder setting, and the sanitizer all live in
+// here, so a second derivation out there would be a second answer.
+async function downloadMedia(item, platform, index = 1) {
   // Resolve API-based video lookups to a concrete URL before downloading.
   if (item.needsVideoLookup) {
     const resolvedUrl = await resolveItemUrl(item);
@@ -689,9 +940,14 @@ async function downloadMedia(item, platform) {
     return null;
   }
 
-  const { downloadPath } = await chrome.storage.sync.get({ downloadPath: 'SocialSnag/{platform}' });
+  const { downloadPath, filenameTemplate } = await chrome.storage.sync.get({
+    downloadPath: 'SocialSnag/{platform}',
+    filenameTemplate: '',
+  });
   const ext = guessExtension(item.url, item.type);
-  const rawFilename = item.filename || `${Date.now()}`;
+  // resolveBaseFilename always returns something: it falls back to the resolver's
+  // name, then to platform and index.
+  const rawFilename = resolveBaseFilename(item, platform, filenameTemplate, index);
   const path = sanitizeDownloadPath(rawFilename, platform, ext, downloadPath);
 
   const downloadUrl = item.url;
@@ -702,7 +958,7 @@ async function downloadMedia(item, platform) {
       filename: path,
       conflictAction: 'uniquify',
     });
-    return downloadId;
+    return { downloadId, filename: await savedBasename(downloadId, path) };
   } catch (e) {
     console.error('SocialSnag: download failed:', e);
     return null;

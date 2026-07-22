@@ -66,10 +66,12 @@ globalThis.chrome = {
   downloads: {
     download: async () => 1,
     show: () => {},
-    // Default to "no such download": a test that cares about resumability
-    // overrides this to return an item.
-    search: async () => [],
     onChanged: createEventTarget(),
+    // Returns no filename by default, which is the real pre-assignment state rather
+    // than a convenient one. Tests that need lifecycle state or the final filename
+    // override this with a complete DownloadItem-shaped record.
+    search: async () => [{}],
+    onErased: createEventTarget(),
   },
   notifications: {
     create: () => {},

@@ -1,13 +1,16 @@
-import { describe, it, expect, afterEach, beforeEach } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import {
   detectPlatform,
   guessExtension,
   validateDownloadUrl,
   sanitizeDownloadPath,
+  resolveBaseFilename,
+  formatLocalDate,
   resolveInstagramPost,
   resolveInstagramStories,
   downloadItemsAsZip,
   resolveItemUrl,
+  resolveViaApi,
 } from '../src/background.js';
 
 describe('detectPlatform', () => {
@@ -534,6 +537,27 @@ describe('zip download flow', () => {
     }
   });
 
+  it('revokes when the download record disappears before tracking finishes', async () => {
+    const off = installOffscreenMock(true);
+    const origDownload = globalThis.chrome.downloads.download;
+    const origSearch = globalThis.chrome.downloads.search;
+    globalThis.chrome.downloads.download = async () => 43;
+    globalThis.chrome.downloads.search = async () => [];
+
+    try {
+      await downloadItemsAsZip(imgItems, 'bluesky');
+      expect(off.sent).toContainEqual({
+        target: 'offscreen',
+        action: 'revoke',
+        url: 'blob:zip1',
+      });
+    } finally {
+      globalThis.chrome.downloads.download = origDownload;
+      globalThis.chrome.downloads.search = origSearch;
+      off.restore();
+    }
+  });
+
   it('skips a url that fails validation before it enters the archive', async () => {
     const off = installOffscreenMock(true);
     const origDownload = globalThis.chrome.downloads.download;
@@ -745,18 +769,23 @@ describe('zip download flow', () => {
   it('revokes the blob when an interrupted download cannot resume', async () => {
     const off = installOffscreenMock(true);
     const origDownload = globalThis.chrome.downloads.download;
+    const origSearch = globalThis.chrome.downloads.search;
     globalThis.chrome.downloads.download = async () => 63;
+    globalThis.chrome.downloads.search = async () => [{
+      id: 63,
+      state: 'interrupted',
+      canResume: false,
+    }];
 
     try {
       const result = await downloadItemsAsZip(imgItems, 'bluesky');
       expect(result).toBe(2);
 
-      // The default mock reports no such download, i.e. the record is gone and
-      // no resume is possible, so this interruption is terminal.
       await globalThis.chrome.downloads.onChanged._listeners[0]({ id: 63, state: { current: 'interrupted' } });
       expect(off.sent).toContainEqual({ target: 'offscreen', action: 'revoke', url: 'blob:zip1' });
     } finally {
       globalThis.chrome.downloads.download = origDownload;
+      globalThis.chrome.downloads.search = origSearch;
       off.restore();
     }
   });
@@ -809,6 +838,10 @@ describe('zip blob revocation lifecycle', () => {
     for (const fn of globalThis.chrome.downloads.onChanged._listeners) await fn(delta);
   };
 
+  const fireErased = async (downloadId) => {
+    for (const fn of globalThis.chrome.downloads.onErased._listeners) await fn(downloadId);
+  };
+
   beforeEach(async () => {
     revoked = [];
     origSendMessage = globalThis.chrome.runtime.sendMessage;
@@ -842,7 +875,11 @@ describe('zip blob revocation lifecycle', () => {
   });
 
   it('revokes when an interrupted download cannot resume', async () => {
-    globalThis.chrome.downloads.search = async () => [{ id: 7, canResume: false }];
+    globalThis.chrome.downloads.search = async () => [{
+      id: 7,
+      state: 'interrupted',
+      canResume: false,
+    }];
     await fire({ id: 7, state: { current: 'interrupted' } });
     expect(revoked).toEqual(['blob:zip-7']);
   });
@@ -850,6 +887,31 @@ describe('zip blob revocation lifecycle', () => {
   it('revokes an interrupted download whose record is gone', async () => {
     globalThis.chrome.downloads.search = async () => [];
     await fire({ id: 7, state: { current: 'interrupted' } });
+    expect(revoked).toEqual(['blob:zip-7']);
+  });
+
+  it('keeps an interrupted blob when its download-state query fails', async () => {
+    globalThis.chrome.downloads.search = async () => {
+      throw new Error('downloads database unavailable');
+    };
+    await fire({ id: 7, state: { current: 'interrupted' } });
+    expect(revoked).toEqual([]);
+    const stored = await globalThis.chrome.storage.session.get(KEY);
+    expect(stored[KEY]['7']).toBe('blob:zip-7');
+  });
+
+  it('revokes when an interrupted download becomes non-resumable without a state delta', async () => {
+    globalThis.chrome.downloads.search = async () => [{
+      id: 7,
+      state: 'interrupted',
+      canResume: false,
+    }];
+    await fire({ id: 7, canResume: { previous: true, current: false } });
+    expect(revoked).toEqual(['blob:zip-7']);
+  });
+
+  it('revokes when Chrome erases the download record', async () => {
+    await fireErased(7);
     expect(revoked).toEqual(['blob:zip-7']);
   });
 
@@ -862,5 +924,344 @@ describe('zip blob revocation lifecycle', () => {
   it('ignores downloads it is not tracking', async () => {
     await fire({ id: 999, state: { current: 'complete' } });
     expect(revoked).toEqual([]);
+  });
+});
+
+describe('resolveBaseFilename', () => {
+  const item = {
+    type: 'image',
+    filename: 'photo_999_2',
+    meta: { postId: '999', username: 'someone', index: 2 },
+  };
+
+  // The opt-in is the whole compatibility story: an update must not rename the
+  // files of every user who never asked for a template.
+  it('keeps the resolver name when no template is configured', () => {
+    expect(resolveBaseFilename(item, 'facebook', '', 2)).toBe('photo_999_2');
+    expect(resolveBaseFilename(item, 'facebook', undefined, 2)).toBe('photo_999_2');
+  });
+
+  it('falls back to platform and index when the resolver named nothing', () => {
+    expect(resolveBaseFilename({ type: 'image' }, 'facebook', '', 3)).toBe('facebook_3');
+  });
+
+  it('renders a configured template from item.meta', () => {
+    expect(resolveBaseFilename(item, 'facebook', '{platform}_{username}_{postId}_{index}', 2))
+      .toBe('facebook_someone_999_2');
+  });
+
+  it('uses the caller index, not the one on meta', () => {
+    // The zip path numbers by position in the archive, which is the number the user
+    // sees; meta.index is whatever the resolver happened to assign.
+    expect(resolveBaseFilename(item, 'facebook', 'photo_{index}', 7)).toBe('photo_7');
+  });
+
+  it('degrades to a shorter name when the resolver supplies no meta', () => {
+    // A template written for a platform that exposes a username must not produce
+    // gaps or the literal word undefined on one that does not.
+    const bare = { type: 'image', filename: 'photo_1' };
+    expect(resolveBaseFilename(bare, 'twitter', '{platform}_{username}_{postId}_{index}', 1))
+      .toBe('twitter_1');
+  });
+
+  it('falls back rather than returning an empty name', () => {
+    // Validation refuses a template that always renders empty, but a single item
+    // missing every token it names is normal, and a file called only ".jpg" is not
+    // an acceptable result.
+    const bare = { type: 'image', filename: 'photo_1' };
+    expect(resolveBaseFilename(bare, 'twitter', '{postId}{username}', 1)).toBe('photo_1');
+  });
+
+  it('includes the type and a date when asked', () => {
+    const out = resolveBaseFilename(item, 'facebook', '{date}_{type}_{postId}', 1);
+    expect(out).toMatch(/^\d{4}-\d{2}-\d{2}_image_999$/);
+  });
+});
+
+describe('formatLocalDate', () => {
+  it('formats yyyy-mm-dd with zero padding', () => {
+    expect(formatLocalDate(new Date(2026, 0, 5))).toBe('2026-01-05');
+    expect(formatLocalDate(new Date(2026, 11, 31))).toBe('2026-12-31');
+  });
+
+  // The reason this is not toISOString(): that reports UTC, so an evening download
+  // west of UTC lands on tomorrow's date. Late local evening is the case where the
+  // two disagree, so it is the case worth pinning.
+  it('uses the local day, not the UTC one', () => {
+    const lateEvening = new Date(2026, 6, 20, 23, 30);
+    expect(formatLocalDate(lateEvening)).toBe('2026-07-20');
+    // Asserted as a relationship rather than a fixed string, so this holds in CI
+    // whatever timezone the runner is set to.
+    if (lateEvening.toISOString().slice(0, 10) !== '2026-07-20') {
+      expect(formatLocalDate(lateEvening)).not.toBe(lateEvening.toISOString().slice(0, 10));
+    }
+  });
+});
+
+// The whole download path, from a context-menu click to what history records. This
+// seam had no harness, which is how the file on disk came to carry the templated name
+// while Recent downloads still listed the one the resolver had picked.
+describe('context-menu download history', () => {
+  // The menu ids are private to background.js; this is the "Download this (HD)" one.
+  const MENU_DOWNLOAD_SINGLE = 'socialsnag-download-single';
+  const PAGE = 'https://www.facebook.com/photo/?fbid=999';
+
+  let origSendMessage;
+  let origDownload;
+  let origSearch;
+
+  function clickDownload() {
+    const [onClicked] = globalThis.chrome.contextMenus.onClicked._listeners;
+    return onClicked({ menuItemId: MENU_DOWNLOAD_SINGLE, pageUrl: PAGE }, { id: 1, url: PAGE });
+  }
+
+  beforeEach(() => {
+    globalThis.chrome.storage.sync._reset();
+    globalThis.chrome.storage.local._reset();
+    origSendMessage = globalThis.chrome.tabs.sendMessage;
+    origDownload = globalThis.chrome.downloads.download;
+    origSearch = globalThis.chrome.downloads.search;
+    // The mock's listener array is shared across the file, so the attach/detach
+    // assertions below only mean something from a known-empty start.
+    globalThis.chrome.downloads.onChanged._listeners.length = 0;
+    globalThis.chrome.tabs.sendMessage = async () => ({
+      platform: 'facebook',
+      urls: [{
+        url: 'https://scontent.fbcdn.net/v/photo.jpg',
+        type: 'image',
+        filename: 'facebook_resolver_name',
+        meta: { postId: '999' },
+      }],
+    });
+    globalThis.chrome.downloads.download = async () => 7;
+  });
+
+  afterEach(() => {
+    globalThis.chrome.tabs.sendMessage = origSendMessage;
+    globalThis.chrome.downloads.download = origDownload;
+    globalThis.chrome.downloads.search = origSearch;
+    globalThis.chrome.storage.sync._reset();
+    globalThis.chrome.storage.local._reset();
+  });
+
+  it('records the templated name, which is the name the file has', async () => {
+    await globalThis.chrome.storage.sync.set({ filenameTemplate: '{platform}_{postId}' });
+    await clickDownload();
+
+    const { downloadHistory } = globalThis.chrome.storage.local._data();
+    expect(downloadHistory).toHaveLength(1);
+    expect(downloadHistory[0].filename).toBe('facebook_999.jpg');
+    expect(downloadHistory[0].downloadId).toBe(7);
+  });
+
+  it('records the resolver name when no template is configured', async () => {
+    await clickDownload();
+
+    const { downloadHistory } = globalThis.chrome.storage.local._data();
+    expect(downloadHistory[0].filename).toBe('facebook_resolver_name.jpg');
+  });
+
+  // The name we ask for and the name on disk part company exactly when a template is
+  // non-unique: conflictAction:'uniquify' renames the second `facebook_999.jpg` and
+  // never tells the requested path. History listing a file that does not exist is the
+  // failure this whole return value exists to prevent, so it has to survive the rename.
+  it('records the uniquified name when the requested one was already taken', async () => {
+    globalThis.chrome.downloads.search = async () => [
+      { filename: '/home/joe/Downloads/SocialSnag/facebook/facebook_999 (1).jpg' },
+    ];
+    await globalThis.chrome.storage.sync.set({ filenameTemplate: '{platform}_{postId}' });
+    await clickDownload();
+
+    const { downloadHistory } = globalThis.chrome.storage.local._data();
+    expect(downloadHistory[0].filename).toBe('facebook_999 (1).jpg');
+  });
+
+  it('reads a Windows path back to its basename', async () => {
+    globalThis.chrome.downloads.search = async () => [
+      { filename: 'C:\\Users\\joe\\Downloads\\SocialSnag\\facebook\\facebook_999 (2).jpg' },
+    ];
+    await globalThis.chrome.storage.sync.set({ filenameTemplate: '{platform}_{postId}' });
+    await clickDownload();
+
+    const { downloadHistory } = globalThis.chrome.storage.local._data();
+    expect(downloadHistory[0].filename).toBe('facebook_999 (2).jpg');
+  });
+
+  // Chrome names the file asynchronously, so the lookup can land before there is a
+  // name -- and that is likeliest on exactly the collisions above, where a template
+  // without {index} sends a whole album at one path. The name arrives on onChanged, so
+  // waiting for it is what makes the uniquified name recordable at all.
+  it('waits for the name Chrome assigns when the immediate lookup has none', async () => {
+    globalThis.chrome.downloads.search = async () => {
+      // Fire the way Chrome does: after the lookup, onto the listener already attached.
+      queueMicrotask(() => {
+        for (const l of [...globalThis.chrome.downloads.onChanged._listeners]) {
+          l({
+            id: 7,
+            filename: { current: '/home/joe/Downloads/SocialSnag/facebook/facebook_999 (1).jpg' },
+          });
+        }
+      });
+      return [{ state: 'in_progress' }];
+    };
+    await globalThis.chrome.storage.sync.set({ filenameTemplate: '{platform}_{postId}' });
+    await clickDownload();
+
+    const { downloadHistory } = globalThis.chrome.storage.local._data();
+    expect(downloadHistory[0].filename).toBe('facebook_999 (1).jpg');
+  });
+
+  // Attaching after the search would drop a delta that fired in between, and onChanged
+  // does not replay -- the wait above would then sit until it timed out and record the
+  // wrong name. This ordering is the thing that makes it work.
+  it('attaches the filename listener before it looks the download up', async () => {
+    let listenersAtSearch = -1;
+    globalThis.chrome.downloads.search = async () => {
+      listenersAtSearch = globalThis.chrome.downloads.onChanged._listeners.length;
+      return [{ filename: '/home/joe/Downloads/SocialSnag/facebook/facebook_999.jpg' }];
+    };
+    await clickDownload();
+
+    expect(listenersAtSearch).toBe(1);
+  });
+
+  // The listener and its timer must not outlive the download. One leaks per item
+  // otherwise, which on an album is the whole batch.
+  it('detaches the filename listener once it has an answer', async () => {
+    globalThis.chrome.downloads.search = async () => [
+      { filename: '/home/joe/Downloads/SocialSnag/facebook/facebook_999 (1).jpg' },
+    ];
+    await clickDownload();
+
+    expect(globalThis.chrome.downloads.onChanged._listeners).toHaveLength(0);
+  });
+
+  // A download that fails before Chrome ever names it has no delta coming, so the wait
+  // has to end by itself rather than hanging the history write. The requested name is
+  // the closest thing left: it differs only where Chrome changed it, and Chrome never
+  // got that far.
+  it('falls back to the requested name when no name ever arrives', async () => {
+    vi.useFakeTimers();
+    try {
+      globalThis.chrome.downloads.search = async () => [{ state: 'in_progress' }];
+      const done = clickDownload();
+      await vi.advanceTimersByTimeAsync(5000);
+      await done;
+    } finally {
+      vi.useRealTimers();
+    }
+
+    const { downloadHistory } = globalThis.chrome.storage.local._data();
+    expect(downloadHistory[0].filename).toBe('facebook_resolver_name.jpg');
+  });
+
+  // A download Chrome has already given up on will never fire a filename delta, so
+  // waiting on one buys nothing and costs the whole timeout -- and the album loop is
+  // sequential, so every item behind it waits too. Real timers here on purpose: if the
+  // wait ever came back, this test would take seconds instead of failing on the clock.
+  it('does not wait for a name on a download that already failed', async () => {
+    globalThis.chrome.downloads.search = async () => [{ state: 'interrupted' }];
+    const startedAt = Date.now();
+    await clickDownload();
+    const elapsed = Date.now() - startedAt;
+
+    const { downloadHistory } = globalThis.chrome.storage.local._data();
+    expect(downloadHistory[0].filename).toBe('facebook_resolver_name.jpg');
+    expect(elapsed).toBeLessThan(500);
+  });
+
+  it('falls back to the requested name when the lookup itself fails', async () => {
+    globalThis.chrome.downloads.search = async () => { throw new Error('no such id'); };
+    await clickDownload();
+
+    const { downloadHistory } = globalThis.chrome.storage.local._data();
+    expect(downloadHistory[0].filename).toBe('facebook_resolver_name.jpg');
+  });
+
+  it('records nothing when the download itself fails', async () => {
+    globalThis.chrome.downloads.download = async () => { throw new Error('disk full'); };
+    await clickDownload();
+
+    expect(globalThis.chrome.storage.local._data().downloadHistory).toBeUndefined();
+  });
+
+  it('does not print media urls when every download fails', async () => {
+    // This is the console line a user is most likely to be reading, and pasting
+    // into a bug report, at the moment a download breaks -- so it is where the
+    // no-url promise in options actually gets tested.
+    const warnings = [];
+    vi.spyOn(console, 'warn').mockImplementation((...args) => warnings.push(args));
+    globalThis.chrome.downloads.download = async () => { throw new Error('disk full'); };
+
+    await clickDownload();
+
+    const printed = JSON.stringify(warnings);
+    expect(printed).not.toMatch(/https?:\/\//);
+    expect(printed).not.toMatch(/fbcdn|cdninstagram|twimg|bsky/);
+    expect(printed).toContain('facebook_resolver_name');
+  });
+});
+
+describe('resolveViaApi miss classification', () => {
+  // The debug trace exists so a failed download names its own cause. Getting the
+  // cause wrong is worse than staying quiet, because it sends the reader after a
+  // parsing bug that is not there -- so each of the three misses is pinned here.
+  // Without these, deleting one `foundId = true` line leaves the suite green.
+  let logged;
+
+  beforeEach(async () => {
+    logged = [];
+    vi.spyOn(console, 'log').mockImplementation((line) => logged.push(line));
+    globalThis.chrome.storage.sync._reset();
+    await globalThis.chrome.storage.sync.set({ resolverDebug: true });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    globalThis.resetFetch();
+    globalThis.chrome.storage.sync._reset();
+  });
+
+  const dispatchLine = () => logged.find((l) => l.includes('api-dispatch'));
+
+  it('says there is no api path at all for a platform that has none', async () => {
+    await expect(resolveViaApi('bluesky', 'https://bsky.app/profile/a/post/b')).resolves.toBeNull();
+    expect(dispatchLine()).toBe('socialsnag[bluesky] api-dispatch: empty (no api path for platform)');
+  });
+
+  it('blames the url only when the url really carries no id', async () => {
+    await expect(resolveViaApi('twitter', 'https://x.com/someone')).resolves.toBeNull();
+    expect(dispatchLine()).toBe('socialsnag[twitter] api-dispatch: empty (no id in url)');
+  });
+
+  it('does not blame the url when the id was found but the api had no video', async () => {
+    // An image-only tweet: the id parsed fine, the syndication response simply
+    // carries no video media. Reporting this as a url problem was the bug.
+    globalThis.installFetch(() => ({ status: 200, json: { mediaDetails: [] } }));
+
+    await expect(resolveViaApi('twitter', 'https://x.com/a/status/123')).resolves.toBeNull();
+    expect(dispatchLine()).toBe('socialsnag[twitter] api-dispatch: empty (id found, no video from api)');
+  });
+
+  it('reports the hit without a miss line when the api does return a video', async () => {
+    globalThis.installFetch(() => ({
+      status: 200,
+      json: {
+        mediaDetails: [{
+          type: 'video',
+          video_info: { variants: [{ content_type: 'video/mp4', url: 'https://video.twimg.com/x.mp4', bitrate: 832000 }] },
+        }],
+      },
+    }));
+
+    const result = await resolveViaApi('twitter', 'https://x.com/a/status/123');
+    expect(result?.url).toBe('https://video.twimg.com/x.mp4');
+    expect(dispatchLine()).toBe('socialsnag[twitter] api-dispatch: ok (1 item)');
+  });
+
+  it('stays silent when the user has not enabled debug', async () => {
+    globalThis.chrome.storage.sync._reset();
+    await resolveViaApi('bluesky', 'https://bsky.app/profile/a/post/b');
+    expect(logged).toEqual([]);
   });
 });
