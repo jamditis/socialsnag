@@ -474,9 +474,9 @@ describe('context menu click — Instagram feed carousel (no URL shortcode)', ()
 });
 
 describe('zip download flow', () => {
-  // revokeBlobWhenComplete registers a downloads.onChanged listener per zip.
-  // Clear them so _listeners[0] is deterministic and listeners don't leak.
-  beforeEach(() => { globalThis.chrome.downloads.onChanged._listeners.length = 0; });
+  // The revoke listener is now a module-level singleton registered at import,
+  // not one per zip, so _listeners[0] is already deterministic. Clearing it here
+  // would delete it for the rest of the file.
   afterEach(() => resetFetch());
 
   // Pretend the offscreen doc exists and capture every message sent to it. The
@@ -526,8 +526,7 @@ describe('zip download flow', () => {
 
       // The blob is revoked only once the download reaches a terminal state.
       expect(off.sent.some((m) => m.action === 'revoke')).toBe(false);
-      globalThis.chrome.downloads.onChanged._listeners[0]({ id: 42, state: { current: 'complete' } });
-      await Promise.resolve();
+      await globalThis.chrome.downloads.onChanged._listeners[0]({ id: 42, state: { current: 'complete' } });
       expect(off.sent).toContainEqual({ target: 'offscreen', action: 'revoke', url: 'blob:zip1' });
     } finally {
       globalThis.chrome.downloads.download = origDownload;
@@ -743,7 +742,7 @@ describe('zip download flow', () => {
     }
   });
 
-  it('revokes the blob on an interrupted download too', async () => {
+  it('revokes the blob when an interrupted download cannot resume', async () => {
     const off = installOffscreenMock(true);
     const origDownload = globalThis.chrome.downloads.download;
     globalThis.chrome.downloads.download = async () => 63;
@@ -752,8 +751,9 @@ describe('zip download flow', () => {
       const result = await downloadItemsAsZip(imgItems, 'bluesky');
       expect(result).toBe(2);
 
-      globalThis.chrome.downloads.onChanged._listeners[0]({ id: 63, state: { current: 'interrupted' } });
-      await Promise.resolve();
+      // The default mock reports no such download, i.e. the record is gone and
+      // no resume is possible, so this interruption is terminal.
+      await globalThis.chrome.downloads.onChanged._listeners[0]({ id: 63, state: { current: 'interrupted' } });
       expect(off.sent).toContainEqual({ target: 'offscreen', action: 'revoke', url: 'blob:zip1' });
     } finally {
       globalThis.chrome.downloads.download = origDownload;
@@ -796,5 +796,71 @@ describe('context menu registration', () => {
       expect(c.contexts).toEqual(['page', 'image', 'video', 'link']);
       expect(c.documentUrlPatterns).toBeTruthy();
     });
+  });
+});
+
+describe('zip blob revocation lifecycle', () => {
+  const KEY = 'pendingBlobRevokes';
+  let origSendMessage;
+  let origSearch;
+  let revoked;
+
+  const fire = async (delta) => {
+    for (const fn of globalThis.chrome.downloads.onChanged._listeners) await fn(delta);
+  };
+
+  beforeEach(async () => {
+    revoked = [];
+    origSendMessage = globalThis.chrome.runtime.sendMessage;
+    globalThis.chrome.runtime.sendMessage = async (msg) => {
+      if (msg?.action === 'revoke') revoked.push(msg.url);
+      return { ok: true };
+    };
+    origSearch = globalThis.chrome.downloads.search;
+    await globalThis.chrome.storage.session.set({ [KEY]: { 7: 'blob:zip-7' } });
+  });
+
+  afterEach(async () => {
+    globalThis.chrome.runtime.sendMessage = origSendMessage;
+    globalThis.chrome.downloads.search = origSearch;
+    await globalThis.chrome.storage.session.set({ [KEY]: {} });
+  });
+
+  it('revokes a tracked blob with no per-download listener registered', async () => {
+    // Only session storage knows about id 7 -- this is the state a restarted
+    // service worker wakes up in, where the old per-download listener is gone.
+    await fire({ id: 7, state: { current: 'complete' } });
+    expect(revoked).toEqual(['blob:zip-7']);
+  });
+
+  it('keeps the blob when an interrupted download can still resume', async () => {
+    globalThis.chrome.downloads.search = async () => [{ id: 7, canResume: true }];
+    await fire({ id: 7, state: { current: 'interrupted' } });
+    expect(revoked).toEqual([]);
+    const stored = await globalThis.chrome.storage.session.get(KEY);
+    expect(stored[KEY]['7']).toBe('blob:zip-7');
+  });
+
+  it('revokes when an interrupted download cannot resume', async () => {
+    globalThis.chrome.downloads.search = async () => [{ id: 7, canResume: false }];
+    await fire({ id: 7, state: { current: 'interrupted' } });
+    expect(revoked).toEqual(['blob:zip-7']);
+  });
+
+  it('revokes an interrupted download whose record is gone', async () => {
+    globalThis.chrome.downloads.search = async () => [];
+    await fire({ id: 7, state: { current: 'interrupted' } });
+    expect(revoked).toEqual(['blob:zip-7']);
+  });
+
+  it('drops the entry so a repeated event cannot double-revoke', async () => {
+    await fire({ id: 7, state: { current: 'complete' } });
+    await fire({ id: 7, state: { current: 'complete' } });
+    expect(revoked).toEqual(['blob:zip-7']);
+  });
+
+  it('ignores downloads it is not tracking', async () => {
+    await fire({ id: 999, state: { current: 'complete' } });
+    expect(revoked).toEqual([]);
   });
 });

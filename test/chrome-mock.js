@@ -66,6 +66,9 @@ globalThis.chrome = {
   downloads: {
     download: async () => 1,
     show: () => {},
+    // Default to "no such download": a test that cares about resumability
+    // overrides this to return an item.
+    search: async () => [],
     onChanged: createEventTarget(),
   },
   notifications: {
