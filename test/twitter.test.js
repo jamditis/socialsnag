@@ -10,6 +10,8 @@ import {
   imageInScope,
   resolveAll,
   resolveSingle,
+  resolvePage,
+  resolveContentMessage,
 } from '../src/platforms/twitter.js';
 
 // Minimal DOM stub in the same plain-object style as common.test.js. A node
@@ -492,6 +494,28 @@ describe('resolveAll', () => {
     // value back at all proves the loop is cut.
     const { mainText } = textOnlyQuotingTree();
     expect(resolveAll(mainText)).toEqual([]);
+  });
+});
+
+describe('resolvePage', () => {
+  it('resolves the direct post without a right-click target', async () => {
+    const t = quotedTweetTree();
+    const root = { querySelector: () => t.article };
+
+    const items = await resolvePage(root);
+
+    expect(items).toHaveLength(1);
+    expect(items[0].url).toContain('MAIN.jpg');
+  });
+
+  it('handles a resolvePage message without a stored right-click target', async () => {
+    const t = quotedTweetTree();
+    const root = { querySelector: () => t.article };
+
+    const items = await resolveContentMessage({ action: 'resolvePage' }, null, root);
+
+    expect(items).toHaveLength(1);
+    expect(items[0].url).toContain('MAIN.jpg');
   });
 });
 

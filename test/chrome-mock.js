@@ -36,6 +36,8 @@ function createEventTarget() {
   };
 }
 
+let nextTabId = 100;
+
 globalThis.chrome = {
   storage: {
     sync: createStorageArea(),
@@ -51,6 +53,7 @@ globalThis.chrome = {
     onInstalled: createEventTarget(),
     onStartup: createEventTarget(),
     onMessage: createEventTarget(),
+    onMessageExternal: createEventTarget(),
     openOptionsPage: () => {},
     getContexts: async () => [],
   },
@@ -60,7 +63,11 @@ globalThis.chrome = {
     onClicked: createEventTarget(),
   },
   tabs: {
+    create: async (options) => ({ id: nextTabId++, status: 'complete', ...options }),
+    get: async (tabId) => ({ id: tabId, status: 'complete' }),
+    remove: async () => {},
     sendMessage: async () => ({}),
+    onUpdated: createEventTarget(),
     onRemoved: createEventTarget(),
   },
   downloads: {

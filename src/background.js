@@ -1,7 +1,15 @@
 'use strict';
 
 import { ALLOWED_DOMAINS, sanitizeFilename, renderTemplate } from './platforms/common.js';
-import { IG_APP_ID, shortcodeToMediaId, parsePostMedia, extractStoryRef, parseStoryTray, mapIgStatusToMessage } from './platforms/instagram-api.js';
+import {
+  IG_APP_ID,
+  shortcodeToMediaId,
+  parsePostMedia,
+  extractStoryRef,
+  parseStoryTray,
+  mapIgStatusToMessage,
+  mapIgStatusToCode,
+} from './platforms/instagram-api.js';
 import { createTracer } from './resolver-debug.js';
 
 // Opt-in resolver tracing (#25). Off unless the user enables it in options; it
@@ -85,6 +93,90 @@ export function validateDownloadUrl(url) {
   }
 
   return { valid: true };
+}
+
+const MAX_SUBMITTED_URL_LENGTH = 2048;
+
+function submittedHostMatches(hostname, domain) {
+  return hostname === domain || hostname.endsWith(`.${domain}`);
+}
+
+const FACEBOOK_RESERVED_ACCOUNTS = new Set([
+  'events',
+  'groups',
+  'help',
+  'login',
+  'marketplace',
+  'messages',
+  'reel',
+  'settings',
+  'share',
+  'watch',
+]);
+
+function isFacebookSubmittedPost(url) {
+  const path = url.pathname;
+  if (/^\/groups\/[^/]+\/(?:posts|permalink)\/[A-Za-z0-9._-]+\/?$/.test(path)) return true;
+  const account = path.match(/^\/([^/]+)\//)?.[1]?.toLowerCase();
+  const hasAccount = account && !FACEBOOK_RESERVED_ACCOUNTS.has(account);
+  if (hasAccount && /^\/[^/]+\/posts\/[A-Za-z0-9._-]+\/?$/.test(path)) return true;
+  if (hasAccount && /^\/[^/]+\/photos\/(?:[^/]+\/)*\d+\/?$/.test(path)) return true;
+  if (hasAccount && /^\/[^/]+\/videos\/\d+\/?$/.test(path)) return true;
+  if (/^\/reel\/\d+\/?$/.test(path)) return true;
+  if (/^\/share\/[prv]\/[A-Za-z0-9_-]+\/?$/.test(path)) return true;
+  if (/^\/photo\.php$/.test(path)) return /^\d+$/.test(url.searchParams.get('fbid') || '');
+  if (/^\/(?:permalink|story)\.php$/.test(path)) {
+    return /^[A-Za-z0-9._-]+$/.test(url.searchParams.get('story_fbid') || '')
+      && /^\d+$/.test(url.searchParams.get('id') || '');
+  }
+  return /^\/watch\/?$/.test(path) && /^\d+$/.test(url.searchParams.get('v') || '');
+}
+
+// Parse a URL submitted by the public landing page without touching the network.
+// A successful parse is exact enough to authorize opening the URL in a tab; a
+// failure is deliberately small and stable enough to return across the external
+// message boundary without echoing the submitted value.
+export function parseSubmittedPageUrl(rawUrl) {
+  if (typeof rawUrl !== 'string' || rawUrl.length === 0
+      || rawUrl.length > MAX_SUBMITTED_URL_LENGTH) {
+    return { error: 'invalid_url' };
+  }
+
+  let url;
+  try {
+    url = new URL(rawUrl.trim());
+  } catch {
+    return { error: 'invalid_url' };
+  }
+
+  if (url.protocol !== 'https:' || url.username || url.password || url.port) {
+    return { error: 'invalid_url' };
+  }
+
+  const host = url.hostname.toLowerCase();
+  let platform = null;
+  let validPath = false;
+
+  if (submittedHostMatches(host, 'instagram.com')) {
+    platform = 'instagram';
+    validPath = /^\/(?:p|reel|tv)\/[A-Za-z0-9_-]+\/?$/.test(url.pathname)
+      || /^\/stories\/(?!highlights(?:\/|$))[A-Za-z0-9._]+\/\d+\/?$/i.test(url.pathname);
+  } else if (submittedHostMatches(host, 'twitter.com') || submittedHostMatches(host, 'x.com')) {
+    platform = 'twitter';
+    validPath = /^\/[A-Za-z0-9_]+\/status\/\d+\/?$/.test(url.pathname);
+  } else if (submittedHostMatches(host, 'facebook.com')) {
+    platform = 'facebook';
+    validPath = isFacebookSubmittedPost(url);
+  } else if (submittedHostMatches(host, 'bsky.app')) {
+    platform = 'bluesky';
+    validPath = /^\/profile\/[A-Za-z0-9._:-]+\/post\/[A-Za-z0-9]+\/?$/.test(url.pathname);
+  } else {
+    return { error: 'unsupported_url' };
+  }
+
+  if (!validPath) return { error: 'invalid_url' };
+  url.hash = '';
+  return { url: url.toString(), platform };
 }
 
 // yyyy-mm-dd in the user's own timezone.
@@ -603,7 +695,10 @@ export async function resolveInstagramPost(shortcode) {
     if (!resp.ok) {
       console.warn('SocialSnag: Instagram API returned', resp.status);
       await traceResolver({ platform: 'instagram', path: 'post-api', outcome: 'http-error', status: resp.status });
-      return { error: mapIgStatusToMessage(resp.status) };
+      return {
+        error: mapIgStatusToMessage(resp.status),
+        code: mapIgStatusToCode(resp.status),
+      };
     }
 
     const data = await resp.json();
@@ -612,7 +707,7 @@ export async function resolveInstagramPost(shortcode) {
       // The case #25 was filed for: a 200 that parses to nothing looks identical to
       // a network failure from the outside.
       await traceResolver({ platform: 'instagram', path: 'post-api', outcome: 'empty', status: resp.status, itemCount: 0 });
-      return { error: mapIgStatusToMessage(0) };
+      return { error: mapIgStatusToMessage(0), code: mapIgStatusToCode(0) };
     }
 
     await traceResolver({ platform: 'instagram', path: 'post-api', outcome: 'ok', status: resp.status, itemCount: items.length });
@@ -635,7 +730,10 @@ async function fetchInstagramUserId(username) {
     );
     if (!resp.ok) {
       await traceResolver({ platform: 'instagram', path: 'user-lookup', outcome: 'http-error', status: resp.status });
-      return { error: mapIgStatusToMessage(resp.status) };
+      return {
+        error: mapIgStatusToMessage(resp.status),
+        code: mapIgStatusToCode(resp.status),
+      };
     }
     const data = await resp.json();
     const userId = data?.data?.user?.id || null;
@@ -655,7 +753,7 @@ async function fetchInstagramUserId(username) {
 // the whole active tray.
 export async function resolveInstagramStories({ username, storyId }) {
   const lookup = await fetchInstagramUserId(username);
-  if (!lookup.userId) return { error: lookup.error };
+  if (!lookup.userId) return { error: lookup.error, code: lookup.code };
   const userId = lookup.userId;
   try {
     const resp = await fetch(
@@ -664,7 +762,10 @@ export async function resolveInstagramStories({ username, storyId }) {
     );
     if (!resp.ok) {
       await traceResolver({ platform: 'instagram', path: 'story-api', outcome: 'http-error', status: resp.status });
-      return { error: mapIgStatusToMessage(resp.status) };
+      return {
+        error: mapIgStatusToMessage(resp.status),
+        code: mapIgStatusToCode(resp.status),
+      };
     }
     const data = await resp.json();
     const items = parseStoryTray(data, { storyId });
@@ -672,7 +773,7 @@ export async function resolveInstagramStories({ username, storyId }) {
       // Expected when a story has aged out of the 24h window, and indistinguishable
       // from a lookup bug without this line.
       await traceResolver({ platform: 'instagram', path: 'story-api', outcome: 'empty', status: resp.status, itemCount: 0, detail: storyId ? 'single story' : 'full tray' });
-      return { error: mapIgStatusToMessage(0) };
+      return { error: mapIgStatusToMessage(0), code: mapIgStatusToCode(0) };
     }
     await traceResolver({ platform: 'instagram', path: 'story-api', outcome: 'ok', status: resp.status, itemCount: items.length });
     return { items };
@@ -688,7 +789,7 @@ export async function resolveInstagramStories({ username, storyId }) {
 // single-video click reports "log in" rather than the generic miss message.
 async function resolveInstagramVideo(shortcode) {
   const post = await resolveInstagramPost(shortcode);
-  if (!post.items) return { error: post.error };
+  if (!post.items) return { error: post.error, code: post.code };
   const video = post.items.find((it) => it.type === 'video');
   // A post that resolved fine but holds no video is a miss, not a failure: the
   // caller falls through to the DOM path for images, so there is no reason here.
@@ -1015,6 +1116,237 @@ async function recordDownload(item, platform, downloadId) {
 
   await chrome.storage.local.set({ downloadHistory });
 }
+
+const SUBMITTED_TAB_LOAD_TIMEOUT_MS = 15000;
+const SUBMITTED_RESOLVE_ATTEMPTS = 4;
+const SUBMITTED_RETRY_DELAY_MS = 500;
+const SUBMITTED_MAX_ITEMS = 20;
+
+function submittedDownloadResult(ok, code, platform = null, count = 0) {
+  return { ok, code, platform, count };
+}
+
+function waitForSubmittedTab(tabId, timeoutMs) {
+  return new Promise((resolve) => {
+    let finished = false;
+    const finish = (loaded) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      chrome.tabs.onUpdated.removeListener(onUpdated);
+      resolve(loaded);
+    };
+    const onUpdated = (updatedId, changeInfo, tab) => {
+      if (updatedId !== tabId) return;
+      if (changeInfo?.status === 'complete' || tab?.status === 'complete') finish(true);
+    };
+    const timer = setTimeout(() => finish(false), timeoutMs);
+
+    // Listen before reading the current state so a completion event in between
+    // cannot be lost. tabs.get then catches a completion that happened before
+    // the listener was attached.
+    chrome.tabs.onUpdated.addListener(onUpdated);
+    chrome.tabs.get(tabId)
+      .then((tab) => {
+        if (tab?.status === 'complete') finish(true);
+      })
+      .catch(() => {});
+  });
+}
+
+function waitForSubmittedRetry(delayMs) {
+  return new Promise((resolve) => setTimeout(resolve, delayMs));
+}
+
+async function resolveSubmittedTab(tabId, attempts, retryDelayMs) {
+  let receivedResponse = false;
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      const response = await chrome.tabs.sendMessage(tabId, { action: 'resolvePage' });
+      receivedResponse = true;
+      const items = Array.isArray(response?.urls)
+        ? response.urls
+          .slice(0, SUBMITTED_MAX_ITEMS)
+          .filter((item) => item && typeof item === 'object')
+        : [];
+      if (items.length > 0) return { items };
+    } catch {
+      // A new SPA tab can complete before the content script or post DOM is
+      // ready. The bounded retry below is the recovery path.
+    }
+    if (attempt + 1 < attempts) await waitForSubmittedRetry(retryDelayMs);
+  }
+  return {
+    code: receivedResponse ? 'access_or_unavailable' : 'resolution_timeout',
+  };
+}
+
+async function resolveSubmittedInstagram(parsed) {
+  const pathname = new URL(parsed.url).pathname;
+  const storyRef = extractStoryRef(pathname);
+  if (storyRef) return resolveInstagramStories(storyRef);
+
+  const shortcode = pathname.match(/^\/(?:p|reel|tv)\/([A-Za-z0-9_-]+)/)?.[1];
+  if (!shortcode) return { code: 'invalid_url' };
+  return resolveInstagramPost(shortcode);
+}
+
+// Resolve and download one exact submitted post entirely inside the extension.
+// Only this four-field result crosses back to the landing page. Submitted page
+// URLs, resolved CDN URLs, cookies, DOM, and account data stay inside Chrome.
+export async function orchestrateSubmittedDownload(rawUrl, options = {}) {
+  const parsed = parseSubmittedPageUrl(rawUrl);
+  if (parsed.error) return submittedDownloadResult(false, parsed.error);
+
+  const platform = parsed.platform;
+  const tabLoadTimeoutMs = Number.isFinite(options.tabLoadTimeoutMs)
+    ? Math.max(0, options.tabLoadTimeoutMs)
+    : SUBMITTED_TAB_LOAD_TIMEOUT_MS;
+  const resolveAttempts = Number.isInteger(options.resolveAttempts)
+    ? Math.min(10, Math.max(1, options.resolveAttempts))
+    : SUBMITTED_RESOLVE_ATTEMPTS;
+  const retryDelayMs = Number.isFinite(options.retryDelayMs)
+    ? Math.max(0, options.retryDelayMs)
+    : SUBMITTED_RETRY_DELAY_MS;
+
+  let createdTabId = null;
+  try {
+    let resolved;
+    if (platform === 'instagram') {
+      resolved = await resolveSubmittedInstagram(parsed);
+    } else {
+      const tab = await chrome.tabs.create({ url: parsed.url, active: false });
+      if (!Number.isInteger(tab?.id)) {
+        return submittedDownloadResult(false, 'unexpected', platform);
+      }
+      createdTabId = tab.id;
+      const loaded = tab.status === 'complete'
+        || await waitForSubmittedTab(createdTabId, tabLoadTimeoutMs);
+      if (!loaded) {
+        return submittedDownloadResult(false, 'resolution_timeout', platform);
+      }
+      resolved = await resolveSubmittedTab(createdTabId, resolveAttempts, retryDelayMs);
+    }
+
+    if (!resolved?.items) {
+      return submittedDownloadResult(
+        false,
+        resolved?.code || (platform === 'instagram' ? 'unexpected' : 'access_or_unavailable'),
+        platform,
+      );
+    }
+
+    const items = resolved.items
+      .filter((item) => item && typeof item === 'object')
+      .slice(0, SUBMITTED_MAX_ITEMS);
+    if (items.length === 0) {
+      return submittedDownloadResult(false, 'no_media', platform);
+    }
+
+    let count = 0;
+    let hadFailure = false;
+    for (const [position, item] of items.entries()) {
+      let saved = null;
+      try {
+        saved = await downloadMedia(item, platform, position + 1);
+      } catch {
+        // Keep trying the remaining bounded items. The response reports only
+        // how many succeeded, never the failed item's URL or filename.
+      }
+      if (!saved) {
+        hadFailure = true;
+        continue;
+      }
+      try {
+        await recordDownload({ ...item, filename: saved.filename }, platform, saved.downloadId);
+      } catch {
+        // The browser download has already started. Count it as saved while the
+        // incomplete batch result tells the page not every operation finished.
+        hadFailure = true;
+      }
+      count++;
+    }
+
+    if (hadFailure || count !== items.length) {
+      return submittedDownloadResult(false, 'download_failed', platform, count);
+    }
+    return submittedDownloadResult(true, 'ok', platform, count);
+  } catch {
+    return submittedDownloadResult(false, 'unexpected', platform);
+  } finally {
+    if (createdTabId !== null) {
+      try {
+        await chrome.tabs.remove(createdTabId);
+      } catch {
+        console.warn('SocialSnag: could not close the temporary resolver tab.');
+      }
+    }
+  }
+}
+
+const SUBMITTED_SENDER_ORIGIN = 'https://jamditis.github.io';
+
+function isAllowedSubmittedSender(sender) {
+  if (!sender || typeof sender.url !== 'string') return false;
+  if (sender.origin && sender.origin !== SUBMITTED_SENDER_ORIGIN) return false;
+
+  let url;
+  try {
+    url = new URL(sender.url, sender.origin || undefined);
+  } catch {
+    return false;
+  }
+  return url.origin === SUBMITTED_SENDER_ORIGIN
+    && !url.username
+    && !url.password
+    && !url.port
+    && url.pathname.startsWith('/socialsnag/');
+}
+
+function isSubmittedDownloadRequest(message) {
+  if (!message || typeof message !== 'object' || Array.isArray(message)) return false;
+  const keys = Object.keys(message);
+  return keys.length === 2
+    && keys.includes('action')
+    && keys.includes('url')
+    && message.action === 'downloadSubmittedUrl'
+    && typeof message.url === 'string';
+}
+
+let submittedDownloadActive = false;
+
+// Kept separate from runtime.onMessage: web pages have a different trust model
+// from extension-owned content scripts and must pass both sender and URL gates.
+chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => {
+  Promise.resolve().then(async () => {
+    if (!isAllowedSubmittedSender(sender)) {
+      return submittedDownloadResult(false, 'invalid_sender');
+    }
+    if (!isSubmittedDownloadRequest(message)) {
+      return submittedDownloadResult(false, 'invalid_request');
+    }
+    if (message.url.length === 0 || message.url.length > MAX_SUBMITTED_URL_LENGTH) {
+      return submittedDownloadResult(false, 'invalid_url');
+    }
+
+    const parsed = parseSubmittedPageUrl(message.url);
+    if (parsed.error) return submittedDownloadResult(false, parsed.error);
+    if (submittedDownloadActive) {
+      return submittedDownloadResult(false, 'busy', parsed.platform);
+    }
+
+    submittedDownloadActive = true;
+    try {
+      return await orchestrateSubmittedDownload(parsed.url);
+    } finally {
+      submittedDownloadActive = false;
+    }
+  }).then(
+    sendResponse,
+    () => sendResponse(submittedDownloadResult(false, 'unexpected')),
+  );
+  return true;
+});
 
 // Show a browser notification
 function showNotification(message) {

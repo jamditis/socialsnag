@@ -39,6 +39,9 @@
   "background": {
     "service_worker": "background.js"
   },
+  "externally_connectable": {
+    "matches": ["https://jamditis.github.io/socialsnag/*"]
+  },
   "content_scripts": [
     {
       "matches": ["*://*.instagram.com/*"],

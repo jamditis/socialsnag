@@ -142,7 +142,12 @@ describe('parsePostMedia', () => {
   });
 });
 
-import { extractStoryRef, parseStoryTray, mapIgStatusToMessage } from '../src/platforms/instagram-api.js';
+import {
+  extractStoryRef,
+  parseStoryTray,
+  mapIgStatusToMessage,
+  mapIgStatusToCode,
+} from '../src/platforms/instagram-api.js';
 
 describe('extractStoryRef', () => {
   it('parses /stories/user/123/', () => {
@@ -206,5 +211,18 @@ describe('mapIgStatusToMessage', () => {
   });
   it('falls back for unknown statuses', () => {
     expect(mapIgStatusToMessage(500)).toMatch(/instagram/i);
+  });
+});
+
+describe('mapIgStatusToCode', () => {
+  it.each([
+    [401, 'auth_required'],
+    [403, 'auth_required'],
+    [429, 'rate_limited'],
+    [404, 'access_or_unavailable'],
+    [0, 'no_media'],
+    [500, 'unexpected'],
+  ])('maps status %s to %s', (status, code) => {
+    expect(mapIgStatusToCode(status)).toBe(code);
   });
 });

@@ -5,6 +5,8 @@ import {
   extractVideoUrlFromScripts,
   buildImageItems,
   buildCapturedItems,
+  resolvePage,
+  resolveContentMessage,
 } from '../src/platforms/facebook.js';
 
 const CDN = 'https://scontent.xx.fbcdn.net/v/t1';
@@ -287,5 +289,73 @@ describe('buildCapturedItems', () => {
   it('numbers from one, since it only runs when the DOM walk found nothing', () => {
     const { items } = buildCapturedItems([cap(`${CDN}/a_n.jpg`), cap(`${CDN}/b_n.jpg`)], 5);
     expect(items.map((i) => i.filename)).toEqual(['photo_1', 'photo_2']);
+  });
+});
+
+describe('resolvePage', () => {
+  it('resolves the direct post without a right-click target', async () => {
+    const media = img(`${CDN}/s720x720/123456789012_n.jpg`);
+    const post = {
+      matches: (selector) => selector === '[role="article"]',
+      parentElement: null,
+      querySelectorAll: (selector) => selector === 'img[src*="fbcdn.net"]' ? [media] : [],
+    };
+    const root = { querySelector: () => post };
+
+    const items = await resolvePage(root);
+
+    expect(items).toHaveLength(1);
+    expect(items[0].url).toBe(`${CDN}/123456789012_n.jpg`);
+  });
+
+  it('handles a resolvePage message without a stored right-click target', async () => {
+    const media = img(`${CDN}/s720x720/123456789012_n.jpg`);
+    const post = {
+      matches: (selector) => selector === '[role="article"]',
+      parentElement: null,
+      querySelectorAll: (selector) => selector === 'img[src*="fbcdn.net"]' ? [media] : [],
+    };
+    const root = { querySelector: () => post };
+
+    const items = await resolveContentMessage({ action: 'resolvePage' }, null, root);
+
+    expect(items).toHaveLength(1);
+    expect(items[0].url).toBe(`${CDN}/123456789012_n.jpg`);
+  });
+
+  it('resolves a direct photo-viewer image without a right-click target', async () => {
+    const media = {
+      tagName: 'IMG',
+      src: `${CDN}/p720x720/123456789012_n.jpg`,
+      matches: () => false,
+      parentElement: null,
+    };
+    const root = {
+      querySelector: (selector) => selector.includes('media-vc-image') ? media : null,
+    };
+
+    const items = await resolvePage(root);
+
+    expect(items).toEqual([{
+      url: `${CDN}/123456789012_n.jpg`,
+      type: 'image',
+      filename: 'photo_123456789012',
+    }]);
+  });
+
+  it('does not treat a broad main container avatar as the submitted post', async () => {
+    const avatar = { tagName: 'IMG', src: `${CDN}/avatar_123456789012_n.jpg` };
+    const main = {
+      tagName: 'MAIN',
+      matches: () => false,
+      parentElement: null,
+      querySelector: (selector) => selector === 'img' ? avatar : null,
+      querySelectorAll: () => [],
+    };
+    const root = {
+      querySelector: (selector) => selector.includes('[role="main"]') ? main : null,
+    };
+
+    expect(await resolvePage(root)).toEqual([]);
   });
 });

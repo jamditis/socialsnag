@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest';
 import {
   upgradeImageUrl,
   extractPostId,
+  resolvePage,
+  resolveContentMessage,
 } from '../src/platforms/bluesky.js';
 
 describe('upgradeImageUrl', () => {
@@ -75,5 +77,68 @@ describe('extractPostId', () => {
 
   it('returns null for empty string', () => {
     expect(extractPostId('')).toBeNull();
+  });
+});
+
+describe('resolvePage', () => {
+  it('resolves the direct post without a right-click target', async () => {
+    const media = {
+      src: 'https://cdn.bsky.app/img/feed_thumbnail/plain/did:plc:abc/bafk@jpeg',
+    };
+    const post = {
+      matches: (selector) => selector === '[data-testid^="postThreadItem-by-"]',
+      parentElement: null,
+      querySelectorAll: (selector) => {
+        if (selector === 'img[src*="cdn.bsky.app"]') return [media];
+        return [];
+      },
+    };
+    const root = { querySelector: () => post };
+
+    const items = await resolvePage(root, '/profile/alice.bsky.social/post/3labc123xyz');
+
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      url: 'https://cdn.bsky.app/img/feed_fullsize/plain/did:plc:abc/bafk@jpeg',
+      filename: 'post_3labc123xyz_1',
+    });
+  });
+
+  it('handles a resolvePage message without a stored right-click target', async () => {
+    const media = {
+      src: 'https://cdn.bsky.app/img/feed_thumbnail/plain/did:plc:abc/bafk@jpeg',
+    };
+    const post = {
+      matches: (selector) => selector === '[data-testid^="postThreadItem-by-"]',
+      parentElement: null,
+      querySelectorAll: (selector) => selector.includes('cdn.bsky.app') ? [media] : [],
+    };
+    const root = { querySelector: () => post };
+
+    const items = await resolveContentMessage(
+      { action: 'resolvePage' },
+      null,
+      root,
+      '/profile/alice.bsky.social/post/3labc123xyz',
+    );
+
+    expect(items).toHaveLength(1);
+    expect(items[0].filename).toBe('post_3labc123xyz_1');
+  });
+
+  it('does not select an unrelated feed item on a direct post page', async () => {
+    const media = {
+      src: 'https://cdn.bsky.app/img/feed_thumbnail/plain/did:plc:other/bafk@jpeg',
+    };
+    const feedItem = {
+      matches: (selector) => selector === '[data-testid^="feedItem-by-"]',
+      parentElement: null,
+      querySelectorAll: (selector) => selector.includes('cdn.bsky.app') ? [media] : [],
+    };
+    const root = {
+      querySelector: (selector) => selector.includes('feedItem') ? feedItem : null,
+    };
+
+    expect(await resolvePage(root, '/profile/alice.bsky.social/post/3labc123xyz')).toEqual([]);
   });
 });

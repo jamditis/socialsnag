@@ -279,6 +279,21 @@ export function resolveAll(target) {
   return items.length > 0 ? items : resolveSingle(target?.src || '', target, { allowFallback: false });
 }
 
+// Resolve the primary tweet on an exact status page. Unlike the context-menu
+// path this starts from the page itself, so it never depends on a right-click.
+export async function resolvePage(root = document) {
+  const target = root.querySelector(TWEET_SELECTORS.join(', '));
+  return target ? await resolveAll(target) : [];
+}
+
+export async function resolveContentMessage(message, lastTarget, root = document) {
+  if (message.action === 'resolvePage') return resolvePage(root);
+  if (message.action !== 'resolve') return [];
+  return message.type === 'single'
+    ? resolveSingle(message.srcUrl, lastTarget)
+    : resolveAll(lastTarget);
+}
+
 async function resolveVideo(target) {
   // First try webRequest captures (advanced mode)
   const captured = await getCapturedMedia();
@@ -307,13 +322,11 @@ function initContentScript() {
 
   // Listen for resolve requests from background
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message.action === 'resolve') {
+    if (message.action === 'resolve' || message.action === 'resolvePage') {
       const target = _lastTarget;
 
       Promise.resolve()
-        .then(() => (message.type === 'single'
-          ? resolveSingle(message.srcUrl, target)
-          : resolveAll(target)))
+        .then(() => resolveContentMessage(message, target, document))
         .then((urls) => {
           sendResponse({ urls: urls || [], platform: 'twitter' });
         })

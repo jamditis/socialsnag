@@ -103,6 +103,28 @@ function resolveAll(target, pathname) {
   return items.length > 0 ? items : resolveSingle(target?.src || '', target, pathname);
 }
 
+// Resolve the primary post on an exact Bluesky post URL without relying on a
+// stored right-click target.
+export async function resolvePage(root = document, pathname = window.location.pathname) {
+  const target = root.querySelector(
+    '[data-testid^="postThreadItem-by-"], [data-testid^="postThreadItem"]',
+  );
+  return target ? resolveAll(target, pathname) : [];
+}
+
+export async function resolveContentMessage(
+  message,
+  lastTarget,
+  root = document,
+  pathname = window.location.pathname,
+) {
+  if (message.action === 'resolvePage') return resolvePage(root, pathname);
+  if (message.action !== 'resolve') return [];
+  return message.type === 'single'
+    ? resolveSingle(message.srcUrl, lastTarget, pathname)
+    : resolveAll(lastTarget, pathname);
+}
+
 function initContentScript() {
   let _lastTarget = null;
 
@@ -113,14 +135,12 @@ function initContentScript() {
 
   // Listen for resolve requests from background
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message.action === 'resolve') {
+    if (message.action === 'resolve' || message.action === 'resolvePage') {
       const target = _lastTarget;
       const pathname = window.location.pathname;
 
       Promise.resolve()
-        .then(() => (message.type === 'single'
-          ? resolveSingle(message.srcUrl, target, pathname)
-          : resolveAll(target, pathname)))
+        .then(() => resolveContentMessage(message, target, document, pathname))
         .then((urls) => {
           sendResponse({ urls: urls || [], platform: 'bluesky' });
         })

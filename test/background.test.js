@@ -1,4 +1,5 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
 import {
   detectPlatform,
   guessExtension,
@@ -11,6 +12,8 @@ import {
   downloadItemsAsZip,
   resolveItemUrl,
   resolveViaApi,
+  parseSubmittedPageUrl,
+  orchestrateSubmittedDownload,
 } from '../src/background.js';
 import { mapIgStatusToMessage } from '../src/platforms/instagram-api.js';
 
@@ -116,6 +119,69 @@ describe('validateDownloadUrl', () => {
   });
 });
 
+describe('parseSubmittedPageUrl', () => {
+  it.each([
+    ['https://www.instagram.com/p/ABC_123/?igsh=share#comments', 'instagram', 'https://www.instagram.com/p/ABC_123/?igsh=share'],
+    ['https://instagram.com/reel/C9-ab_1/', 'instagram', 'https://instagram.com/reel/C9-ab_1/'],
+    ['https://www.instagram.com/tv/IGTV123/', 'instagram', 'https://www.instagram.com/tv/IGTV123/'],
+    ['https://www.instagram.com/stories/natgeo/1234567890/', 'instagram', 'https://www.instagram.com/stories/natgeo/1234567890/'],
+    ['https://twitter.com/jack/status/20', 'twitter', 'https://twitter.com/jack/status/20'],
+    ['https://x.com/example_user/status/1234567890123456789?s=20', 'twitter', 'https://x.com/example_user/status/1234567890123456789?s=20'],
+    ['https://www.facebook.com/example/posts/1234567890/', 'facebook', 'https://www.facebook.com/example/posts/1234567890/'],
+    ['https://www.facebook.com/example/posts/pfbid02AbCdEf/', 'facebook', 'https://www.facebook.com/example/posts/pfbid02AbCdEf/'],
+    ['https://www.facebook.com/groups/example/posts/1234567890/', 'facebook', 'https://www.facebook.com/groups/example/posts/1234567890/'],
+    ['https://www.facebook.com/groups/123/permalink/4567890123/', 'facebook', 'https://www.facebook.com/groups/123/permalink/4567890123/'],
+    ['https://www.facebook.com/permalink.php?story_fbid=1234567890&id=42', 'facebook', 'https://www.facebook.com/permalink.php?story_fbid=1234567890&id=42'],
+    ['https://www.facebook.com/story.php?story_fbid=pfbid02AbCdEf&id=42', 'facebook', 'https://www.facebook.com/story.php?story_fbid=pfbid02AbCdEf&id=42'],
+    ['https://www.facebook.com/photo.php?fbid=1234567890&id=42', 'facebook', 'https://www.facebook.com/photo.php?fbid=1234567890&id=42'],
+    ['https://www.facebook.com/example/photos/a.123/4567890123/', 'facebook', 'https://www.facebook.com/example/photos/a.123/4567890123/'],
+    ['https://www.facebook.com/example/videos/1234567890/', 'facebook', 'https://www.facebook.com/example/videos/1234567890/'],
+    ['https://www.facebook.com/reel/1234567890/', 'facebook', 'https://www.facebook.com/reel/1234567890/'],
+    ['https://www.facebook.com/watch/?v=1234567890', 'facebook', 'https://www.facebook.com/watch/?v=1234567890'],
+    ['https://www.facebook.com/share/p/AbC_def-123/', 'facebook', 'https://www.facebook.com/share/p/AbC_def-123/'],
+    ['https://www.facebook.com/share/r/AbC_def-123/', 'facebook', 'https://www.facebook.com/share/r/AbC_def-123/'],
+    ['https://www.facebook.com/share/v/AbC_def-123/', 'facebook', 'https://www.facebook.com/share/v/AbC_def-123/'],
+    ['https://bsky.app/profile/alice.bsky.social/post/3labc123xyz', 'bluesky', 'https://bsky.app/profile/alice.bsky.social/post/3labc123xyz'],
+    ['https://bsky.app/profile/did:plc:abc123/post/3lxyz789', 'bluesky', 'https://bsky.app/profile/did:plc:abc123/post/3lxyz789'],
+  ])('accepts an exact post URL: %s', (raw, platform, normalized) => {
+    expect(parseSubmittedPageUrl(raw)).toEqual({ url: normalized, platform });
+  });
+
+  it.each([
+    ['', 'invalid_url'],
+    [null, 'invalid_url'],
+    ['not a url', 'invalid_url'],
+    ['http://x.com/user/status/123', 'invalid_url'],
+    ['ftp://www.instagram.com/p/ABC/', 'invalid_url'],
+    ['https://user:secret@x.com/user/status/123', 'invalid_url'],
+    ['https://x.com:8443/user/status/123', 'invalid_url'],
+    [`https://x.com/user/status/${'1'.repeat(2100)}`, 'invalid_url'],
+    ['https://www.instagram.com/stories/highlights/123/', 'invalid_url'],
+    ['https://www.instagram.com/accounts/login/', 'invalid_url'],
+    ['https://www.instagram.com/example/', 'invalid_url'],
+    ['https://x.com/settings/account', 'invalid_url'],
+    ['https://x.com/user/status/not-a-number', 'invalid_url'],
+    ['https://x.com/user/status/123/photo/1', 'invalid_url'],
+    ['https://www.facebook.com/login/', 'invalid_url'],
+    ['https://www.facebook.com/settings/', 'invalid_url'],
+    ['https://www.facebook.com/settings/posts/123', 'invalid_url'],
+    ['https://www.facebook.com/login/posts/123', 'invalid_url'],
+    ['https://www.facebook.com/example/', 'invalid_url'],
+    ['https://www.facebook.com/watch/', 'invalid_url'],
+    ['https://bsky.app/profile/alice.bsky.social', 'invalid_url'],
+    ['https://bsky.app/settings', 'invalid_url'],
+    ['https://evilinstagram.com/p/ABC/', 'unsupported_url'],
+    ['https://instagram.com.evil.example/p/ABC/', 'unsupported_url'],
+    ['https://notx.com/user/status/123', 'unsupported_url'],
+    ['https://x.com.evil.example/user/status/123', 'unsupported_url'],
+    ['https://evilfacebook.com/example/posts/123', 'unsupported_url'],
+    ['https://bsky.app.evil.example/profile/a/post/3abc', 'unsupported_url'],
+    ['https://example.com/x.com/user/status/123', 'unsupported_url'],
+  ])('rejects unsafe or non-post input: %s', (raw, code) => {
+    expect(parseSubmittedPageUrl(raw)).toEqual({ error: code });
+  });
+});
+
 describe('sanitizeDownloadPath', () => {
   it('assembles correct path with platform folder', () => {
     const path = sanitizeDownloadPath('photo_123', 'instagram', '.jpg');
@@ -179,6 +245,7 @@ describe('resolveInstagramPost', () => {
     expect(result.items).toBeUndefined();
     // The reason rides the return value, so a concurrent click cannot claim it (#30).
     expect(result.error).toBe(mapIgStatusToMessage(429));
+    expect(result.code).toBe('rate_limited');
   });
 
   it('gives each concurrent lookup its own failure reason (#30)', async () => {
@@ -237,6 +304,30 @@ describe('resolveInstagramStories', () => {
     const { items } = await resolveInstagramStories({ username: 'x', storyId: '2' });
     expect(items).toHaveLength(1);
     expect(items[0].url).toBe('https://cdn.cdninstagram.com/2.jpg');
+  });
+
+  it('returns a stable auth code when the account lookup requires login', async () => {
+    installFetch((url) => url.includes('web_profile_info')
+      ? { status: 401, json: {} }
+      : null);
+
+    const result = await resolveInstagramStories({ username: 'private', storyId: null });
+
+    expect(result.error).toBe(mapIgStatusToMessage(401));
+    expect(result.code).toBe('auth_required');
+  });
+
+  it('returns a stable no-media code for an empty active tray', async () => {
+    installFetch((url) => {
+      if (url.includes('web_profile_info')) return { status: 200, json: { data: { user: { id: '55' } } } };
+      if (url.includes('reels_media')) return { status: 200, json: { reels_media: [{ items: [] }] } };
+      return null;
+    });
+
+    const result = await resolveInstagramStories({ username: 'x', storyId: null });
+
+    expect(result.error).toBe(mapIgStatusToMessage(0));
+    expect(result.code).toBe('no_media');
   });
 });
 
@@ -1325,5 +1416,417 @@ describe('resolveViaApi miss classification', () => {
     globalThis.chrome.storage.sync._reset();
     await resolveViaApi('bluesky', 'https://bsky.app/profile/a/post/b');
     expect(logged).toEqual([]);
+  });
+});
+
+const LANDING_PAGE_SENDER = {
+  origin: 'https://jamditis.github.io',
+  url: 'https://jamditis.github.io/socialsnag/',
+};
+
+function sendExternal(request, sender = LANDING_PAGE_SENDER) {
+  const handler = chrome.runtime.onMessageExternal._listeners[0];
+  return new Promise((resolve) => {
+    const keepOpen = handler(request, sender, resolve);
+    expect(keepOpen).toBe(true);
+  });
+}
+
+describe('submitted URL external bridge', () => {
+  const originalTabs = {
+    create: chrome.tabs.create,
+    get: chrome.tabs.get,
+    remove: chrome.tabs.remove,
+    sendMessage: chrome.tabs.sendMessage,
+  };
+  const originalDownload = chrome.downloads.download;
+  const originalSearch = chrome.downloads.search;
+
+  beforeEach(() => {
+    chrome.storage.local._reset();
+    chrome.storage.sync._reset();
+    chrome.tabs.create = originalTabs.create;
+    chrome.tabs.get = originalTabs.get;
+    chrome.tabs.remove = originalTabs.remove;
+    chrome.tabs.sendMessage = originalTabs.sendMessage;
+    chrome.downloads.download = originalDownload;
+    chrome.downloads.search = originalSearch;
+  });
+
+  afterEach(() => {
+    resetFetch();
+    chrome.tabs.create = originalTabs.create;
+    chrome.tabs.get = originalTabs.get;
+    chrome.tabs.remove = originalTabs.remove;
+    chrome.tabs.sendMessage = originalTabs.sendMessage;
+    chrome.downloads.download = originalDownload;
+    chrome.downloads.search = originalSearch;
+  });
+
+  it('exposes only the exact GitHub Pages path in externally_connectable', () => {
+    const manifest = JSON.parse(readFileSync(new URL('../manifest.json', import.meta.url), 'utf8'));
+    expect(manifest.externally_connectable).toEqual({
+      matches: ['https://jamditis.github.io/socialsnag/*'],
+    });
+  });
+
+  it.each([
+    { origin: 'http://jamditis.github.io', url: 'http://jamditis.github.io/socialsnag/' },
+    { origin: 'https://jamditis.github.io', url: 'https://jamditis.github.io/socialsnag-evil/' },
+    { origin: 'https://jamditis.github.io', url: 'https://jamditis.github.io/not-socialsnag/' },
+    { origin: 'https://jamditis.github.io.evil.test', url: 'https://jamditis.github.io.evil.test/socialsnag/' },
+    { origin: 'https://jamditis.github.io:8443', url: 'https://jamditis.github.io:8443/socialsnag/' },
+    { origin: 'https://jamditis.github.io', url: 'https://user@jamditis.github.io/socialsnag/' },
+  ])('rejects an external sender outside the exact site boundary', async (sender) => {
+    const create = vi.fn();
+    chrome.tabs.create = create;
+
+    await expect(sendExternal(
+      { action: 'downloadSubmittedUrl', url: 'https://x.com/user/status/123' },
+      sender,
+    )).resolves.toEqual({ ok: false, code: 'invalid_sender', platform: null, count: 0 });
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('accepts the exact origin with a separately validated relative sender path', async () => {
+    const create = vi.fn();
+    chrome.tabs.create = create;
+
+    await expect(sendExternal(
+      { action: 'downloadSubmittedUrl', url: 'https://x.com/settings' },
+      { origin: 'https://jamditis.github.io', url: '/socialsnag/index.html' },
+    )).resolves.toEqual({ ok: false, code: 'invalid_url', platform: null, count: 0 });
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [{ action: 'other', url: 'https://x.com/user/status/123' }, 'invalid_request'],
+    [{ action: 'downloadSubmittedUrl' }, 'invalid_request'],
+    [{ action: 'downloadSubmittedUrl', url: 'https://x.com/user/status/123', extra: true }, 'invalid_request'],
+    [{ action: 'downloadSubmittedUrl', url: `https://x.com/user/status/${'1'.repeat(2100)}` }, 'invalid_url'],
+  ])('rejects an invalid request before opening a tab', async (request, code) => {
+    const create = vi.fn();
+    chrome.tabs.create = create;
+
+    await expect(sendExternal(request)).resolves.toEqual({
+      ok: false,
+      code,
+      platform: null,
+      count: 0,
+    });
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('rejects malformed and unsupported URLs before opening a tab', async () => {
+    const create = vi.fn();
+    chrome.tabs.create = create;
+
+    await expect(orchestrateSubmittedDownload('not a url')).resolves.toEqual({
+      ok: false, code: 'invalid_url', platform: null, count: 0,
+    });
+    await expect(orchestrateSubmittedDownload('https://example.com/post/1')).resolves.toEqual({
+      ok: false, code: 'unsupported_url', platform: null, count: 0,
+    });
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('downloads Instagram media through the authenticated API without opening a tab', async () => {
+    installFetch((url) => url.includes('i.instagram.com') ? {
+      status: 200,
+      json: { items: [{ carousel_media: [
+        igImgSlide('https://cdn.cdninstagram.com/one.jpg'),
+        igVidSlide('https://cdn.cdninstagram.com/two.mp4'),
+      ] }] },
+    } : null);
+    const create = vi.fn();
+    const download = vi.fn()
+      .mockResolvedValueOnce(41)
+      .mockResolvedValueOnce(42);
+    chrome.tabs.create = create;
+    chrome.downloads.download = download;
+    chrome.downloads.search = async ({ id }) => [{
+      id,
+      state: 'complete',
+      filename: `/downloads/${id === 41 ? 'one.jpg' : 'two.mp4'}`,
+    }];
+
+    const result = await orchestrateSubmittedDownload('https://www.instagram.com/p/ABC/');
+
+    expect(result).toEqual({ ok: true, code: 'ok', platform: 'instagram', count: 2 });
+    expect(create).not.toHaveBeenCalled();
+    expect(download).toHaveBeenCalledTimes(2);
+    const { downloadHistory } = await chrome.storage.local.get({ downloadHistory: [] });
+    expect(downloadHistory).toHaveLength(2);
+    expect(downloadHistory.every((entry) => !('url' in entry))).toBe(true);
+  });
+
+  it('downloads an active Instagram story through the authenticated API without opening a tab', async () => {
+    installFetch((url) => {
+      if (url.includes('web_profile_info')) {
+        return { status: 200, json: { data: { user: { id: '55' } } } };
+      }
+      if (url.includes('reels_media')) {
+        return {
+          status: 200,
+          json: { reels_media: [{ items: [
+            igStoryImg('123', 'https://cdn.cdninstagram.com/story.jpg'),
+          ] }] },
+        };
+      }
+      return null;
+    });
+    chrome.tabs.create = vi.fn();
+    chrome.downloads.download = vi.fn(async () => 43);
+    chrome.downloads.search = async () => [{
+      id: 43, state: 'complete', filename: '/downloads/story_123.jpg',
+    }];
+
+    const result = await orchestrateSubmittedDownload(
+      'https://www.instagram.com/stories/natgeo/123/',
+    );
+
+    expect(result).toEqual({ ok: true, code: 'ok', platform: 'instagram', count: 1 });
+    expect(chrome.tabs.create).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [401, 'auth_required'],
+    [429, 'rate_limited'],
+  ])('returns a stable Instagram API failure for status %s', async (status, code) => {
+    installFetch(() => ({ status, json: {} }));
+    chrome.tabs.create = vi.fn();
+
+    const result = await orchestrateSubmittedDownload('https://www.instagram.com/p/ABC/');
+
+    expect(result).toEqual({ ok: false, code, platform: 'instagram', count: 0 });
+    expect(chrome.tabs.create).not.toHaveBeenCalled();
+  });
+
+  it('downloads multiple tab-resolved files, records history, redacts URLs, and closes the created tab', async () => {
+    const remove = vi.fn();
+    chrome.tabs.create = vi.fn(async () => ({ id: 77, status: 'complete' }));
+    chrome.tabs.get = vi.fn(async () => ({ id: 77, status: 'complete' }));
+    chrome.tabs.remove = remove;
+    chrome.tabs.sendMessage = vi.fn(async () => ({
+      platform: 'twitter',
+      urls: [
+        { url: 'https://pbs.twimg.com/media/one.jpg', type: 'image', filename: 'tweet_1_1' },
+        { url: 'https://pbs.twimg.com/media/two.jpg', type: 'image', filename: 'tweet_1_2' },
+      ],
+    }));
+    chrome.downloads.download = vi.fn()
+      .mockResolvedValueOnce(51)
+      .mockResolvedValueOnce(52);
+    chrome.downloads.search = async ({ id }) => [{
+      id,
+      state: 'complete',
+      filename: `/downloads/tweet_${id}.jpg`,
+    }];
+
+    const result = await orchestrateSubmittedDownload('https://x.com/user/status/123');
+
+    expect(result).toEqual({ ok: true, code: 'ok', platform: 'twitter', count: 2 });
+    expect(Object.keys(result).sort()).toEqual(['code', 'count', 'ok', 'platform']);
+    expect(JSON.stringify(result)).not.toContain('x.com/user/status');
+    expect(JSON.stringify(result)).not.toContain('twimg.com');
+    expect(remove).toHaveBeenCalledOnce();
+    expect(remove).toHaveBeenCalledWith(77);
+    const { downloadHistory } = await chrome.storage.local.get({ downloadHistory: [] });
+    expect(downloadHistory).toHaveLength(2);
+  });
+
+  it('caps a resolved post before downloading', async () => {
+    const urls = Array.from({ length: 25 }, (_, index) => ({
+      url: `https://pbs.twimg.com/media/${index}.jpg`,
+      type: 'image',
+      filename: `tweet_${index}`,
+    }));
+    chrome.tabs.create = vi.fn(async () => ({ id: 76, status: 'complete' }));
+    chrome.tabs.get = vi.fn(async () => ({ id: 76, status: 'complete' }));
+    chrome.tabs.remove = vi.fn();
+    chrome.tabs.sendMessage = vi.fn(async () => ({ platform: 'twitter', urls }));
+    chrome.downloads.download = vi.fn(async () => 50);
+    chrome.downloads.search = async () => [{
+      id: 50, state: 'complete', filename: '/downloads/tweet.jpg',
+    }];
+
+    const result = await orchestrateSubmittedDownload('https://x.com/user/status/123');
+
+    expect(result).toEqual({ ok: true, code: 'ok', platform: 'twitter', count: 20 });
+    expect(chrome.downloads.download).toHaveBeenCalledTimes(20);
+    expect(chrome.tabs.remove).toHaveBeenCalledWith(76);
+  });
+
+  it('times out a tab that never completes and still closes it', async () => {
+    const remove = vi.fn();
+    chrome.tabs.create = vi.fn(async () => ({ id: 78, status: 'loading' }));
+    chrome.tabs.get = vi.fn(async () => ({ id: 78, status: 'loading' }));
+    chrome.tabs.remove = remove;
+    chrome.tabs.sendMessage = vi.fn();
+
+    const result = await orchestrateSubmittedDownload(
+      'https://x.com/user/status/123',
+      { tabLoadTimeoutMs: 5, retryDelayMs: 0 },
+    );
+
+    expect(result).toEqual({
+      ok: false, code: 'resolution_timeout', platform: 'twitter', count: 0,
+    });
+    expect(chrome.tabs.sendMessage).not.toHaveBeenCalled();
+    expect(remove).toHaveBeenCalledWith(78);
+  });
+
+  it('retries while SPA media renders, then downloads the resolved item', async () => {
+    chrome.tabs.create = vi.fn(async () => ({ id: 79, status: 'complete' }));
+    chrome.tabs.get = vi.fn(async () => ({ id: 79, status: 'complete' }));
+    chrome.tabs.remove = vi.fn();
+    chrome.tabs.sendMessage = vi.fn()
+      .mockRejectedValueOnce(new Error('content script not ready'))
+      .mockResolvedValueOnce({ urls: [], platform: 'bluesky' })
+      .mockResolvedValueOnce({
+        urls: [{
+          url: 'https://cdn.bsky.app/img/feed_fullsize/plain/did:plc:a/bafk@jpeg',
+          type: 'image',
+          filename: 'post_3abc',
+        }],
+        platform: 'bluesky',
+      });
+    chrome.downloads.download = vi.fn(async () => 61);
+    chrome.downloads.search = async () => [{
+      id: 61, state: 'complete', filename: '/downloads/post_3abc.jpg',
+    }];
+
+    const result = await orchestrateSubmittedDownload(
+      'https://bsky.app/profile/a.bsky.social/post/3abc',
+      { resolveAttempts: 3, retryDelayMs: 0 },
+    );
+
+    expect(result).toEqual({ ok: true, code: 'ok', platform: 'bluesky', count: 1 });
+    expect(chrome.tabs.sendMessage).toHaveBeenCalledTimes(3);
+    expect(chrome.tabs.sendMessage).toHaveBeenLastCalledWith(79, { action: 'resolvePage' });
+    expect(chrome.tabs.remove).toHaveBeenCalledWith(79);
+  });
+
+  it('reports access or unavailable for an empty page without claiming an auth cause', async () => {
+    chrome.tabs.create = vi.fn(async () => ({ id: 80, status: 'complete' }));
+    chrome.tabs.get = vi.fn(async () => ({ id: 80, status: 'complete' }));
+    chrome.tabs.remove = vi.fn();
+    chrome.tabs.sendMessage = vi.fn(async () => ({ urls: [], platform: 'facebook' }));
+
+    const result = await orchestrateSubmittedDownload(
+      'https://www.facebook.com/example/posts/123',
+      { resolveAttempts: 2, retryDelayMs: 0 },
+    );
+
+    expect(result).toEqual({
+      ok: false, code: 'access_or_unavailable', platform: 'facebook', count: 0,
+    });
+    expect(result.code).not.toBe('auth_required');
+    expect(chrome.tabs.remove).toHaveBeenCalledWith(80);
+  });
+
+  it('reports resolution timeout when the content script never becomes available', async () => {
+    chrome.tabs.create = vi.fn(async () => ({ id: 81, status: 'complete' }));
+    chrome.tabs.get = vi.fn(async () => ({ id: 81, status: 'complete' }));
+    chrome.tabs.remove = vi.fn();
+    chrome.tabs.sendMessage = vi.fn(async () => { throw new Error('no receiver'); });
+
+    const result = await orchestrateSubmittedDownload(
+      'https://x.com/user/status/123',
+      { resolveAttempts: 2, retryDelayMs: 0 },
+    );
+
+    expect(result).toEqual({
+      ok: false, code: 'resolution_timeout', platform: 'twitter', count: 0,
+    });
+    expect(chrome.tabs.sendMessage).toHaveBeenCalledTimes(2);
+    expect(chrome.tabs.remove).toHaveBeenCalledWith(81);
+  });
+
+  it('reports a partial download failure with only the successful count and closes the tab', async () => {
+    chrome.tabs.create = vi.fn(async () => ({ id: 82, status: 'complete' }));
+    chrome.tabs.get = vi.fn(async () => ({ id: 82, status: 'complete' }));
+    chrome.tabs.remove = vi.fn();
+    chrome.tabs.sendMessage = vi.fn(async () => ({
+      platform: 'facebook',
+      urls: [
+        { url: 'https://scontent.xx.fbcdn.net/one.jpg', type: 'image', filename: 'one' },
+        { url: 'https://scontent.xx.fbcdn.net/two.jpg', type: 'image', filename: 'two' },
+      ],
+    }));
+    chrome.downloads.download = vi.fn()
+      .mockResolvedValueOnce(71)
+      .mockRejectedValueOnce(new Error('disk full'));
+    chrome.downloads.search = async () => [{
+      id: 71, state: 'complete', filename: '/downloads/one.jpg',
+    }];
+
+    const result = await orchestrateSubmittedDownload(
+      'https://www.facebook.com/example/posts/123',
+      { retryDelayMs: 0 },
+    );
+
+    expect(result).toEqual({
+      ok: false, code: 'download_failed', platform: 'facebook', count: 1,
+    });
+    const { downloadHistory } = await chrome.storage.local.get({ downloadHistory: [] });
+    expect(downloadHistory).toHaveLength(1);
+    expect(chrome.tabs.remove).toHaveBeenCalledWith(82);
+  });
+
+  it('does not report full success when history recording fails', async () => {
+    const originalSet = chrome.storage.local.set;
+    chrome.tabs.create = vi.fn(async () => ({ id: 84, status: 'complete' }));
+    chrome.tabs.get = vi.fn(async () => ({ id: 84, status: 'complete' }));
+    chrome.tabs.remove = vi.fn();
+    chrome.tabs.sendMessage = vi.fn(async () => ({
+      platform: 'twitter',
+      urls: [{ url: 'https://pbs.twimg.com/media/one.jpg', type: 'image', filename: 'one' }],
+    }));
+    chrome.downloads.download = vi.fn(async () => 85);
+    chrome.downloads.search = async () => [{
+      id: 85, state: 'complete', filename: '/downloads/one.jpg',
+    }];
+    chrome.storage.local.set = vi.fn(async () => { throw new Error('storage unavailable'); });
+
+    try {
+      const result = await orchestrateSubmittedDownload('https://x.com/user/status/123');
+      expect(result).toEqual({
+        ok: false, code: 'download_failed', platform: 'twitter', count: 1,
+      });
+      expect(chrome.tabs.remove).toHaveBeenCalledWith(84);
+    } finally {
+      chrome.storage.local.set = originalSet;
+    }
+  });
+
+  it('rejects a concurrent valid job with busy', async () => {
+    let releaseCreate;
+    chrome.tabs.create = vi.fn(() => new Promise((resolve) => { releaseCreate = resolve; }));
+    chrome.tabs.get = vi.fn(async (id) => ({ id, status: 'complete' }));
+    chrome.tabs.remove = vi.fn();
+    chrome.tabs.sendMessage = vi.fn(async () => ({
+      platform: 'twitter',
+      urls: [{ url: 'https://pbs.twimg.com/media/one.jpg', type: 'image', filename: 'one' }],
+    }));
+    chrome.downloads.download = vi.fn(async () => 91);
+    chrome.downloads.search = async () => [{
+      id: 91, state: 'complete', filename: '/downloads/one.jpg',
+    }];
+
+    const first = sendExternal({
+      action: 'downloadSubmittedUrl',
+      url: 'https://x.com/user/status/123',
+    });
+    await Promise.resolve();
+    const second = await sendExternal({
+      action: 'downloadSubmittedUrl',
+      url: 'https://x.com/user/status/456',
+    });
+
+    expect(second).toEqual({ ok: false, code: 'busy', platform: 'twitter', count: 0 });
+    expect(chrome.tabs.create).toHaveBeenCalledOnce();
+    releaseCreate({ id: 83, status: 'complete' });
+    await expect(first).resolves.toEqual({ ok: true, code: 'ok', platform: 'twitter', count: 1 });
   });
 });
