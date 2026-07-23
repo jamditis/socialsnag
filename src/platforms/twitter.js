@@ -67,6 +67,7 @@ export function filterCapturedVideos(captured) {
 // match lets an external card masquerade as a quoted tweet and its path number be
 // read as a tweet id (issue #42).
 const STATUS_PATH = /\/status\/\d+/;
+const SUBMITTED_STATUS_PATH = /^\/(?:[A-Za-z0-9_]+\/status|i\/web\/status)\/(\d+)\/?$/;
 export function isTwitterStatusHref(href) {
   if (!href) return false;
   // A rooted path (/user/status/1) is same-origin, so its path decides. A
@@ -197,7 +198,11 @@ function targetHasVideo(target) {
 // resolveAll is the caller it passes allowFallback:false, so the last resort
 // returns a terminal empty result instead of recursing. Every other terminating
 // path (video detection, nearest-media) still runs, so this only cuts the loop.
-export function resolveSingle(srcUrl, target, { allowFallback = true } = {}) {
+export function resolveSingle(
+  srcUrl,
+  target,
+  { allowFallback = true, allowCapturedVideos = true } = {},
+) {
   // Check if this tweet contains a video — if so, prioritize video download
   // (Twitter blocks right-click on videos, so users right-click the tweet text instead)
   if (targetHasVideo(target)) {
@@ -205,7 +210,7 @@ export function resolveSingle(srcUrl, target, { allowFallback = true } = {}) {
     const isProfilePic = srcUrl && srcUrl.includes('/profile_images/');
     const isMediaImage = srcUrl && srcUrl.includes('/media/');
     if (!isMediaImage || isProfilePic || !srcUrl) {
-      return resolveVideo(target);
+      return resolveVideo(target, { allowCaptured: allowCapturedVideos });
     }
   }
 
@@ -238,26 +243,31 @@ export function resolveSingle(srcUrl, target, { allowFallback = true } = {}) {
         }
       }
       if (nearestMedia.tagName === 'VIDEO' || nearestMedia.closest?.('[data-testid="videoComponent"]')) {
-        return resolveVideo(target);
+        return resolveVideo(target, { allowCaptured: allowCapturedVideos });
       }
     }
   }
 
   if (target?.tagName === 'VIDEO' || target?.closest('video') || target?.closest('[data-testid="videoComponent"]')) {
-    return resolveVideo(target);
+    return resolveVideo(target, { allowCaptured: allowCapturedVideos });
   }
 
   // Last resort: try to find any media in the parent tweet. Skipped when
   // resolveAll is the caller, so a scoped-empty sweep terminates here instead of
   // re-entering resolveAll and looping.
-  return allowFallback ? resolveAll(target) : [];
+  return allowFallback ? resolveAll(target, { allowCapturedVideos }) : [];
 }
 
-export function resolveAll(target) {
+export function resolveAll(target, { allowCapturedVideos = true } = {}) {
   const found = findTweetScope(target);
   // Off any tweet: let resolveSingle try the click target itself, but with the
   // guard off so its last resort does not bounce back here and loop.
-  if (!found) return resolveSingle(target?.src || '', target, { allowFallback: false });
+  if (!found) {
+    return resolveSingle(target?.src || '', target, {
+      allowFallback: false,
+      allowCapturedVideos,
+    });
+  }
 
   const items = [];
   const id = statusIdInScope(found);
@@ -276,20 +286,85 @@ export function resolveAll(target) {
     }
   });
 
-  return items.length > 0 ? items : resolveSingle(target?.src || '', target, { allowFallback: false });
+  return items.length > 0 ? items : resolveSingle(target?.src || '', target, {
+    allowFallback: false,
+    allowCapturedVideos,
+  });
 }
 
-async function resolveVideo(target) {
-  // First try webRequest captures (advanced mode)
-  const captured = await getCapturedMedia();
-  const mp4s = filterCapturedVideos(captured);
+function submittedStatusId(pageUrl) {
+  try {
+    const url = new URL(pageUrl);
+    const host = url.hostname.toLowerCase();
+    if (host !== 'x.com' && host !== 'twitter.com'
+        && !host.endsWith('.x.com') && !host.endsWith('.twitter.com')) {
+      return null;
+    }
+    return url.pathname.match(SUBMITTED_STATUS_PATH)?.[1] || null;
+  } catch {
+    return null;
+  }
+}
 
-  if (mp4s.length > 0) {
-    return [{ url: mp4s[0].url, type: 'video', filename: null }];
+// Resolve only the tweet whose own permalink proves it is the submitted status.
+// The context-menu path stays target-based; this page path deliberately has no
+// first-tweet fallback because status pages also render replies and quoted posts.
+export async function resolvePage(
+  root = document,
+  pageUrl = globalThis.window?.location?.href || '',
+) {
+  const submittedItemLimit = 20;
+  const requestedId = submittedStatusId(pageUrl);
+  if (!requestedId) return [];
+
+  const candidates = root.querySelectorAll?.(TWEET_SELECTORS.join(', ')) || [];
+  for (const candidate of candidates) {
+    const found = findTweetScope(candidate);
+    if (found && statusIdInScope(found) === requestedId) {
+      const items = await resolveAll(candidate, { allowCapturedVideos: false });
+      if (!scopeHasVideo(found)) return items.slice(0, submittedItemLimit);
+
+      const hasVerifiedPlaceholder = items.some((item) => (
+        item?.needsVideoLookup === true && item.tweetId === requestedId
+      ));
+      if (hasVerifiedPlaceholder) return items.slice(0, submittedItemLimit);
+
+      return [
+        ...items.slice(0, submittedItemLimit - 1),
+        {
+          type: 'video',
+          filename: `tweet_${requestedId}`,
+          tweetId: requestedId,
+          needsVideoLookup: true,
+        },
+      ];
+    }
+  }
+  return [];
+}
+
+export async function resolveContentMessage(message, lastTarget, root = document) {
+  if (message.action === 'resolvePage') return resolvePage(root, message.pageUrl);
+  if (message.action !== 'resolve') return [];
+  return message.type === 'single'
+    ? resolveSingle(message.srcUrl, lastTarget)
+    : resolveAll(lastTarget);
+}
+
+async function resolveVideo(target, { allowCaptured = true } = {}) {
+  // First try webRequest captures (advanced mode)
+  if (allowCaptured) {
+    const captured = await getCapturedMedia();
+    const mp4s = filterCapturedVideos(captured);
+
+    if (mp4s.length > 0) {
+      return [{ url: mp4s[0].url, type: 'video', filename: null }];
+    }
   }
 
   // Fall back to API lookup via background script
-  const tweetId = tweetIdFor(target) || window.location.pathname.match(/\/status\/(\d+)/)?.[1];
+  const tweetId = tweetIdFor(target)
+    || globalThis.window?.location?.pathname.match(/\/status\/(\d+)/)?.[1];
   if (tweetId) {
     return [{ type: 'video', filename: `tweet_${tweetId}`, tweetId, needsVideoLookup: true }];
   }
@@ -307,13 +382,11 @@ function initContentScript() {
 
   // Listen for resolve requests from background
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message.action === 'resolve') {
+    if (message.action === 'resolve' || message.action === 'resolvePage') {
       const target = _lastTarget;
 
       Promise.resolve()
-        .then(() => (message.type === 'single'
-          ? resolveSingle(message.srcUrl, target)
-          : resolveAll(target)))
+        .then(() => resolveContentMessage(message, target, document))
         .then((urls) => {
           sendResponse({ urls: urls || [], platform: 'twitter' });
         })

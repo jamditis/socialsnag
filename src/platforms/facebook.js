@@ -35,6 +35,99 @@ export function extractVideoUrlFromScripts(scriptTexts) {
   return null;
 }
 
+const SUBMITTED_VIDEO_ID_FIELDS = new Set([
+  'id',
+  'fbid',
+  'video_id',
+  'videoId',
+  'videoID',
+  'video_id_original',
+]);
+const SUBMITTED_VIDEO_URL_FIELDS = [
+  'playable_url_quality_hd',
+  'browser_native_hd_url',
+  'hd_src',
+  'playable_url',
+  'browser_native_sd_url',
+  'sd_src',
+];
+const SUBMITTED_SCRIPT_BYTE_LIMIT = 5_000_000;
+const SUBMITTED_SCRIPT_TOTAL_LIMIT = 10_000_000;
+const SUBMITTED_SCRIPT_NODE_LIMIT = 25_000;
+
+function directStructuredVideoUrl(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  for (const field of SUBMITTED_VIDEO_URL_FIELDS) {
+    if (typeof value[field] === 'string' && value[field].startsWith('https://')) {
+      return value[field];
+    }
+  }
+  return null;
+}
+
+function directStructuredIds(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
+  return Object.entries(value)
+    .filter(([field, fieldValue]) => (
+      SUBMITTED_VIDEO_ID_FIELDS.has(field)
+      && (typeof fieldValue === 'string' || typeof fieldValue === 'number')
+    ))
+    .map(([, fieldValue]) => String(fieldValue));
+}
+
+function findMatchedStructuredVideo(value, requestedIds, state, depth = 0) {
+  if (!value || typeof value !== 'object' || depth > 24) return null;
+  if (++state.nodes > SUBMITTED_SCRIPT_NODE_LIMIT) return null;
+
+  if (!Array.isArray(value)) {
+    const localIds = directStructuredIds(value);
+    if (localIds.length > 0 && localIds.every((id) => requestedIds.has(id))) {
+      const found = directStructuredVideoUrl(value);
+      if (found) return found;
+    }
+  }
+
+  for (const child of Object.values(value)) {
+    const found = findMatchedStructuredVideo(child, requestedIds, state, depth + 1);
+    if (found) return found;
+  }
+  return null;
+}
+
+// Facebook's video element normally exposes a blob: URL. Its application/json
+// payloads carry the underlying HD/SD CDN URL, but a page can also contain reply,
+// recommendation, and advertisement videos. Parse only bounded scripts that name
+// the verified post id, then return a URL from the same
+// structured object. A document-wide playable_url regex cannot prove ownership.
+export function extractSubmittedVideoUrl(scriptTexts, videoIds) {
+  const requestedIds = new Set(
+    Array.from(videoIds || [], (id) => String(id)).filter(Boolean),
+  );
+  if (requestedIds.size === 0) return null;
+
+  let inspectedBytes = 0;
+  const state = { nodes: 0 };
+  for (const rawText of scriptTexts || []) {
+    if (typeof rawText !== 'string' || rawText.length === 0) continue;
+    if (rawText.length > SUBMITTED_SCRIPT_BYTE_LIMIT) continue;
+    inspectedBytes += rawText.length;
+    if (inspectedBytes > SUBMITTED_SCRIPT_TOTAL_LIMIT) break;
+    if (!SUBMITTED_VIDEO_URL_FIELDS.some((field) => rawText.includes(field))) continue;
+    if (![...requestedIds].some((id) => rawText.includes(id))) continue;
+
+    let value;
+    try {
+      value = JSON.parse(rawText);
+    } catch {
+      continue;
+    }
+    const found = findMatchedStructuredVideo(value, requestedIds, state);
+    if (found) return found;
+    if (state.nodes > SUBMITTED_SCRIPT_NODE_LIMIT) break;
+  }
+  return null;
+}
+
 // An <img> is content rather than chrome when it is big enough to be worth saving.
 // A zero or absent width means the element has not laid out yet, which is common for
 // images below the fold, so that case is kept rather than guessed away.
@@ -140,8 +233,8 @@ export function buildCapturedItems(captured, limit = 5) {
 
 // --- Browser wiring (not exported) ---
 
-function findVideoUrl(target) {
-  const container = target?.closest('[role="article"]') || target?.parentElement;
+function findVideoUrl(target, { allowDocumentScripts = true } = {}) {
+  const container = target?.closest?.('[role="article"]') || target?.parentElement;
   if (!container) return null;
 
   const video = container.querySelector('video');
@@ -150,13 +243,15 @@ function findVideoUrl(target) {
     if (src && !src.startsWith('blob:')) return src;
   }
 
+  if (!allowDocumentScripts) return null;
+
   // Try to find playable_url in page scripts
   const scripts = document.querySelectorAll('script');
   const scriptTexts = Array.from(scripts).map((s) => s.textContent);
   return extractVideoUrlFromScripts(scriptTexts);
 }
 
-function resolveSingle(srcUrl, target) {
+function resolveSingle(srcUrl, target, { allowDocumentScripts = true } = {}) {
   const url = upgradeUrl(srcUrl);
   if (url) {
     const id = extractPhotoId(srcUrl);
@@ -173,7 +268,7 @@ function resolveSingle(srcUrl, target) {
     }
   }
 
-  const videoUrl = findVideoUrl(target);
+  const videoUrl = findVideoUrl(target, { allowDocumentScripts });
   if (videoUrl) {
     return [{ url: videoUrl, type: 'video', filename: null }];
   }
@@ -181,13 +276,16 @@ function resolveSingle(srcUrl, target) {
   return [];
 }
 
-async function resolveAll(target) {
+async function resolveAll(
+  target,
+  { allowCaptured = true, allowDocumentScripts = true } = {},
+) {
   const post = findPostContainer(target, [
     '[role="article"]',
     '[data-pagelet*="FeedUnit"]',
     '[data-pagelet*="ProfileTimeline"]',
   ]);
-  if (!post) return resolveSingle(target?.src || '', target);
+  if (!post) return resolveSingle(target?.src || '', target, { allowDocumentScripts });
 
   // querySelectorAll returns document order, which is the album's own slide order.
   const domImages = Array.from(post.querySelectorAll('img[src*="fbcdn.net"]'));
@@ -196,6 +294,9 @@ async function resolveAll(target) {
   // Fall back to webRequest captures if DOM is sparse. Numbering restarts at 1 by
   // construction: this branch only runs when the DOM walk produced nothing.
   if (items.length === 0) {
+    if (!allowCaptured) {
+      return resolveSingle(target?.src || '', target, { allowDocumentScripts });
+    }
     const captured = await getCapturedMedia();
     const fallback = buildCapturedItems(captured);
     if (fallback.dropped > 0) {
@@ -206,10 +307,162 @@ async function resolveAll(target) {
     }
     return fallback.items.length > 0
       ? fallback.items
-      : resolveSingle(target?.src || '', target);
+      : resolveSingle(target?.src || '', target, { allowDocumentScripts });
   }
 
   return items;
+}
+
+function facebookSubmittedKey(rawUrl) {
+  let url;
+  try {
+    url = new URL(rawUrl, 'https://www.facebook.com');
+  } catch {
+    return null;
+  }
+  const host = url.hostname.toLowerCase();
+  if (host !== 'facebook.com' && !host.endsWith('.facebook.com')) return null;
+
+  const path = url.pathname;
+  let match = path.match(/^\/groups\/[^/]+\/(?:posts|permalink)\/([^/]+)\/?$/)
+    || path.match(/^\/[^/]+\/posts\/([^/]+)\/?$/);
+  if (match) return `post:${match[1]}`;
+
+  match = path.match(/^\/[^/]+\/photos\/(?:[^/]+\/)?(\d+)\/?$/);
+  if (match) return `photo:${match[1]}`;
+
+  match = path.match(/^\/[^/]+\/videos\/(\d+)\/?$/)
+    || path.match(/^\/reel\/(\d+)\/?$/);
+  if (match) return `video:${match[1]}`;
+
+  match = path.match(/^\/share\/([prv])\/([A-Za-z0-9_-]+)\/?$/);
+  if (match) return `share:${match[1]}:${match[2]}`;
+
+  if (path === '/photo.php' || /^\/photo\/?$/.test(path)) {
+    const id = url.searchParams.get('fbid');
+    return id ? `photo:${id}` : null;
+  }
+  if (path === '/permalink.php' || path === '/story.php') {
+    const id = url.searchParams.get('story_fbid');
+    return id ? `post:${id}` : null;
+  }
+  if (/^\/watch\/?$/.test(path)) {
+    const id = url.searchParams.get('v');
+    return id ? `video:${id}` : null;
+  }
+  return null;
+}
+
+function hasFacebookPermalink(container, requestedKey) {
+  const links = container.querySelectorAll?.('a[href]') || [];
+  return Array.from(links).some((link) => facebookSubmittedKey(link.href) === requestedKey);
+}
+
+function submittedVideoIds(requestedKey) {
+  const ids = new Set();
+  const requestedId = requestedKey?.match(/^(?:post|photo|video):(.+)$/)?.[1];
+  if (requestedId) ids.add(requestedId);
+  return ids;
+}
+
+function directVideoIds(video) {
+  return new Set([
+    video?.dataset?.videoId,
+    video?.getAttribute?.('data-video-id'),
+  ].filter((id) => id !== null && id !== undefined && String(id) !== '')
+    .map((id) => String(id)));
+}
+
+function directVideoMatches(video, requestedIds) {
+  const ownIds = directVideoIds(video);
+  return ownIds.size > 0 && [...ownIds].every((id) => requestedIds.has(id));
+}
+
+function resolveSubmittedVideo(container, requestedKey, root) {
+  const ids = submittedVideoIds(requestedKey);
+  const filenameId = [...ids][0] || null;
+  const queriedVideos = Array.from(container.querySelectorAll?.('video') || []);
+  const fallbackVideo = container.querySelector?.('video');
+  const videos = queriedVideos.length > 0
+    ? queriedVideos
+    : (fallbackVideo ? [fallbackVideo] : []);
+
+  const directVideo = videos.find((video) => {
+    const url = video.currentSrc || video.src || video.querySelector?.('source')?.src;
+    return url && !url.startsWith('blob:') && directVideoMatches(video, ids);
+  });
+  if (directVideo) {
+    const directUrl = directVideo.currentSrc
+      || directVideo.src
+      || directVideo.querySelector?.('source')?.src;
+    return {
+      url: directUrl,
+      type: 'video',
+      filename: filenameId ? `video_${filenameId}` : null,
+    };
+  }
+
+  const scriptTexts = Array.from(root.querySelectorAll?.('script') || [], (script) => (
+    script.textContent || ''
+  ));
+  const url = extractSubmittedVideoUrl(scriptTexts, ids);
+  return url ? {
+    url,
+    type: 'video',
+    filename: filenameId ? `video_${filenameId}` : null,
+  } : null;
+}
+
+// Resolve only a container or media link whose permalink proves it owns the
+// submitted Facebook identifier. Captured-media fallback is intentionally off
+// here because those requests are page-wide and cannot prove post ownership.
+export async function resolvePage(
+  root = document,
+  pageUrl = globalThis.window?.location?.href || '',
+) {
+  const requestedKey = facebookSubmittedKey(pageUrl);
+  if (!requestedKey) return [];
+
+  const candidates = root.querySelectorAll?.(
+    '[role="article"], [data-pagelet*="FeedUnit"], '
+    + '[data-pagelet*="ProfileTimeline"]',
+  ) || [];
+  for (const candidate of candidates) {
+    if (hasFacebookPermalink(candidate, requestedKey)) {
+      const domImages = Array.from(
+        candidate.querySelectorAll?.('img[src*="fbcdn.net"]') || [],
+      );
+      const { items } = buildImageItems(domImages);
+      const video = resolveSubmittedVideo(candidate, requestedKey, root);
+      if (!video || items.some((item) => item.url === video.url)) return items;
+      return [...items, video];
+    }
+  }
+
+  const links = root.querySelectorAll?.('a[href]') || [];
+  for (const link of links) {
+    if (facebookSubmittedKey(link.href) !== requestedKey) continue;
+    const media = link.querySelector?.(
+      'img[data-visualcompletion="media-vc-image"], '
+      + '[data-pagelet*="Video"] video, video[data-video-id]',
+    );
+    if (!media) return [];
+    const items = media.tagName === 'IMG'
+      ? resolveSingle(media.src || '', media, { allowDocumentScripts: false })
+      : [];
+    const video = resolveSubmittedVideo(link, requestedKey, root);
+    if (!video || items.some((item) => item.url === video.url)) return items;
+    return [...items, video];
+  }
+  return [];
+}
+
+export async function resolveContentMessage(message, lastTarget, root = document) {
+  if (message.action === 'resolvePage') return resolvePage(root, message.pageUrl);
+  if (message.action !== 'resolve') return [];
+  return message.type === 'single'
+    ? resolveSingle(message.srcUrl, lastTarget)
+    : resolveAll(lastTarget);
 }
 
 function initContentScript() {
@@ -222,13 +475,11 @@ function initContentScript() {
 
   // Listen for resolve requests from background
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message.action === 'resolve') {
+    if (message.action === 'resolve' || message.action === 'resolvePage') {
       const target = _lastTarget;
 
       Promise.resolve()
-        .then(() => (message.type === 'single'
-          ? resolveSingle(message.srcUrl, target)
-          : resolveAll(target)))
+        .then(() => resolveContentMessage(message, target, document))
         .then((urls) => {
           sendResponse({ urls: urls || [], platform: 'facebook' });
         })

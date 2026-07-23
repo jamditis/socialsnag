@@ -1,4 +1,5 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
 import {
   detectPlatform,
   guessExtension,
@@ -11,6 +12,8 @@ import {
   downloadItemsAsZip,
   resolveItemUrl,
   resolveViaApi,
+  parseSubmittedPageUrl,
+  orchestrateSubmittedDownload,
 } from '../src/background.js';
 import { mapIgStatusToMessage } from '../src/platforms/instagram-api.js';
 
@@ -116,6 +119,82 @@ describe('validateDownloadUrl', () => {
   });
 });
 
+describe('parseSubmittedPageUrl', () => {
+  it.each([
+    ['https://www.instagram.com/p/ABC_123/?igsh=share#comments', 'instagram', 'https://www.instagram.com/p/ABC_123/?igsh=share'],
+    ['https://instagram.com/reel/C9-ab_1/', 'instagram', 'https://instagram.com/reel/C9-ab_1/'],
+    ['https://www.instagram.com/tv/IGTV123/', 'instagram', 'https://www.instagram.com/tv/IGTV123/'],
+    ['https://www.instagram.com/stories/natgeo/1234567890/', 'instagram', 'https://www.instagram.com/stories/natgeo/1234567890/'],
+    ['https://twitter.com/jack/status/20', 'twitter', 'https://twitter.com/jack/status/20'],
+    ['https://x.com/example_user/status/1234567890123456789?s=20', 'twitter', 'https://x.com/example_user/status/1234567890123456789?s=20'],
+    ['https://X.COM/example_user/status/123#section', 'twitter', 'https://X.COM/example_user/status/123'],
+    ['https://x.com/i/web/status/1234567890123456789?s=20', 'twitter', 'https://x.com/i/web/status/1234567890123456789?s=20'],
+    ['https://twitter.com/i/web/status/20', 'twitter', 'https://twitter.com/i/web/status/20'],
+    ['https://www.facebook.com/example/posts/1234567890/', 'facebook', 'https://www.facebook.com/example/posts/1234567890/'],
+    ['https://www.facebook.com/example/posts/pfbid02AbCdEf/', 'facebook', 'https://www.facebook.com/example/posts/pfbid02AbCdEf/'],
+    ['https://www.facebook.com/groups/example/posts/1234567890/', 'facebook', 'https://www.facebook.com/groups/example/posts/1234567890/'],
+    ['https://www.facebook.com/groups/123/permalink/4567890123/', 'facebook', 'https://www.facebook.com/groups/123/permalink/4567890123/'],
+    ['https://www.facebook.com/permalink.php?story_fbid=1234567890&id=42', 'facebook', 'https://www.facebook.com/permalink.php?story_fbid=1234567890&id=42'],
+    ['https://www.facebook.com/story.php?story_fbid=pfbid02AbCdEf&id=42', 'facebook', 'https://www.facebook.com/story.php?story_fbid=pfbid02AbCdEf&id=42'],
+    ['https://www.facebook.com/photo.php?fbid=1234567890&id=42', 'facebook', 'https://www.facebook.com/photo.php?fbid=1234567890&id=42'],
+    ['https://www.facebook.com/photo/?fbid=1234567890', 'facebook', 'https://www.facebook.com/photo/?fbid=1234567890'],
+    ['https://www.facebook.com/example/photos/a.123/4567890123/', 'facebook', 'https://www.facebook.com/example/photos/a.123/4567890123/'],
+    ['https://www.facebook.com/example/videos/1234567890/', 'facebook', 'https://www.facebook.com/example/videos/1234567890/'],
+    ['https://www.facebook.com/reel/1234567890/', 'facebook', 'https://www.facebook.com/reel/1234567890/'],
+    ['https://www.facebook.com/watch/?v=1234567890', 'facebook', 'https://www.facebook.com/watch/?v=1234567890'],
+    ['https://www.facebook.com/share/p/AbC_def-123/', 'facebook', 'https://www.facebook.com/share/p/AbC_def-123/'],
+    ['https://www.facebook.com/share/r/AbC_def-123/', 'facebook', 'https://www.facebook.com/share/r/AbC_def-123/'],
+    ['https://www.facebook.com/share/v/AbC_def-123/', 'facebook', 'https://www.facebook.com/share/v/AbC_def-123/'],
+    ['https://bsky.app/profile/alice.bsky.social/post/3labc123xyz', 'bluesky', 'https://bsky.app/profile/alice.bsky.social/post/3labc123xyz'],
+    ['https://bsky.app/profile/did:plc:abc123/post/3lxyz789', 'bluesky', 'https://bsky.app/profile/did:plc:abc123/post/3lxyz789'],
+  ])('accepts an exact post URL: %s', (raw, platform, normalized) => {
+    expect(parseSubmittedPageUrl(raw)).toEqual({ url: normalized, platform });
+  });
+
+  it.each([
+    ['', 'invalid_url'],
+    [null, 'invalid_url'],
+    ['not a url', 'invalid_url'],
+    ['http://x.com/user/status/123', 'invalid_url'],
+    ['ftp://www.instagram.com/p/ABC/', 'invalid_url'],
+    ['https://user:secret@x.com/user/status/123', 'invalid_url'],
+    ['https://x.com:8443/user/status/123', 'invalid_url'],
+    [`https://x.com/user/status/${'1'.repeat(2100)}`, 'invalid_url'],
+    ['https://www.instagram.com/stories/highlights/123/', 'invalid_url'],
+    ['https://www.instagram.com/accounts/login/', 'invalid_url'],
+    ['https://www.instagram.com/example/', 'invalid_url'],
+    ['https://x.com/settings/account', 'invalid_url'],
+    ['https://x.com/user/status/not-a-number', 'invalid_url'],
+    ['https://x.com/user/status/123/photo/1', 'invalid_url'],
+    ['https://x.com/i/web/status/not-a-number', 'invalid_url'],
+    ['https://x.com/i/web/status/123/photo/1', 'invalid_url'],
+    ['https://x.com/i/web/status/', 'invalid_url'],
+    ['https://www.facebook.com/login/', 'invalid_url'],
+    ['https://www.facebook.com/settings/', 'invalid_url'],
+    ['https://www.facebook.com/settings/posts/123', 'invalid_url'],
+    ['https://www.facebook.com/login/posts/123', 'invalid_url'],
+    ['https://www.facebook.com/!!!/posts/123/', 'invalid_url'],
+    ['https://www.facebook.com/example/photos/not-a-facebook-photo-route/123/', 'invalid_url'],
+    ['https://www.facebook.com/example/', 'invalid_url'],
+    ['https://www.facebook.com/watch/', 'invalid_url'],
+    ['https://bsky.app/profile/alice.bsky.social', 'invalid_url'],
+    ['https://bsky.app/settings', 'invalid_url'],
+    ['https://bsky.app/profile/::::/post/abc', 'invalid_url'],
+    ['https://staging.bsky.app/profile/alice.bsky.social/post/3labc123xyz', 'unsupported_url'],
+    [' https://x.com/user/status/123', 'invalid_url'],
+    ['https://x.com/user/status/123 ', 'invalid_url'],
+    ['https://evilinstagram.com/p/ABC/', 'unsupported_url'],
+    ['https://instagram.com.evil.example/p/ABC/', 'unsupported_url'],
+    ['https://notx.com/user/status/123', 'unsupported_url'],
+    ['https://x.com.evil.example/user/status/123', 'unsupported_url'],
+    ['https://evilfacebook.com/example/posts/123', 'unsupported_url'],
+    ['https://bsky.app.evil.example/profile/a/post/3abc', 'unsupported_url'],
+    ['https://example.com/x.com/user/status/123', 'unsupported_url'],
+  ])('rejects unsafe or non-post input: %s', (raw, code) => {
+    expect(parseSubmittedPageUrl(raw)).toEqual({ error: code });
+  });
+});
+
 describe('sanitizeDownloadPath', () => {
   it('assembles correct path with platform folder', () => {
     const path = sanitizeDownloadPath('photo_123', 'instagram', '.jpg');
@@ -179,6 +258,7 @@ describe('resolveInstagramPost', () => {
     expect(result.items).toBeUndefined();
     // The reason rides the return value, so a concurrent click cannot claim it (#30).
     expect(result.error).toBe(mapIgStatusToMessage(429));
+    expect(result.code).toBe('rate_limited');
   });
 
   it('gives each concurrent lookup its own failure reason (#30)', async () => {
@@ -237,6 +317,30 @@ describe('resolveInstagramStories', () => {
     const { items } = await resolveInstagramStories({ username: 'x', storyId: '2' });
     expect(items).toHaveLength(1);
     expect(items[0].url).toBe('https://cdn.cdninstagram.com/2.jpg');
+  });
+
+  it('returns a stable auth code when the account lookup requires login', async () => {
+    installFetch((url) => url.includes('web_profile_info')
+      ? { status: 401, json: {} }
+      : null);
+
+    const result = await resolveInstagramStories({ username: 'private', storyId: null });
+
+    expect(result.error).toBe(mapIgStatusToMessage(401));
+    expect(result.code).toBe('auth_required');
+  });
+
+  it('returns a stable no-media code for an empty active tray', async () => {
+    installFetch((url) => {
+      if (url.includes('web_profile_info')) return { status: 200, json: { data: { user: { id: '55' } } } };
+      if (url.includes('reels_media')) return { status: 200, json: { reels_media: [{ items: [] }] } };
+      return null;
+    });
+
+    const result = await resolveInstagramStories({ username: 'x', storyId: null });
+
+    expect(result.error).toBe(mapIgStatusToMessage(0));
+    expect(result.code).toBe('no_media');
   });
 });
 
@@ -1325,5 +1429,907 @@ describe('resolveViaApi miss classification', () => {
     globalThis.chrome.storage.sync._reset();
     await resolveViaApi('bluesky', 'https://bsky.app/profile/a/post/b');
     expect(logged).toEqual([]);
+  });
+});
+
+const LANDING_PAGE_SENDER = {
+  origin: 'https://jamditis.github.io',
+  url: 'https://jamditis.github.io/socialsnag/',
+};
+
+function sendExternal(request, sender = LANDING_PAGE_SENDER) {
+  const handler = chrome.runtime.onMessageExternal._listeners[0];
+  return new Promise((resolve) => {
+    const keepOpen = handler(request, sender, resolve);
+    expect(keepOpen).toBe(true);
+  });
+}
+
+function settleWithin(promise, timeoutMs = 30) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(null), timeoutMs);
+    promise.then(
+      (result) => {
+        clearTimeout(timer);
+        resolve({ result });
+      },
+      (error) => {
+        clearTimeout(timer);
+        resolve({ error });
+      },
+    );
+  });
+}
+
+describe('submitted URL external bridge', () => {
+  const originalTabs = {
+    create: chrome.tabs.create,
+    get: chrome.tabs.get,
+    remove: chrome.tabs.remove,
+    sendMessage: chrome.tabs.sendMessage,
+  };
+  const originalDownload = chrome.downloads.download;
+  const originalSearch = chrome.downloads.search;
+
+  beforeEach(() => {
+    chrome.storage.local._reset();
+    chrome.storage.sync._reset();
+    chrome.tabs.create = originalTabs.create;
+    chrome.tabs.get = originalTabs.get;
+    chrome.tabs.remove = originalTabs.remove;
+    chrome.tabs.sendMessage = originalTabs.sendMessage;
+    chrome.downloads.download = originalDownload;
+    chrome.downloads.search = originalSearch;
+  });
+
+  afterEach(() => {
+    resetFetch();
+    chrome.tabs.create = originalTabs.create;
+    chrome.tabs.get = originalTabs.get;
+    chrome.tabs.remove = originalTabs.remove;
+    chrome.tabs.sendMessage = originalTabs.sendMessage;
+    chrome.downloads.download = originalDownload;
+    chrome.downloads.search = originalSearch;
+  });
+
+  it('exposes only the exact GitHub Pages path in externally_connectable', () => {
+    const manifest = JSON.parse(readFileSync(new URL('../manifest.json', import.meta.url), 'utf8'));
+    expect(manifest.externally_connectable).toEqual({
+      matches: ['https://jamditis.github.io/socialsnag/*'],
+    });
+  });
+
+  it('uses a publishable feature version consistently', () => {
+    const manifest = JSON.parse(readFileSync(new URL('../manifest.json', import.meta.url), 'utf8'));
+    const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+    const packageLock = JSON.parse(readFileSync(new URL('../package-lock.json', import.meta.url), 'utf8'));
+
+    expect(manifest.version).toBe('1.3.0');
+    expect(packageJson.version).toBe(manifest.version);
+    expect(packageLock.version).toBe(manifest.version);
+    expect(packageLock.packages[''].version).toBe(manifest.version);
+  });
+
+  it.each([
+    { origin: 'http://jamditis.github.io', url: 'http://jamditis.github.io/socialsnag/' },
+    { origin: 'https://jamditis.github.io', url: 'https://jamditis.github.io/socialsnag-evil/' },
+    { origin: 'https://jamditis.github.io', url: 'https://jamditis.github.io/not-socialsnag/' },
+    { origin: 'https://jamditis.github.io.evil.test', url: 'https://jamditis.github.io.evil.test/socialsnag/' },
+    { origin: 'https://jamditis.github.io:8443', url: 'https://jamditis.github.io:8443/socialsnag/' },
+    { origin: 'https://jamditis.github.io', url: 'https://user@jamditis.github.io/socialsnag/' },
+  ])('rejects an external sender outside the exact site boundary', async (sender) => {
+    const create = vi.fn();
+    chrome.tabs.create = create;
+
+    await expect(sendExternal(
+      { action: 'downloadSubmittedUrl', url: 'https://x.com/user/status/123' },
+      sender,
+    )).resolves.toEqual({ ok: false, code: 'invalid_sender', platform: null, count: 0 });
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('accepts the exact origin with a separately validated relative sender path', async () => {
+    const create = vi.fn();
+    chrome.tabs.create = create;
+
+    await expect(sendExternal(
+      { action: 'downloadSubmittedUrl', url: 'https://x.com/settings' },
+      { origin: 'https://jamditis.github.io', url: '/socialsnag/index.html' },
+    )).resolves.toEqual({ ok: false, code: 'invalid_url', platform: null, count: 0 });
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [{ action: 'other', url: 'https://x.com/user/status/123' }, 'invalid_request'],
+    [{ action: 'downloadSubmittedUrl' }, 'invalid_request'],
+    [{ action: 'downloadSubmittedUrl', url: 'https://x.com/user/status/123', extra: true }, 'invalid_request'],
+    [{ action: 'downloadSubmittedUrl', url: `https://x.com/user/status/${'1'.repeat(2100)}` }, 'invalid_url'],
+  ])('rejects an invalid request before opening a tab', async (request, code) => {
+    const create = vi.fn();
+    chrome.tabs.create = create;
+
+    await expect(sendExternal(request)).resolves.toEqual({
+      ok: false,
+      code,
+      platform: null,
+      count: 0,
+    });
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('rejects malformed and unsupported URLs before opening a tab', async () => {
+    const create = vi.fn();
+    chrome.tabs.create = create;
+
+    await expect(orchestrateSubmittedDownload('not a url')).resolves.toEqual({
+      ok: false, code: 'invalid_url', platform: null, count: 0,
+    });
+    await expect(orchestrateSubmittedDownload('https://example.com/post/1')).resolves.toEqual({
+      ok: false, code: 'unsupported_url', platform: null, count: 0,
+    });
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['twitter', 'https://x.com/user/status/123'],
+    ['instagram', 'https://www.instagram.com/p/ABC/'],
+  ])('stops a submitted %s job when that platform is disabled', async (platform, url) => {
+    await chrome.storage.sync.set({ [`platform_${platform}`]: false });
+    const submittedFetch = vi.fn();
+    chrome.tabs.create = vi.fn();
+    chrome.tabs.sendMessage = vi.fn();
+    chrome.downloads.download = vi.fn();
+
+    const result = await orchestrateSubmittedDownload(url, { submittedFetch });
+
+    expect(result).toEqual({
+      ok: false, code: 'platform_disabled', platform, count: 0,
+    });
+    expect(submittedFetch).not.toHaveBeenCalled();
+    expect(chrome.tabs.create).not.toHaveBeenCalled();
+    expect(chrome.tabs.sendMessage).not.toHaveBeenCalled();
+    expect(chrome.downloads.download).not.toHaveBeenCalled();
+  });
+
+  it('downloads Instagram media through the authenticated API without opening a tab', async () => {
+    installFetch((url) => url.includes('i.instagram.com') ? {
+      status: 200,
+      json: { items: [{ carousel_media: [
+        igImgSlide('https://cdn.cdninstagram.com/one.jpg'),
+        igVidSlide('https://cdn.cdninstagram.com/two.mp4'),
+      ] }] },
+    } : null);
+    const create = vi.fn();
+    const download = vi.fn()
+      .mockResolvedValueOnce(41)
+      .mockResolvedValueOnce(42);
+    chrome.tabs.create = create;
+    chrome.downloads.download = download;
+    chrome.downloads.search = async ({ id }) => [{
+      id,
+      state: 'complete',
+      filename: `/downloads/${id === 41 ? 'one.jpg' : 'two.mp4'}`,
+    }];
+
+    const result = await orchestrateSubmittedDownload('https://www.instagram.com/p/ABC/');
+
+    expect(result).toEqual({ ok: true, code: 'ok', platform: 'instagram', count: 2 });
+    expect(create).not.toHaveBeenCalled();
+    expect(download).toHaveBeenCalledTimes(2);
+    const { downloadHistory } = await chrome.storage.local.get({ downloadHistory: [] });
+    expect(downloadHistory).toHaveLength(2);
+    expect(downloadHistory.every((entry) => !('url' in entry))).toBe(true);
+  });
+
+  it('downloads an active Instagram story through the authenticated API without opening a tab', async () => {
+    installFetch((url) => {
+      if (url.includes('web_profile_info')) {
+        return { status: 200, json: { data: { user: { id: '55' } } } };
+      }
+      if (url.includes('reels_media')) {
+        return {
+          status: 200,
+          json: { reels_media: [{ items: [
+            igStoryImg('123', 'https://cdn.cdninstagram.com/story.jpg'),
+          ] }] },
+        };
+      }
+      return null;
+    });
+    chrome.tabs.create = vi.fn();
+    chrome.downloads.download = vi.fn(async () => 43);
+    chrome.downloads.search = async () => [{
+      id: 43, state: 'complete', filename: '/downloads/story_123.jpg',
+    }];
+
+    const result = await orchestrateSubmittedDownload(
+      'https://www.instagram.com/stories/natgeo/123/',
+    );
+
+    expect(result).toEqual({ ok: true, code: 'ok', platform: 'instagram', count: 1 });
+    expect(chrome.tabs.create).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [401, 'auth_required'],
+    [429, 'rate_limited'],
+  ])('returns a stable Instagram API failure for status %s', async (status, code) => {
+    installFetch(() => ({ status, json: {} }));
+    chrome.tabs.create = vi.fn();
+
+    const result = await orchestrateSubmittedDownload('https://www.instagram.com/p/ABC/');
+
+    expect(result).toEqual({ ok: false, code, platform: 'instagram', count: 0 });
+    expect(chrome.tabs.create).not.toHaveBeenCalled();
+  });
+
+  it('downloads multiple tab-resolved files, records history, redacts URLs, and closes the created tab', async () => {
+    const remove = vi.fn();
+    chrome.tabs.create = vi.fn(async () => ({ id: 77, status: 'complete' }));
+    chrome.tabs.get = vi.fn(async () => ({
+      id: 77, status: 'complete', url: 'https://x.com/user/status/123',
+    }));
+    chrome.tabs.remove = remove;
+    chrome.tabs.sendMessage = vi.fn(async () => ({
+      platform: 'twitter',
+      urls: [
+        { url: 'https://pbs.twimg.com/media/one.jpg', type: 'image', filename: 'tweet_1_1' },
+        { url: 'https://pbs.twimg.com/media/two.jpg', type: 'image', filename: 'tweet_1_2' },
+      ],
+    }));
+    chrome.downloads.download = vi.fn()
+      .mockResolvedValueOnce(51)
+      .mockResolvedValueOnce(52);
+    chrome.downloads.search = async ({ id }) => [{
+      id,
+      state: 'complete',
+      filename: `/downloads/tweet_${id}.jpg`,
+    }];
+
+    const result = await orchestrateSubmittedDownload('https://x.com/user/status/123');
+
+    expect(result).toEqual({ ok: true, code: 'ok', platform: 'twitter', count: 2 });
+    expect(Object.keys(result).sort()).toEqual(['code', 'count', 'ok', 'platform']);
+    expect(JSON.stringify(result)).not.toContain('x.com/user/status');
+    expect(JSON.stringify(result)).not.toContain('twimg.com');
+    expect(remove).toHaveBeenCalledOnce();
+    expect(remove).toHaveBeenCalledWith(77);
+    const { downloadHistory } = await chrome.storage.local.get({ downloadHistory: [] });
+    expect(downloadHistory).toHaveLength(2);
+  });
+
+  it.each([
+    ['https://x.com/i/web/status/123', 'https://x.com/user/status/123'],
+    ['https://twitter.com/user/status/123', 'https://twitter.com/i/web/status/123'],
+  ])('keeps the submitted X post identity across a canonical redirect', async (submitted, finalUrl) => {
+    chrome.tabs.create = vi.fn(async () => ({ id: 75, status: 'complete' }));
+    chrome.tabs.get = vi.fn(async () => ({
+      id: 75, status: 'complete', url: finalUrl,
+    }));
+    chrome.tabs.remove = vi.fn();
+    chrome.tabs.sendMessage = vi.fn(async () => ({
+      platform: 'twitter',
+      urls: [{
+        url: 'https://pbs.twimg.com/media/canonical.jpg',
+        type: 'image',
+        filename: 'tweet_123',
+      }],
+    }));
+    chrome.downloads.download = vi.fn(async () => 49);
+    chrome.downloads.search = async () => [{
+      id: 49, state: 'complete', filename: '/downloads/tweet_123.jpg',
+    }];
+
+    const result = await orchestrateSubmittedDownload(submitted);
+
+    expect(result).toEqual({ ok: true, code: 'ok', platform: 'twitter', count: 1 });
+    expect(chrome.tabs.sendMessage).toHaveBeenCalledWith(75, {
+      action: 'resolvePage',
+      pageUrl: finalUrl,
+    });
+    expect(chrome.tabs.remove).toHaveBeenCalledWith(75);
+  });
+
+  it('caps a resolved post before downloading', async () => {
+    const urls = Array.from({ length: 25 }, (_, index) => ({
+      url: `https://pbs.twimg.com/media/${index}.jpg`,
+      type: 'image',
+      filename: `tweet_${index}`,
+    }));
+    chrome.tabs.create = vi.fn(async () => ({ id: 76, status: 'complete' }));
+    chrome.tabs.get = vi.fn(async () => ({
+      id: 76, status: 'complete', url: 'https://x.com/user/status/123',
+    }));
+    chrome.tabs.remove = vi.fn();
+    chrome.tabs.sendMessage = vi.fn(async () => ({ platform: 'twitter', urls }));
+    chrome.downloads.download = vi.fn(async () => 50);
+    chrome.downloads.search = async () => [{
+      id: 50, state: 'complete', filename: '/downloads/tweet.jpg',
+    }];
+
+    const result = await orchestrateSubmittedDownload('https://x.com/user/status/123');
+
+    expect(result).toEqual({ ok: true, code: 'ok', platform: 'twitter', count: 20 });
+    expect(chrome.downloads.download).toHaveBeenCalledTimes(20);
+    expect(chrome.tabs.remove).toHaveBeenCalledWith(76);
+  });
+
+  it('times out a tab that never completes and still closes it', async () => {
+    const remove = vi.fn();
+    chrome.tabs.create = vi.fn(async () => ({ id: 78, status: 'loading' }));
+    chrome.tabs.get = vi.fn(async () => ({
+      id: 78, status: 'loading', url: 'https://x.com/user/status/123',
+    }));
+    chrome.tabs.remove = remove;
+    chrome.tabs.sendMessage = vi.fn();
+
+    const result = await orchestrateSubmittedDownload(
+      'https://x.com/user/status/123',
+      { tabLoadTimeoutMs: 5, retryDelayMs: 0 },
+    );
+
+    expect(result).toEqual({
+      ok: false, code: 'resolution_timeout', platform: 'twitter', count: 0,
+    });
+    expect(chrome.tabs.sendMessage).not.toHaveBeenCalled();
+    expect(remove).toHaveBeenCalledWith(78);
+  });
+
+  it('retries while SPA media renders, then downloads the resolved item', async () => {
+    chrome.tabs.create = vi.fn(async () => ({ id: 79, status: 'complete' }));
+    chrome.tabs.get = vi.fn(async () => ({
+      id: 79,
+      status: 'complete',
+      url: 'https://bsky.app/profile/a.bsky.social/post/3abc',
+    }));
+    chrome.tabs.remove = vi.fn();
+    chrome.tabs.sendMessage = vi.fn()
+      .mockRejectedValueOnce(new Error('content script not ready'))
+      .mockResolvedValueOnce({ urls: [], platform: 'bluesky' })
+      .mockResolvedValueOnce({
+        urls: [{
+          url: 'https://cdn.bsky.app/img/feed_fullsize/plain/did:plc:a/bafk@jpeg',
+          type: 'image',
+          filename: 'post_3abc',
+        }],
+        platform: 'bluesky',
+      });
+    chrome.downloads.download = vi.fn(async () => 61);
+    chrome.downloads.search = async () => [{
+      id: 61, state: 'complete', filename: '/downloads/post_3abc.jpg',
+    }];
+
+    const result = await orchestrateSubmittedDownload(
+      'https://bsky.app/profile/a.bsky.social/post/3abc',
+      { resolveAttempts: 3, retryDelayMs: 0 },
+    );
+
+    expect(result).toEqual({ ok: true, code: 'ok', platform: 'bluesky', count: 1 });
+    expect(chrome.tabs.sendMessage).toHaveBeenCalledTimes(3);
+    expect(chrome.tabs.sendMessage).toHaveBeenLastCalledWith(79, {
+      action: 'resolvePage',
+      pageUrl: 'https://bsky.app/profile/a.bsky.social/post/3abc',
+    });
+    expect(chrome.tabs.remove).toHaveBeenCalledWith(79);
+  });
+
+  it('resolves a Facebook share URL through its validated canonical redirect URL', async () => {
+    const finalUrl = 'https://www.facebook.com/example/posts/9876543210/?mibextid=abc';
+    chrome.tabs.create = vi.fn(async () => ({ id: 85, status: 'complete' }));
+    chrome.tabs.get = vi.fn(async () => ({ id: 85, status: 'complete', url: finalUrl }));
+    chrome.tabs.remove = vi.fn();
+    chrome.tabs.sendMessage = vi.fn(async () => ({
+      platform: 'facebook',
+      urls: [{
+        url: 'https://scontent.xx.fbcdn.net/9876543210.jpg',
+        type: 'image',
+        filename: 'photo_9876543210',
+      }],
+    }));
+    chrome.downloads.download = vi.fn(async () => 86);
+    chrome.downloads.search = async () => [{
+      id: 86, state: 'complete', filename: '/downloads/photo_9876543210.jpg',
+    }];
+
+    const result = await orchestrateSubmittedDownload(
+      'https://www.facebook.com/share/p/AbC_def-123/',
+    );
+
+    expect(result).toEqual({ ok: true, code: 'ok', platform: 'facebook', count: 1 });
+    expect(chrome.tabs.sendMessage).toHaveBeenCalledWith(85, {
+      action: 'resolvePage',
+      pageUrl: finalUrl,
+    });
+    expect(chrome.tabs.remove).toHaveBeenCalledWith(85);
+  });
+
+  it('keeps a modern Facebook photo URL anchored through its canonical redirect', async () => {
+    const submitted = 'https://www.facebook.com/photo/?fbid=1234567890';
+    const finalUrl = 'https://www.facebook.com/example/photos/a.42/1234567890/';
+    chrome.tabs.create = vi.fn(async () => ({ id: 86, status: 'complete' }));
+    chrome.tabs.get = vi.fn(async () => ({ id: 86, status: 'complete', url: finalUrl }));
+    chrome.tabs.remove = vi.fn();
+    chrome.tabs.sendMessage = vi.fn(async () => ({
+      platform: 'facebook',
+      urls: [{
+        url: 'https://scontent.xx.fbcdn.net/1234567890.jpg',
+        type: 'image',
+        filename: 'photo_1234567890',
+      }],
+    }));
+    chrome.downloads.download = vi.fn(async () => 87);
+    chrome.downloads.search = async () => [{
+      id: 87, state: 'complete', filename: '/downloads/photo_1234567890.jpg',
+    }];
+
+    const result = await orchestrateSubmittedDownload(submitted);
+
+    expect(result).toEqual({ ok: true, code: 'ok', platform: 'facebook', count: 1 });
+    expect(chrome.tabs.sendMessage).toHaveBeenCalledWith(86, {
+      action: 'resolvePage',
+      pageUrl: finalUrl,
+    });
+    expect(chrome.tabs.remove).toHaveBeenCalledWith(86);
+  });
+
+  it.each([
+    {
+      submitted: 'https://x.com/user/status/123',
+      finalUrl: 'https://x.com/other/status/999',
+      platform: 'twitter',
+    },
+    {
+      submitted: 'https://x.com/i/web/status/123',
+      finalUrl: 'https://x.com/other/status/999',
+      platform: 'twitter',
+    },
+    {
+      submitted: 'https://www.facebook.com/example/posts/111/',
+      finalUrl: 'https://www.facebook.com/example/posts/222/',
+      platform: 'facebook',
+    },
+    {
+      submitted: 'https://bsky.app/profile/alice.bsky.social/post/3loriginal',
+      finalUrl: 'https://bsky.app/profile/other.bsky.social/post/3ldifferent',
+      platform: 'bluesky',
+    },
+  ])('rejects same-platform substitution of the submitted $platform post', async ({
+    submitted,
+    finalUrl,
+    platform,
+  }) => {
+    chrome.tabs.create = vi.fn(async () => ({ id: 88, status: 'complete' }));
+    chrome.tabs.get = vi.fn(async () => ({ id: 88, status: 'complete', url: finalUrl }));
+    chrome.tabs.remove = vi.fn();
+    chrome.tabs.sendMessage = vi.fn(async () => ({ urls: [], platform }));
+
+    const result = await orchestrateSubmittedDownload(submitted, { resolveAttempts: 1 });
+
+    expect(result).toEqual({
+      ok: false, code: 'access_or_unavailable', platform, count: 0,
+    });
+    expect(chrome.tabs.sendMessage).not.toHaveBeenCalled();
+    expect(chrome.tabs.remove).toHaveBeenCalledWith(88);
+  });
+
+  it('resolves a Bluesky DID through AppView and keeps its canonical handle internal', async () => {
+    const submitted = 'https://bsky.app/profile/did:plc:abc123/post/3lrequested';
+    const profileFetch = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ handle: 'alice.bsky.social' }),
+    }));
+    chrome.tabs.create = vi.fn(async () => ({ id: 89, status: 'complete' }));
+    chrome.tabs.get = vi.fn(async () => ({
+      id: 89, status: 'complete', url: submitted,
+    }));
+    chrome.tabs.remove = vi.fn();
+    chrome.tabs.sendMessage = vi.fn(async () => ({
+      platform: 'bluesky',
+      urls: [{
+        url: 'https://cdn.bsky.app/img/feed_fullsize/plain/did:plc:abc123/3lrequested@jpeg',
+        type: 'image',
+        filename: 'post_3lrequested',
+      }],
+    }));
+    chrome.downloads.download = vi.fn(async () => 90);
+    chrome.downloads.search = async () => [{
+      id: 90, state: 'complete', filename: '/downloads/post_3lrequested.jpg',
+    }];
+
+    const result = await orchestrateSubmittedDownload(submitted, { profileFetch });
+
+    expect(result).toEqual({ ok: true, code: 'ok', platform: 'bluesky', count: 1 });
+    expect(profileFetch).toHaveBeenCalledWith(
+      'https://public.api.bsky.app/xrpc/app.bsky.actor.getProfile?actor=did%3Aplc%3Aabc123',
+      expect.objectContaining({
+        credentials: 'omit',
+        signal: expect.any(AbortSignal),
+      }),
+    );
+    expect(chrome.tabs.sendMessage).toHaveBeenCalledWith(89, {
+      action: 'resolvePage',
+      pageUrl: submitted,
+      canonicalHandle: 'alice.bsky.social',
+    });
+    expect(JSON.stringify(result)).not.toContain('alice.bsky.social');
+    expect(chrome.tabs.remove).toHaveBeenCalledWith(89);
+  });
+
+  it.each([
+    { ok: false, status: 503, json: async () => ({}) },
+    { ok: true, status: 200, json: async () => ({ handle: 'not a handle' }) },
+  ])('reports an unavailable DID profile lookup without opening a tab', async (response) => {
+    const profileFetch = vi.fn(async () => response);
+    chrome.tabs.create = vi.fn();
+    chrome.tabs.sendMessage = vi.fn();
+
+    const result = await orchestrateSubmittedDownload(
+      'https://bsky.app/profile/did:plc:abc123/post/3lrequested',
+      { profileFetch },
+    );
+
+    expect(result).toEqual({
+      ok: false, code: 'access_or_unavailable', platform: 'bluesky', count: 0,
+    });
+    expect(chrome.tabs.create).not.toHaveBeenCalled();
+    expect(chrome.tabs.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      platform: 'instagram',
+      url: 'https://www.instagram.com/p/ABC/',
+      fetchOption: 'submittedFetch',
+      replaceGlobalFetch: true,
+    },
+    {
+      platform: 'bluesky',
+      url: 'https://bsky.app/profile/did:plc:abc123/post/3lrequested',
+      fetchOption: 'profileFetch',
+      replaceGlobalFetch: false,
+    },
+  ])('aborts a never-settling submitted $platform fetch at its hard deadline', async ({
+    platform,
+    url,
+    fetchOption,
+    replaceGlobalFetch,
+  }) => {
+    const originalFetch = globalThis.fetch;
+    let releaseFetch;
+    let receivedSignal;
+    const neverFetch = vi.fn((_url, init) => {
+      receivedSignal = init?.signal;
+      return new Promise((resolve) => { releaseFetch = resolve; });
+    });
+    if (replaceGlobalFetch) globalThis.fetch = neverFetch;
+
+    try {
+      const operation = orchestrateSubmittedDownload(url, {
+        operationTimeoutMs: 5,
+        [fetchOption]: neverFetch,
+      });
+      const settled = await settleWithin(operation);
+      releaseFetch?.({ ok: false, status: 503, json: async () => ({}) });
+      if (!settled) await operation;
+
+      expect(settled?.result).toEqual({
+        ok: false, code: 'resolution_timeout', platform, count: 0,
+      });
+      expect(receivedSignal?.aborted).toBe(true);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('aborts a stalled submitted X video lookup, closes the tab, and accepts the next job', async () => {
+    const originalFetch = globalThis.fetch;
+    const nativeSetTimeout = globalThis.setTimeout;
+    let releaseFetch;
+    let receivedSignal;
+    const neverFetch = vi.fn((_url, init) => {
+      receivedSignal = init?.signal;
+      return new Promise((resolve) => { releaseFetch = resolve; });
+    });
+    const timeoutSpy = vi.spyOn(globalThis, 'setTimeout')
+      .mockImplementation((callback, delay, ...args) => (
+        nativeSetTimeout(callback, delay === 15000 ? 5 : delay, ...args)
+      ));
+    globalThis.fetch = neverFetch;
+    chrome.tabs.create = vi.fn()
+      .mockResolvedValueOnce({ id: 92, status: 'complete' })
+      .mockResolvedValueOnce({ id: 93, status: 'complete' });
+    chrome.tabs.get = vi.fn(async (id) => ({
+      id,
+      status: 'complete',
+      url: `https://x.com/user/status/${id === 92 ? '123' : '456'}`,
+    }));
+    chrome.tabs.remove = vi.fn();
+    chrome.tabs.sendMessage = vi.fn()
+      .mockResolvedValueOnce({
+        platform: 'twitter',
+        urls: [{
+          type: 'video',
+          filename: 'tweet_123',
+          tweetId: '123',
+          needsVideoLookup: true,
+        }],
+      })
+      .mockResolvedValueOnce({
+        platform: 'twitter',
+        urls: [{
+          url: 'https://pbs.twimg.com/media/next.jpg',
+          type: 'image',
+          filename: 'tweet_456',
+        }],
+      });
+    chrome.downloads.download = vi.fn(async () => 94);
+    chrome.downloads.search = async () => [{
+      id: 94, state: 'complete', filename: '/downloads/tweet_456.jpg',
+    }];
+
+    try {
+      const first = sendExternal({
+        action: 'downloadSubmittedUrl',
+        url: 'https://x.com/user/status/123',
+      });
+      const settled = await settleWithin(first);
+      if (!settled) {
+        releaseFetch?.({ ok: false, status: 503, json: async () => ({}) });
+        await first;
+      }
+
+      expect(settled?.result).toEqual({
+        ok: false, code: 'resolution_timeout', platform: 'twitter', count: 0,
+      });
+      expect(receivedSignal?.aborted).toBe(true);
+      expect(chrome.tabs.remove).toHaveBeenCalledWith(92);
+
+      await expect(sendExternal({
+        action: 'downloadSubmittedUrl',
+        url: 'https://x.com/user/status/456',
+      })).resolves.toEqual({
+        ok: true, code: 'ok', platform: 'twitter', count: 1,
+      });
+      expect(chrome.tabs.remove).toHaveBeenCalledWith(93);
+      expect(chrome.downloads.download).toHaveBeenCalledOnce();
+    } finally {
+      globalThis.fetch = originalFetch;
+      timeoutSpy.mockRestore();
+    }
+  });
+
+  it('reports a partial result when a submitted X video lookup times out after an image', async () => {
+    let releaseFetch;
+    let receivedSignal;
+    const neverFetch = vi.fn((_url, init) => {
+      receivedSignal = init?.signal;
+      return new Promise((resolve) => { releaseFetch = resolve; });
+    });
+    chrome.tabs.create = vi.fn(async () => ({ id: 95, status: 'complete' }));
+    chrome.tabs.get = vi.fn(async () => ({
+      id: 95, status: 'complete', url: 'https://x.com/user/status/123',
+    }));
+    chrome.tabs.remove = vi.fn();
+    chrome.tabs.sendMessage = vi.fn(async () => ({
+      platform: 'twitter',
+      urls: [
+        {
+          url: 'https://pbs.twimg.com/media/one.jpg',
+          type: 'image',
+          filename: 'tweet_123_1',
+        },
+        {
+          type: 'video',
+          filename: 'tweet_123',
+          tweetId: '123',
+          needsVideoLookup: true,
+        },
+      ],
+    }));
+    chrome.downloads.download = vi.fn(async () => 96);
+    chrome.downloads.search = async () => [{
+      id: 96, state: 'complete', filename: '/downloads/tweet_123_1.jpg',
+    }];
+
+    const operation = orchestrateSubmittedDownload(
+      'https://x.com/user/status/123',
+      { operationTimeoutMs: 5, submittedFetch: neverFetch },
+    );
+    const settled = await settleWithin(operation);
+    if (!settled) {
+      releaseFetch?.({ ok: false, status: 503, json: async () => ({}) });
+      await operation;
+    }
+
+    expect(settled?.result).toEqual({
+      ok: false, code: 'download_failed', platform: 'twitter', count: 1,
+    });
+    expect(receivedSignal?.aborted).toBe(true);
+    expect(chrome.tabs.remove).toHaveBeenCalledWith(95);
+    expect(chrome.downloads.download).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    'https://www.facebook.com/login/',
+    'https://example.com/post/1',
+    'https://x.com/user/status/123',
+  ])('rejects an unavailable or cross-platform final tab URL: %s', async (finalUrl) => {
+    chrome.tabs.create = vi.fn(async () => ({ id: 87, status: 'complete' }));
+    chrome.tabs.get = vi.fn(async () => ({ id: 87, status: 'complete', url: finalUrl }));
+    chrome.tabs.remove = vi.fn();
+    chrome.tabs.sendMessage = vi.fn(async () => ({ urls: [], platform: 'facebook' }));
+
+    const result = await orchestrateSubmittedDownload(
+      'https://www.facebook.com/share/p/AbC_def-123/',
+    );
+
+    expect(result).toEqual({
+      ok: false, code: 'access_or_unavailable', platform: 'facebook', count: 0,
+    });
+    expect(chrome.tabs.sendMessage).not.toHaveBeenCalled();
+    expect(chrome.tabs.remove).toHaveBeenCalledWith(87);
+  });
+
+  it('reports access or unavailable for an empty page without claiming an auth cause', async () => {
+    chrome.tabs.create = vi.fn(async () => ({ id: 80, status: 'complete' }));
+    chrome.tabs.get = vi.fn(async () => ({
+      id: 80,
+      status: 'complete',
+      url: 'https://www.facebook.com/example/posts/123',
+    }));
+    chrome.tabs.remove = vi.fn();
+    chrome.tabs.sendMessage = vi.fn(async () => ({ urls: [], platform: 'facebook' }));
+
+    const result = await orchestrateSubmittedDownload(
+      'https://www.facebook.com/example/posts/123',
+      { resolveAttempts: 2, retryDelayMs: 0 },
+    );
+
+    expect(result).toEqual({
+      ok: false, code: 'access_or_unavailable', platform: 'facebook', count: 0,
+    });
+    expect(result.code).not.toBe('auth_required');
+    expect(chrome.tabs.remove).toHaveBeenCalledWith(80);
+  });
+
+  it('reports resolution timeout when the content script never becomes available', async () => {
+    chrome.tabs.create = vi.fn(async () => ({ id: 81, status: 'complete' }));
+    chrome.tabs.get = vi.fn(async () => ({
+      id: 81, status: 'complete', url: 'https://x.com/user/status/123',
+    }));
+    chrome.tabs.remove = vi.fn();
+    chrome.tabs.sendMessage = vi.fn(async () => { throw new Error('no receiver'); });
+
+    const result = await orchestrateSubmittedDownload(
+      'https://x.com/user/status/123',
+      { resolveAttempts: 2, retryDelayMs: 0 },
+    );
+
+    expect(result).toEqual({
+      ok: false, code: 'resolution_timeout', platform: 'twitter', count: 0,
+    });
+    expect(chrome.tabs.sendMessage).toHaveBeenCalledTimes(2);
+    expect(chrome.tabs.remove).toHaveBeenCalledWith(81);
+  });
+
+  it('times out a never-settling resolver message and closes its temporary tab', async () => {
+    let releaseMessage;
+    chrome.tabs.create = vi.fn(async () => ({ id: 91, status: 'complete' }));
+    chrome.tabs.get = vi.fn(async () => ({
+      id: 91, status: 'complete', url: 'https://x.com/user/status/123',
+    }));
+    chrome.tabs.remove = vi.fn();
+    chrome.tabs.sendMessage = vi.fn(() => new Promise((resolve) => {
+      releaseMessage = resolve;
+    }));
+
+    const operation = orchestrateSubmittedDownload(
+      'https://x.com/user/status/123',
+      { operationTimeoutMs: 5, resolveAttempts: 1 },
+    );
+    const settled = await settleWithin(operation);
+    releaseMessage?.({ urls: [], platform: 'twitter' });
+    if (!settled) await operation;
+
+    expect(settled?.result).toEqual({
+      ok: false, code: 'resolution_timeout', platform: 'twitter', count: 0,
+    });
+    expect(chrome.tabs.remove).toHaveBeenCalledWith(91);
+  });
+
+  it('reports a partial download failure with only the successful count and closes the tab', async () => {
+    chrome.tabs.create = vi.fn(async () => ({ id: 82, status: 'complete' }));
+    chrome.tabs.get = vi.fn(async () => ({
+      id: 82,
+      status: 'complete',
+      url: 'https://www.facebook.com/example/posts/123',
+    }));
+    chrome.tabs.remove = vi.fn();
+    chrome.tabs.sendMessage = vi.fn(async () => ({
+      platform: 'facebook',
+      urls: [
+        { url: 'https://scontent.xx.fbcdn.net/one.jpg', type: 'image', filename: 'one' },
+        { url: 'https://scontent.xx.fbcdn.net/two.jpg', type: 'image', filename: 'two' },
+      ],
+    }));
+    chrome.downloads.download = vi.fn()
+      .mockResolvedValueOnce(71)
+      .mockRejectedValueOnce(new Error('disk full'));
+    chrome.downloads.search = async () => [{
+      id: 71, state: 'complete', filename: '/downloads/one.jpg',
+    }];
+
+    const result = await orchestrateSubmittedDownload(
+      'https://www.facebook.com/example/posts/123',
+      { retryDelayMs: 0 },
+    );
+
+    expect(result).toEqual({
+      ok: false, code: 'download_failed', platform: 'facebook', count: 1,
+    });
+    const { downloadHistory } = await chrome.storage.local.get({ downloadHistory: [] });
+    expect(downloadHistory).toHaveLength(1);
+    expect(chrome.tabs.remove).toHaveBeenCalledWith(82);
+  });
+
+  it('reports a started download separately when history recording fails', async () => {
+    const originalSet = chrome.storage.local.set;
+    chrome.tabs.create = vi.fn(async () => ({ id: 84, status: 'complete' }));
+    chrome.tabs.get = vi.fn(async () => ({
+      id: 84, status: 'complete', url: 'https://x.com/user/status/123',
+    }));
+    chrome.tabs.remove = vi.fn();
+    chrome.tabs.sendMessage = vi.fn(async () => ({
+      platform: 'twitter',
+      urls: [{ url: 'https://pbs.twimg.com/media/one.jpg', type: 'image', filename: 'one' }],
+    }));
+    chrome.downloads.download = vi.fn(async () => 85);
+    chrome.downloads.search = async () => [{
+      id: 85, state: 'complete', filename: '/downloads/one.jpg',
+    }];
+    chrome.storage.local.set = vi.fn(async () => { throw new Error('storage unavailable'); });
+
+    try {
+      const result = await orchestrateSubmittedDownload('https://x.com/user/status/123');
+      expect(result).toEqual({
+        ok: false, code: 'history_failed', platform: 'twitter', count: 1,
+      });
+      expect(chrome.tabs.remove).toHaveBeenCalledWith(84);
+    } finally {
+      chrome.storage.local.set = originalSet;
+    }
+  });
+
+  it('rejects a concurrent valid job with busy', async () => {
+    let releaseCreate;
+    chrome.tabs.create = vi.fn(() => new Promise((resolve) => { releaseCreate = resolve; }));
+    chrome.tabs.get = vi.fn(async (id) => ({
+      id, status: 'complete', url: 'https://x.com/user/status/123',
+    }));
+    chrome.tabs.remove = vi.fn();
+    chrome.tabs.sendMessage = vi.fn(async () => ({
+      platform: 'twitter',
+      urls: [{ url: 'https://pbs.twimg.com/media/one.jpg', type: 'image', filename: 'one' }],
+    }));
+    chrome.downloads.download = vi.fn(async () => 91);
+    chrome.downloads.search = async () => [{
+      id: 91, state: 'complete', filename: '/downloads/one.jpg',
+    }];
+
+    const first = sendExternal({
+      action: 'downloadSubmittedUrl',
+      url: 'https://x.com/user/status/123',
+    });
+    await Promise.resolve();
+    const second = await sendExternal({
+      action: 'downloadSubmittedUrl',
+      url: 'https://x.com/user/status/456',
+    });
+
+    expect(second).toEqual({ ok: false, code: 'busy', platform: 'twitter', count: 0 });
+    expect(chrome.tabs.create).toHaveBeenCalledOnce();
+    releaseCreate({ id: 83, status: 'complete' });
+    await expect(first).resolves.toEqual({ ok: true, code: 'ok', platform: 'twitter', count: 1 });
   });
 });

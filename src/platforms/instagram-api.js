@@ -148,3 +148,14 @@ export function mapIgStatusToMessage(status) {
   if (status === 404) return 'This Instagram media has expired or was not found.';
   return 'Instagram did not return this media. Try refreshing the page.';
 }
+
+// Machine-readable companion to mapIgStatusToMessage. Keep the human copy above
+// stable for existing callers while external-message consumers get a small code
+// that never exposes request or account details.
+export function mapIgStatusToCode(status) {
+  if (status === 401 || status === 403) return 'auth_required';
+  if (status === 429) return 'rate_limited';
+  if (status === 404) return 'access_or_unavailable';
+  if (status === 0) return 'no_media';
+  return 'unexpected';
+}

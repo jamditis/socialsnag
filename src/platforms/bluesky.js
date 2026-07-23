@@ -61,7 +61,28 @@ function resolveSingle(srcUrl, target, pathname) {
   return [];
 }
 
-function resolveAll(target, pathname) {
+const BLUESKY_POST_BOUNDARY_SELECTOR = [
+  '[data-testid^="postThreadItem-by-"]',
+  '[data-testid^="feedItem-by-"]',
+  '[data-testid^="postThreadItem"]',
+  '[data-testid^="feedItem"]',
+].join(', ');
+const BLUESKY_AVATAR_OWNER_SELECTOR = '[data-testid="userAvatarImage"]';
+const BLUESKY_LINK_OWNER_SELECTOR = 'a[href]';
+
+function belongsToSubmittedPost(media, post) {
+  const nearestPost = media.closest?.(BLUESKY_POST_BOUNDARY_SELECTOR);
+  if (nearestPost && nearestPost !== post) return false;
+  if (media.closest?.(BLUESKY_AVATAR_OWNER_SELECTOR)) return false;
+  // Bluesky's post container is itself a link. Its own gallery and video media
+  // therefore resolve to `post`, while avatars, quoted posts, and link-card
+  // previews resolve to a nested link that owns that media.
+  const nearestLink = media.closest?.(BLUESKY_LINK_OWNER_SELECTOR);
+  if (nearestLink && nearestLink !== post) return false;
+  return true;
+}
+
+function resolveAll(target, pathname, { submittedPost = null } = {}) {
   const post = findPostContainer(target, [
     '[data-testid^="postThreadItem-by-"]',
     '[data-testid^="feedItem-by-"]',
@@ -76,6 +97,7 @@ function resolveAll(target, pathname) {
 
   // Collect images from CDN
   post.querySelectorAll('img[src*="cdn.bsky.app"]').forEach((img) => {
+    if (submittedPost && !belongsToSubmittedPost(img, submittedPost)) return;
     const url = upgradeImageUrl(img.src);
     if (url) {
       items.push({
@@ -89,6 +111,7 @@ function resolveAll(target, pathname) {
 
   // Collect video elements
   post.querySelectorAll('video').forEach((video) => {
+    if (submittedPost && !belongsToSubmittedPost(video, submittedPost)) return;
     const src = video.src;
     if (src && !src.startsWith('blob:')) {
       items.push({
@@ -100,7 +123,77 @@ function resolveAll(target, pathname) {
     }
   });
 
-  return items.length > 0 ? items : resolveSingle(target?.src || '', target, pathname);
+  if (items.length > 0 || submittedPost) return items;
+  return resolveSingle(target?.src || '', target, pathname);
+}
+
+function blueskySubmittedKey(rawUrl) {
+  let url;
+  try {
+    url = new URL(rawUrl, 'https://bsky.app');
+  } catch {
+    return null;
+  }
+  if (url.hostname.toLowerCase() !== 'bsky.app') return null;
+  const match = url.pathname.match(/^\/profile\/([^/]+)\/post\/([A-Za-z0-9]+)\/?$/);
+  if (!match) return null;
+  return {
+    account: match[1].toLowerCase(),
+    postId: match[2],
+    did: match[1].startsWith('did:plc:'),
+  };
+}
+
+function matchesBlueskySubmission(requested, candidate) {
+  if (!candidate || candidate.postId !== requested.postId) return false;
+  return candidate.account === requested.account;
+}
+
+// Resolve only the thread item whose permalink proves it is the submitted post.
+// Feed items and the first visible thread item are not safe fallbacks because a
+// direct-post page can render both parents and replies around the requested post.
+export async function resolvePage(
+  root = document,
+  pageUrl = globalThis.window?.location?.href || '',
+  canonicalHandle = null,
+) {
+  const requestedKey = blueskySubmittedKey(pageUrl);
+  if (!requestedKey) return [];
+  if (requestedKey.did) {
+    if (typeof canonicalHandle !== 'string'
+        || !/^(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/.test(canonicalHandle)) {
+      return [];
+    }
+    requestedKey.account = canonicalHandle.toLowerCase();
+  }
+
+  const candidates = root.querySelectorAll?.(
+    '[data-testid^="postThreadItem-by-"], [data-testid^="postThreadItem"]',
+  ) || [];
+  for (const candidate of candidates) {
+    const links = candidate.querySelectorAll?.('a[href*="/post/"]') || [];
+    if (Array.from(links).some((link) => (
+      matchesBlueskySubmission(requestedKey, blueskySubmittedKey(link.href))
+    ))) {
+      return resolveAll(candidate, new URL(pageUrl).pathname, { submittedPost: candidate });
+    }
+  }
+  return [];
+}
+
+export async function resolveContentMessage(
+  message,
+  lastTarget,
+  root = document,
+  pathname = globalThis.window?.location?.pathname || '',
+) {
+  if (message.action === 'resolvePage') {
+    return resolvePage(root, message.pageUrl, message.canonicalHandle);
+  }
+  if (message.action !== 'resolve') return [];
+  return message.type === 'single'
+    ? resolveSingle(message.srcUrl, lastTarget, pathname)
+    : resolveAll(lastTarget, pathname);
 }
 
 function initContentScript() {
@@ -113,14 +206,12 @@ function initContentScript() {
 
   // Listen for resolve requests from background
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message.action === 'resolve') {
+    if (message.action === 'resolve' || message.action === 'resolvePage') {
       const target = _lastTarget;
       const pathname = window.location.pathname;
 
       Promise.resolve()
-        .then(() => (message.type === 'single'
-          ? resolveSingle(message.srcUrl, target, pathname)
-          : resolveAll(target, pathname)))
+        .then(() => resolveContentMessage(message, target, document, pathname))
         .then((urls) => {
           sendResponse({ urls: urls || [], platform: 'bluesky' });
         })

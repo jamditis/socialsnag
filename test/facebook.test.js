@@ -3,8 +3,11 @@ import {
   upgradeUrl,
   extractPhotoId,
   extractVideoUrlFromScripts,
+  extractSubmittedVideoUrl,
   buildImageItems,
   buildCapturedItems,
+  resolvePage,
+  resolveContentMessage,
 } from '../src/platforms/facebook.js';
 
 const CDN = 'https://scontent.xx.fbcdn.net/v/t1';
@@ -98,6 +101,30 @@ describe('extractVideoUrlFromScripts', () => {
 
   it('returns null for empty array', () => {
     expect(extractVideoUrlFromScripts([])).toBeNull();
+  });
+});
+
+describe('extractSubmittedVideoUrl', () => {
+  it('rejects a playable URL when sibling ID fields conflict with the submitted media', () => {
+    const scripts = [JSON.stringify({
+      id: '1234567890',
+      video_id: '9999999999',
+      playable_url_quality_hd: 'https://video.xx.fbcdn.net/unrelated.mp4',
+    })];
+
+    expect(extractSubmittedVideoUrl(scripts, ['1234567890'])).toBeNull();
+  });
+
+  it('rejects an ID-less child URL beneath a parent with the submitted ID', () => {
+    const scripts = [JSON.stringify({
+      id: '1234567890',
+      feed: [
+        { label: 'submitted post' },
+        { playable_url_quality_hd: 'https://video.xx.fbcdn.net/unattributed-child.mp4' },
+      ],
+    })];
+
+    expect(extractSubmittedVideoUrl(scripts, ['1234567890'])).toBeNull();
   });
 });
 
@@ -287,5 +314,343 @@ describe('buildCapturedItems', () => {
   it('numbers from one, since it only runs when the DOM walk found nothing', () => {
     const { items } = buildCapturedItems([cap(`${CDN}/a_n.jpg`), cap(`${CDN}/b_n.jpg`)], 5);
     expect(items.map((i) => i.filename)).toEqual(['photo_1', 'photo_2']);
+  });
+});
+
+describe('resolvePage', () => {
+  const makePost = (pageUrl, src) => {
+    const media = img(src);
+    const permalink = { href: pageUrl };
+    return {
+      matches: (selector) => selector === '[role="article"]',
+      parentElement: null,
+      querySelectorAll: (selector) => {
+        if (selector === 'img[src*="fbcdn.net"]') return [media];
+        if (selector === 'a[href]') return [permalink];
+        return [];
+      },
+    };
+  };
+
+  it('resolves the direct post without a right-click target', async () => {
+    const pageUrl = 'https://www.facebook.com/example/posts/1234567890/';
+    const post = makePost(pageUrl, `${CDN}/s720x720/123456789012_n.jpg`);
+    const root = { querySelectorAll: () => [post] };
+
+    const items = await resolvePage(root, pageUrl);
+
+    expect(items).toHaveLength(1);
+    expect(items[0].url).toBe(`${CDN}/123456789012_n.jpg`);
+  });
+
+  it('handles a resolvePage message without a stored right-click target', async () => {
+    const pageUrl = 'https://www.facebook.com/example/posts/1234567890/';
+    const post = makePost(pageUrl, `${CDN}/s720x720/123456789012_n.jpg`);
+    const root = { querySelectorAll: () => [post] };
+
+    const items = await resolveContentMessage({
+      action: 'resolvePage',
+      pageUrl,
+    }, null, root);
+
+    expect(items).toHaveLength(1);
+    expect(items[0].url).toBe(`${CDN}/123456789012_n.jpg`);
+  });
+
+  it('resolves a direct photo-viewer image without a right-click target', async () => {
+    const pageUrl = 'https://www.facebook.com/photo.php?fbid=123456789012&id=42';
+    const media = {
+      tagName: 'IMG',
+      src: `${CDN}/p720x720/123456789012_n.jpg`,
+      matches: () => false,
+      parentElement: null,
+    };
+    const permalink = {
+      href: pageUrl,
+      querySelector: (selector) => selector.includes('media-vc-image') ? media : null,
+    };
+    const root = {
+      querySelectorAll: (selector) => selector === 'a[href]' ? [permalink] : [],
+    };
+
+    const items = await resolvePage(root, pageUrl);
+
+    expect(items).toEqual([{
+      url: `${CDN}/123456789012_n.jpg`,
+      type: 'image',
+      filename: 'photo_123456789012',
+    }]);
+  });
+
+  it('does not treat a broad main container avatar as the submitted post', async () => {
+    const root = { querySelectorAll: () => [] };
+
+    expect(await resolvePage(
+      root,
+      'https://www.facebook.com/example/posts/1234567890/',
+    )).toEqual([]);
+  });
+
+  it('chooses the container whose permalink matches the submitted post URL', async () => {
+    const unrelated = makePost(
+      'https://www.facebook.com/example/posts/111/',
+      `${CDN}/s720x720/111111111111_n.jpg`,
+    );
+    const requested = makePost(
+      'https://www.facebook.com/example/posts/222/',
+      `${CDN}/s720x720/222222222222_n.jpg`,
+    );
+    const root = { querySelectorAll: () => [unrelated, requested] };
+
+    const items = await resolvePage(
+      root,
+      'https://www.facebook.com/example/posts/222/',
+    );
+
+    expect(items).toHaveLength(1);
+    expect(items[0].url).toContain('222222222222_n.jpg');
+    expect(items[0].url).not.toContain('111111111111_n.jpg');
+  });
+
+  it('resolves the canonical post URL produced by a share redirect', async () => {
+    const canonicalUrl = 'https://www.facebook.com/example/posts/333/?mibextid=abc';
+    const post = makePost(
+      'https://www.facebook.com/example/posts/333/',
+      `${CDN}/s720x720/333333333333_n.jpg`,
+    );
+    const root = { querySelectorAll: () => [post] };
+
+    const items = await resolvePage(root, canonicalUrl);
+
+    expect(items).toHaveLength(1);
+    expect(items[0].url).toContain('333333333333_n.jpg');
+  });
+
+  it('returns no media when no container proves the submitted post identifier', async () => {
+    const unrelated = makePost(
+      'https://www.facebook.com/example/posts/111/',
+      `${CDN}/s720x720/111111111111_n.jpg`,
+    );
+    const root = { querySelectorAll: () => [unrelated] };
+
+    expect(await resolvePage(
+      root,
+      'https://www.facebook.com/example/posts/999/',
+    )).toEqual([]);
+  });
+
+  it('does not use document-wide video scripts for a verified submitted post', async () => {
+    const pageUrl = 'https://www.facebook.com/example/posts/444/';
+    const permalink = { href: pageUrl };
+    const post = {
+      tagName: 'ARTICLE',
+      matches: (selector) => selector === '[role="article"]',
+      parentElement: null,
+      closest: (selector) => selector === '[role="article"]' ? post : null,
+      querySelector: () => null,
+      querySelectorAll: (selector) => selector === 'a[href]' ? [permalink] : [],
+    };
+    const root = { querySelectorAll: () => [post] };
+    const originalDocument = globalThis.document;
+    globalThis.document = {
+      querySelectorAll: (selector) => selector === 'script' ? [
+        { textContent: '{"playable_url_quality_hd":"https:\\/\\/video.xx.fbcdn.net\\/reply.mp4"}' },
+        { textContent: '{"playable_url":"https:\\/\\/video.xx.fbcdn.net\\/advert.mp4"}' },
+      ] : [],
+    };
+
+    try {
+      expect(await resolvePage(root, pageUrl)).toEqual([]);
+    } finally {
+      globalThis.document = originalDocument;
+    }
+  });
+
+  it('resolves a direct video only when its own ID matches the submitted reel', async () => {
+    const pageUrl = 'https://www.facebook.com/reel/1234567890/';
+    const video = {
+      tagName: 'VIDEO',
+      src: 'https://video.xx.fbcdn.net/requested.mp4',
+      currentSrc: 'https://video.xx.fbcdn.net/requested.mp4',
+      dataset: { videoId: '1234567890' },
+      getAttribute: (name) => name === 'data-video-id' ? '1234567890' : null,
+      querySelector: () => null,
+    };
+    const post = {
+      tagName: 'ARTICLE',
+      matches: (selector) => selector === '[role="article"]',
+      parentElement: null,
+      closest: (selector) => selector === '[role="article"]' ? post : null,
+      querySelector: (selector) => selector === 'video' ? video : null,
+      querySelectorAll: (selector) => {
+        if (selector === 'a[href]') return [{ href: pageUrl }];
+        if (selector === 'video') return [video];
+        return [];
+      },
+    };
+    video.parentElement = post;
+    const root = { querySelectorAll: () => [post] };
+
+    expect(await resolvePage(root, pageUrl)).toEqual([{
+      url: 'https://video.xx.fbcdn.net/requested.mp4',
+      type: 'video',
+      filename: 'video_1234567890',
+    }]);
+  });
+
+  it.each([
+    ['conflicting', '9999999999'],
+    ['missing', null],
+  ])('rejects a direct video with a %s own ID', async (_case, ownId) => {
+    const pageUrl = 'https://www.facebook.com/reel/1234567890/';
+    const video = {
+      tagName: 'VIDEO',
+      src: 'https://video.xx.fbcdn.net/unverified.mp4',
+      currentSrc: 'https://video.xx.fbcdn.net/unverified.mp4',
+      dataset: ownId ? { videoId: ownId } : {},
+      getAttribute: (name) => name === 'data-video-id' ? ownId : null,
+      querySelector: () => null,
+    };
+    const post = {
+      tagName: 'ARTICLE',
+      matches: (selector) => selector === '[role="article"]',
+      parentElement: null,
+      closest: (selector) => selector === '[role="article"]' ? post : null,
+      querySelector: (selector) => selector === 'video' ? video : null,
+      querySelectorAll: (selector) => {
+        if (selector === 'a[href]') return [{ href: pageUrl }];
+        if (selector === 'video') return [video];
+        return [];
+      },
+    };
+    video.parentElement = post;
+    const root = { querySelectorAll: () => [post] };
+
+    expect(await resolvePage(root, pageUrl)).toEqual([]);
+  });
+
+  it('rejects a direct video when its DOM ID signals conflict', async () => {
+    const pageUrl = 'https://www.facebook.com/reel/1234567890/';
+    const video = {
+      tagName: 'VIDEO',
+      src: 'https://video.xx.fbcdn.net/conflicting.mp4',
+      currentSrc: 'https://video.xx.fbcdn.net/conflicting.mp4',
+      dataset: { videoId: '1234567890' },
+      getAttribute: (name) => name === 'data-video-id' ? '9999999999' : null,
+      querySelector: () => null,
+    };
+    const post = {
+      tagName: 'ARTICLE',
+      matches: (selector) => selector === '[role="article"]',
+      parentElement: null,
+      closest: (selector) => selector === '[role="article"]' ? post : null,
+      querySelector: (selector) => selector === 'video' ? video : null,
+      querySelectorAll: (selector) => {
+        if (selector === 'a[href]') return [{ href: pageUrl }];
+        if (selector === 'video') return [video];
+        return [];
+      },
+    };
+    video.parentElement = post;
+    const root = { querySelectorAll: () => [post] };
+
+    expect(await resolvePage(root, pageUrl)).toEqual([]);
+  });
+
+  it('resolves only the verified submitted blob video from structured page data', async () => {
+    const pageUrl = 'https://www.facebook.com/reel/1234567890/';
+    let post;
+    const video = {
+      tagName: 'VIDEO',
+      src: 'blob:https://www.facebook.com/requested',
+      dataset: { videoId: '1234567890' },
+      getAttribute: (name) => name === 'data-video-id' ? '1234567890' : null,
+      querySelector: () => null,
+      closest: (selector) => selector === '[role="article"]' ? post : null,
+      parentElement: null,
+    };
+    const unrelatedVideo = {
+      dataset: { videoId: '9999999999' },
+      getAttribute: (name) => name === 'data-video-id' ? '9999999999' : null,
+      closest: () => null,
+    };
+    const permalink = { href: pageUrl };
+    post = {
+      tagName: 'ARTICLE',
+      matches: (selector) => selector === '[role="article"]',
+      parentElement: null,
+      closest: (selector) => selector === '[role="article"]' ? post : null,
+      querySelector: (selector) => selector === 'video' ? video : null,
+      querySelectorAll: (selector) => {
+        if (selector === 'a[href]') return [permalink];
+        if (selector === 'img[src*="fbcdn.net"]') return [];
+        if (selector === 'video') return [unrelatedVideo, video];
+        return [];
+      },
+    };
+    video.parentElement = post;
+    const scripts = [{
+      textContent: JSON.stringify({
+        feed: [
+          {
+            id: '9999999999',
+            playable_url_quality_hd: 'https://video.xx.fbcdn.net/reply.mp4',
+          },
+          {
+            id: '1234567890',
+            playable_url_quality_hd: 'https://video.xx.fbcdn.net/requested-hd.mp4',
+            playable_url: 'https://video.xx.fbcdn.net/requested-sd.mp4',
+          },
+        ],
+      }),
+    }];
+    const root = {
+      querySelectorAll: (selector) => {
+        if (selector === 'script') return scripts;
+        if (selector === 'a[href]') return [];
+        return [post];
+      },
+    };
+
+    expect(await resolvePage(root, pageUrl)).toEqual([{
+      url: 'https://video.xx.fbcdn.net/requested-hd.mp4',
+      type: 'video',
+      filename: 'video_1234567890',
+    }]);
+  });
+
+  it('rejects a blob video when structured page data identifies a different post', async () => {
+    const pageUrl = 'https://www.facebook.com/reel/1234567890/';
+    let post;
+    const video = {
+      tagName: 'VIDEO',
+      src: 'blob:https://www.facebook.com/requested',
+      dataset: { videoId: '1234567890' },
+      getAttribute: () => '1234567890',
+      querySelector: () => null,
+      closest: (selector) => selector === '[role="article"]' ? post : null,
+      parentElement: null,
+    };
+    post = {
+      matches: (selector) => selector === '[role="article"]',
+      parentElement: null,
+      querySelector: (selector) => selector === 'video' ? video : null,
+      querySelectorAll: (selector) => {
+        if (selector === 'a[href]') return [{ href: pageUrl }];
+        if (selector === 'img[src*="fbcdn.net"]') return [];
+        return [];
+      },
+    };
+    video.parentElement = post;
+    const root = {
+      querySelectorAll: (selector) => selector === 'script'
+        ? [{ textContent: JSON.stringify({
+          id: '9999999999',
+          playable_url_quality_hd: 'https://video.xx.fbcdn.net/reply.mp4',
+        }) }]
+        : [post],
+    };
+
+    expect(await resolvePage(root, pageUrl)).toEqual([]);
   });
 });

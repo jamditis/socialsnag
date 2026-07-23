@@ -1,7 +1,15 @@
 'use strict';
 
 import { ALLOWED_DOMAINS, sanitizeFilename, renderTemplate } from './platforms/common.js';
-import { IG_APP_ID, shortcodeToMediaId, parsePostMedia, extractStoryRef, parseStoryTray, mapIgStatusToMessage } from './platforms/instagram-api.js';
+import {
+  IG_APP_ID,
+  shortcodeToMediaId,
+  parsePostMedia,
+  extractStoryRef,
+  parseStoryTray,
+  mapIgStatusToMessage,
+  mapIgStatusToCode,
+} from './platforms/instagram-api.js';
 import { createTracer } from './resolver-debug.js';
 
 // Opt-in resolver tracing (#25). Off unless the user enables it in options; it
@@ -85,6 +93,182 @@ export function validateDownloadUrl(url) {
   }
 
   return { valid: true };
+}
+
+const MAX_SUBMITTED_URL_LENGTH = 2048;
+const BLUESKY_DID_PATTERN = /^did:plc:[A-Za-z0-9]+$/;
+const BLUESKY_HANDLE_PATTERN = /^(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/;
+const TWITTER_SUBMITTED_STATUS_PATTERN = /^\/(?:[A-Za-z0-9_]+\/status|i\/web\/status)\/(\d+)\/?$/;
+
+function submittedHostMatches(hostname, domain) {
+  return hostname === domain || hostname.endsWith(`.${domain}`);
+}
+
+function isValidBlueskyHandle(handle) {
+  return typeof handle === 'string' && BLUESKY_HANDLE_PATTERN.test(handle);
+}
+
+const FACEBOOK_RESERVED_ACCOUNTS = new Set([
+  'events',
+  'groups',
+  'help',
+  'login',
+  'marketplace',
+  'messages',
+  'reel',
+  'settings',
+  'share',
+  'watch',
+]);
+
+function isFacebookSubmittedPost(url) {
+  const path = url.pathname;
+  const postId = '(?:\\d+|pfbid[A-Za-z0-9]+)';
+  if (new RegExp(`^/groups/[A-Za-z0-9._-]+/(?:posts|permalink)/${postId}/?$`).test(path)) {
+    return true;
+  }
+  const account = path.match(/^\/([^/]+)\//)?.[1]?.toLowerCase();
+  const hasAccount = /^[A-Za-z0-9.]+$/.test(account || '')
+    && !FACEBOOK_RESERVED_ACCOUNTS.has(account);
+  if (hasAccount && new RegExp(`^/[A-Za-z0-9.]+/posts/${postId}/?$`).test(path)) return true;
+  if (hasAccount && /^\/[A-Za-z0-9.]+\/photos\/(?:(?:[A-Za-z0-9_-]+\.)?\d+\/)?\d+\/?$/.test(path)) {
+    return true;
+  }
+  if (hasAccount && /^\/[A-Za-z0-9.]+\/videos\/\d+\/?$/.test(path)) return true;
+  if (/^\/reel\/\d+\/?$/.test(path)) return true;
+  if (/^\/share\/[prv]\/[A-Za-z0-9_-]+\/?$/.test(path)) return true;
+  if (path === '/photo.php' || path === '/photo' || path === '/photo/') {
+    return /^\d+$/.test(url.searchParams.get('fbid') || '');
+  }
+  if (/^\/(?:permalink|story)\.php$/.test(path)) {
+    return new RegExp(`^${postId}$`).test(url.searchParams.get('story_fbid') || '')
+      && /^\d+$/.test(url.searchParams.get('id') || '');
+  }
+  return /^\/watch\/?$/.test(path) && /^\d+$/.test(url.searchParams.get('v') || '');
+}
+
+// Parse a URL submitted by the public landing page without touching the network.
+// A successful parse is exact enough to authorize opening the URL in a tab; a
+// failure is deliberately small and stable enough to return across the external
+// message boundary without echoing the submitted value.
+export function parseSubmittedPageUrl(rawUrl) {
+  if (typeof rawUrl !== 'string' || rawUrl.length === 0
+      || rawUrl.length > MAX_SUBMITTED_URL_LENGTH || rawUrl !== rawUrl.trim()) {
+    return { error: 'invalid_url' };
+  }
+
+  let url;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    return { error: 'invalid_url' };
+  }
+
+  if (url.protocol !== 'https:' || url.username || url.password || url.port) {
+    return { error: 'invalid_url' };
+  }
+
+  const host = url.hostname.toLowerCase();
+  let platform = null;
+  let validPath = false;
+
+  if (submittedHostMatches(host, 'instagram.com')) {
+    platform = 'instagram';
+    validPath = /^\/(?:p|reel|tv)\/[A-Za-z0-9_-]+\/?$/.test(url.pathname)
+      || /^\/stories\/(?!highlights(?:\/|$))[A-Za-z0-9._]+\/\d+\/?$/i.test(url.pathname);
+  } else if (submittedHostMatches(host, 'twitter.com') || submittedHostMatches(host, 'x.com')) {
+    platform = 'twitter';
+    validPath = TWITTER_SUBMITTED_STATUS_PATTERN.test(url.pathname);
+  } else if (submittedHostMatches(host, 'facebook.com')) {
+    platform = 'facebook';
+    validPath = isFacebookSubmittedPost(url);
+  } else if (host === 'bsky.app') {
+    platform = 'bluesky';
+    const match = url.pathname.match(/^\/profile\/([^/]+)\/post\/[A-Za-z0-9]+\/?$/);
+    const account = match?.[1] || '';
+    validPath = isValidBlueskyHandle(account) || BLUESKY_DID_PATTERN.test(account);
+  } else {
+    return { error: 'unsupported_url' };
+  }
+
+  if (!validPath) return { error: 'invalid_url' };
+  const fragmentStart = rawUrl.indexOf('#');
+  const fragmentlessUrl = fragmentStart === -1 ? rawUrl : rawUrl.slice(0, fragmentStart);
+  return { url: fragmentlessUrl, platform };
+}
+
+function facebookSubmittedIdentity(url) {
+  const path = url.pathname;
+  let match = path.match(/^\/groups\/[A-Za-z0-9._-]+\/(?:posts|permalink)\/([^/]+)\/?$/)
+    || path.match(/^\/[A-Za-z0-9.]+\/posts\/([^/]+)\/?$/);
+  if (match) return { platform: 'facebook', kind: 'post', id: match[1] };
+
+  match = path.match(/^\/[A-Za-z0-9.]+\/photos\/(?:(?:[A-Za-z0-9_-]+\.)?\d+\/)?(\d+)\/?$/);
+  if (match) return { platform: 'facebook', kind: 'photo', id: match[1] };
+
+  match = path.match(/^\/[A-Za-z0-9.]+\/videos\/(\d+)\/?$/)
+    || path.match(/^\/reel\/(\d+)\/?$/);
+  if (match) return { platform: 'facebook', kind: 'video', id: match[1] };
+
+  match = path.match(/^\/share\/([prv])\/[A-Za-z0-9_-]+\/?$/);
+  if (match) return { platform: 'facebook', kind: 'share', shareType: match[1] };
+
+  if (path === '/photo.php' || /^\/photo\/?$/.test(path)) {
+    return { platform: 'facebook', kind: 'photo', id: url.searchParams.get('fbid') };
+  }
+  if (path === '/permalink.php' || path === '/story.php') {
+    return { platform: 'facebook', kind: 'post', id: url.searchParams.get('story_fbid') };
+  }
+  if (/^\/watch\/?$/.test(path)) {
+    return { platform: 'facebook', kind: 'video', id: url.searchParams.get('v') };
+  }
+  return null;
+}
+
+function submittedPageIdentity(parsed, blueskyDid = null) {
+  const url = new URL(parsed.url);
+  if (parsed.platform === 'twitter') {
+    const id = url.pathname.match(TWITTER_SUBMITTED_STATUS_PATTERN)?.[1];
+    return id ? { platform: 'twitter', kind: 'post', id } : null;
+  }
+  if (parsed.platform === 'facebook') return facebookSubmittedIdentity(url);
+  if (parsed.platform === 'bluesky') {
+    const match = url.pathname.match(/^\/profile\/([^/]+)\/post\/([A-Za-z0-9]+)\/?$/);
+    if (!match) return null;
+    const account = blueskyDid && match[1] === blueskyDid.did
+      ? blueskyDid.handle
+      : match[1].toLowerCase();
+    return { platform: 'bluesky', kind: 'post', id: match[2], account };
+  }
+  return null;
+}
+
+function submittedIdentitiesMatch(submitted, final) {
+  if (!submitted || !final || submitted.platform !== final.platform) return false;
+  if (submitted.platform === 'facebook' && submitted.kind === 'share') {
+    return submitted.shareType === 'p'
+      ? final.kind === 'post'
+      : final.kind === 'video';
+  }
+  return submitted.kind === final.kind
+    && submitted.id === final.id
+    && (submitted.platform !== 'bluesky' || submitted.account === final.account);
+}
+
+async function resolveBlueskyDidHandle(did, profileFetch, signal) {
+  try {
+    const endpoint = new URL('https://public.api.bsky.app/xrpc/app.bsky.actor.getProfile');
+    endpoint.searchParams.set('actor', did);
+    const response = await profileFetch(endpoint.toString(), {
+      credentials: 'omit',
+      signal,
+    });
+    if (!response?.ok) return null;
+    const data = await response.json();
+    return isValidBlueskyHandle(data?.handle) ? data.handle.toLowerCase() : null;
+  } catch {
+    return null;
+  }
 }
 
 // yyyy-mm-dd in the user's own timezone.
@@ -513,10 +697,14 @@ export async function resolveViaApi(platform, pageUrl) {
 
 // --- API-based video resolvers ---
 
-async function resolveTwitterVideo(tweetId) {
+async function resolveTwitterVideo(
+  tweetId,
+  { fetchImpl = globalThis.fetch, signal } = {},
+) {
   try {
-    const resp = await fetch(
-      `https://cdn.syndication.twimg.com/tweet-result?id=${tweetId}&token=0`
+    const resp = await fetchImpl(
+      `https://cdn.syndication.twimg.com/tweet-result?id=${tweetId}&token=0`,
+      { signal },
     );
     if (!resp.ok) {
       console.warn('SocialSnag: syndication API returned', resp.status);
@@ -565,6 +753,7 @@ async function resolveTwitterVideo(tweetId) {
     });
     return null;
   } catch (e) {
+    if (signal?.aborted) return null;
     console.error('SocialSnag: Twitter video API failed:', e);
     await traceResolver({ platform: 'twitter', path: 'syndication', outcome: 'threw' });
     return null;
@@ -586,24 +775,31 @@ async function resolveTwitterVideo(tweetId) {
 
 // Fetch and enumerate every media item in an Instagram post (single image/video
 // or full carousel) via the private web API.
-export async function resolveInstagramPost(shortcode) {
+export async function resolveInstagramPost(
+  shortcode,
+  { fetchImpl = globalThis.fetch, signal } = {},
+) {
   try {
     const mediaId = shortcodeToMediaId(shortcode);
     if (!mediaId) return { error: null };
 
-    const resp = await fetch(
+    const resp = await fetchImpl(
       `https://i.instagram.com/api/v1/media/${mediaId}/info/`,
       {
         headers: {
           'x-ig-app-id': IG_APP_ID,
         },
         credentials: 'include',
+        signal,
       }
     );
     if (!resp.ok) {
       console.warn('SocialSnag: Instagram API returned', resp.status);
       await traceResolver({ platform: 'instagram', path: 'post-api', outcome: 'http-error', status: resp.status });
-      return { error: mapIgStatusToMessage(resp.status) };
+      return {
+        error: mapIgStatusToMessage(resp.status),
+        code: mapIgStatusToCode(resp.status),
+      };
     }
 
     const data = await resp.json();
@@ -612,7 +808,7 @@ export async function resolveInstagramPost(shortcode) {
       // The case #25 was filed for: a 200 that parses to nothing looks identical to
       // a network failure from the outside.
       await traceResolver({ platform: 'instagram', path: 'post-api', outcome: 'empty', status: resp.status, itemCount: 0 });
-      return { error: mapIgStatusToMessage(0) };
+      return { error: mapIgStatusToMessage(0), code: mapIgStatusToCode(0) };
     }
 
     await traceResolver({ platform: 'instagram', path: 'post-api', outcome: 'ok', status: resp.status, itemCount: items.length });
@@ -627,15 +823,21 @@ export async function resolveInstagramPost(shortcode) {
 // Look up an Instagram username's numeric user id via the private web API.
 // Returns `{ userId }` or `{ error }`, so a story lookup that fails at this step
 // still carries its reason back to the click that asked for it.
-async function fetchInstagramUserId(username) {
+async function fetchInstagramUserId(
+  username,
+  { fetchImpl = globalThis.fetch, signal } = {},
+) {
   try {
-    const resp = await fetch(
+    const resp = await fetchImpl(
       `https://www.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(username)}`,
-      { headers: { 'x-ig-app-id': IG_APP_ID }, credentials: 'include' },
+      { headers: { 'x-ig-app-id': IG_APP_ID }, credentials: 'include', signal },
     );
     if (!resp.ok) {
       await traceResolver({ platform: 'instagram', path: 'user-lookup', outcome: 'http-error', status: resp.status });
-      return { error: mapIgStatusToMessage(resp.status) };
+      return {
+        error: mapIgStatusToMessage(resp.status),
+        code: mapIgStatusToCode(resp.status),
+      };
     }
     const data = await resp.json();
     const userId = data?.data?.user?.id || null;
@@ -653,18 +855,24 @@ async function fetchInstagramUserId(username) {
 
 // Resolve a story ref to its media via the reels_media API. storyId null means
 // the whole active tray.
-export async function resolveInstagramStories({ username, storyId }) {
-  const lookup = await fetchInstagramUserId(username);
-  if (!lookup.userId) return { error: lookup.error };
+export async function resolveInstagramStories(
+  { username, storyId },
+  { fetchImpl = globalThis.fetch, signal } = {},
+) {
+  const lookup = await fetchInstagramUserId(username, { fetchImpl, signal });
+  if (!lookup.userId) return { error: lookup.error, code: lookup.code };
   const userId = lookup.userId;
   try {
-    const resp = await fetch(
+    const resp = await fetchImpl(
       `https://i.instagram.com/api/v1/feed/reels_media/?reel_ids=${userId}`,
-      { headers: { 'x-ig-app-id': IG_APP_ID }, credentials: 'include' },
+      { headers: { 'x-ig-app-id': IG_APP_ID }, credentials: 'include', signal },
     );
     if (!resp.ok) {
       await traceResolver({ platform: 'instagram', path: 'story-api', outcome: 'http-error', status: resp.status });
-      return { error: mapIgStatusToMessage(resp.status) };
+      return {
+        error: mapIgStatusToMessage(resp.status),
+        code: mapIgStatusToCode(resp.status),
+      };
     }
     const data = await resp.json();
     const items = parseStoryTray(data, { storyId });
@@ -672,7 +880,7 @@ export async function resolveInstagramStories({ username, storyId }) {
       // Expected when a story has aged out of the 24h window, and indistinguishable
       // from a lookup bug without this line.
       await traceResolver({ platform: 'instagram', path: 'story-api', outcome: 'empty', status: resp.status, itemCount: 0, detail: storyId ? 'single story' : 'full tray' });
-      return { error: mapIgStatusToMessage(0) };
+      return { error: mapIgStatusToMessage(0), code: mapIgStatusToCode(0) };
     }
     await traceResolver({ platform: 'instagram', path: 'story-api', outcome: 'ok', status: resp.status, itemCount: items.length });
     return { items };
@@ -688,7 +896,7 @@ export async function resolveInstagramStories({ username, storyId }) {
 // single-video click reports "log in" rather than the generic miss message.
 async function resolveInstagramVideo(shortcode) {
   const post = await resolveInstagramPost(shortcode);
-  if (!post.items) return { error: post.error };
+  if (!post.items) return { error: post.error, code: post.code };
   const video = post.items.find((it) => it.type === 'video');
   // A post that resolved fine but holds no video is a miss, not a failure: the
   // caller falls through to the DOM path for images, so there is no reason here.
@@ -861,9 +1069,9 @@ chrome.downloads.onErased.addListener(async (downloadId) => {
 // URL. Items that already carry a url pass straight through. Returns null if a
 // placeholder cannot be resolved. Shared by the download and copy-URL paths so
 // both handle these items identically.
-export async function resolveItemUrl(item) {
+export async function resolveItemUrl(item, options = {}) {
   if (!item.needsVideoLookup) return item.url;
-  if (item.tweetId) return resolveTwitterVideo(item.tweetId);
+  if (item.tweetId) return resolveTwitterVideo(item.tweetId, options);
   // The reason is dropped here, not reported. This runs after the handler's
   // notification branch, so a lookup that fails at this point (logged out,
   // rate-limited) reaches the user as the generic copy-failure message rather
@@ -1015,6 +1223,372 @@ async function recordDownload(item, platform, downloadId) {
 
   await chrome.storage.local.set({ downloadHistory });
 }
+
+const SUBMITTED_TAB_LOAD_TIMEOUT_MS = 15000;
+const SUBMITTED_OPERATION_TIMEOUT_MS = 15000;
+const SUBMITTED_RESOLVE_ATTEMPTS = 4;
+const SUBMITTED_RETRY_DELAY_MS = 500;
+const SUBMITTED_MAX_ITEMS = 20;
+const SUBMITTED_OPERATION_TIMEOUT = Symbol('submitted-operation-timeout');
+
+function submittedDownloadResult(ok, code, platform = null, count = 0) {
+  return { ok, code, platform, count };
+}
+
+function waitForSubmittedTab(tabId, timeoutMs) {
+  return new Promise((resolve) => {
+    let finished = false;
+    const finish = (loaded) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      chrome.tabs.onUpdated.removeListener(onUpdated);
+      resolve(loaded);
+    };
+    const onUpdated = (updatedId, changeInfo, tab) => {
+      if (updatedId !== tabId) return;
+      if (changeInfo?.status === 'complete' || tab?.status === 'complete') finish(true);
+    };
+    const timer = setTimeout(() => finish(false), timeoutMs);
+
+    // Listen before reading the current state so a completion event in between
+    // cannot be lost. tabs.get then catches a completion that happened before
+    // the listener was attached.
+    chrome.tabs.onUpdated.addListener(onUpdated);
+    chrome.tabs.get(tabId)
+      .then((tab) => {
+        if (tab?.status === 'complete') finish(true);
+      })
+      .catch(() => {});
+  });
+}
+
+function waitForSubmittedRetry(delayMs) {
+  return new Promise((resolve) => setTimeout(resolve, delayMs));
+}
+
+// Apply one deadline shape to submitted network and content-script operations.
+// Promise.race installs rejection handlers on the operation promise, so a late
+// rejection after the timeout cannot become an unhandled rejection. The timer is
+// cleared on every other exit, and abort-capable work receives a fresh signal.
+async function runSubmittedWithDeadline(operation, timeoutMs, { abort = false } = {}) {
+  const controller = abort && typeof globalThis.AbortController !== 'undefined'
+    ? new globalThis.AbortController()
+    : null;
+  let timer;
+  const task = Promise.resolve().then(() => operation(controller?.signal));
+  const deadline = new Promise((resolve) => {
+    timer = setTimeout(() => {
+      resolve(SUBMITTED_OPERATION_TIMEOUT);
+      controller?.abort();
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([task, deadline]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function resolveSubmittedTab(
+  tabId,
+  pageUrl,
+  attempts,
+  retryDelayMs,
+  operationTimeoutMs,
+  canonicalHandle = null,
+) {
+  let receivedResponse = false;
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      const message = { action: 'resolvePage', pageUrl };
+      if (canonicalHandle) message.canonicalHandle = canonicalHandle;
+      const response = await runSubmittedWithDeadline(
+        () => chrome.tabs.sendMessage(tabId, message),
+        operationTimeoutMs,
+      );
+      if (response === SUBMITTED_OPERATION_TIMEOUT) {
+        return { code: 'resolution_timeout' };
+      }
+      receivedResponse = true;
+      const items = Array.isArray(response?.urls)
+        ? response.urls
+          .slice(0, SUBMITTED_MAX_ITEMS)
+          .filter((item) => item && typeof item === 'object')
+        : [];
+      if (items.length > 0) return { items };
+    } catch {
+      // A new SPA tab can complete before the content script or post DOM is
+      // ready. The bounded retry below is the recovery path.
+    }
+    if (attempt + 1 < attempts) await waitForSubmittedRetry(retryDelayMs);
+  }
+  return {
+    code: receivedResponse ? 'access_or_unavailable' : 'resolution_timeout',
+  };
+}
+
+async function resolveSubmittedInstagram(parsed, options = {}) {
+  const pathname = new URL(parsed.url).pathname;
+  const storyRef = extractStoryRef(pathname);
+  if (storyRef) return resolveInstagramStories(storyRef, options);
+
+  const shortcode = pathname.match(/^\/(?:p|reel|tv)\/([A-Za-z0-9_-]+)/)?.[1];
+  if (!shortcode) return { code: 'invalid_url' };
+  return resolveInstagramPost(shortcode, options);
+}
+
+// Resolve and download one exact submitted post entirely inside the extension.
+// Only this four-field result crosses back to the landing page. Submitted page
+// URLs, resolved CDN URLs, cookies, DOM, and account data stay inside Chrome.
+export async function orchestrateSubmittedDownload(rawUrl, options = {}) {
+  const parsed = parseSubmittedPageUrl(rawUrl);
+  if (parsed.error) return submittedDownloadResult(false, parsed.error);
+
+  const platform = parsed.platform;
+  const tabLoadTimeoutMs = Number.isFinite(options.tabLoadTimeoutMs)
+    ? Math.max(0, options.tabLoadTimeoutMs)
+    : SUBMITTED_TAB_LOAD_TIMEOUT_MS;
+  const resolveAttempts = Number.isInteger(options.resolveAttempts)
+    ? Math.min(10, Math.max(1, options.resolveAttempts))
+    : SUBMITTED_RESOLVE_ATTEMPTS;
+  const retryDelayMs = Number.isFinite(options.retryDelayMs)
+    ? Math.max(0, options.retryDelayMs)
+    : SUBMITTED_RETRY_DELAY_MS;
+  const operationTimeoutMs = Number.isFinite(options.operationTimeoutMs)
+    ? Math.max(0, options.operationTimeoutMs)
+    : SUBMITTED_OPERATION_TIMEOUT_MS;
+  const submittedFetch = typeof options.submittedFetch === 'function'
+    ? options.submittedFetch
+    : globalThis.fetch;
+
+  let createdTabId = null;
+  try {
+    const platformSetting = `platform_${platform}`;
+    const settings = await chrome.storage.sync.get({ [platformSetting]: true });
+    if (settings[platformSetting] === false) {
+      return submittedDownloadResult(false, 'platform_disabled', platform);
+    }
+
+    let resolved;
+    if (platform === 'instagram') {
+      resolved = await runSubmittedWithDeadline(
+        (signal) => resolveSubmittedInstagram(parsed, {
+          fetchImpl: submittedFetch,
+          signal,
+        }),
+        operationTimeoutMs,
+        { abort: true },
+      );
+      if (resolved === SUBMITTED_OPERATION_TIMEOUT) {
+        resolved = { code: 'resolution_timeout' };
+      }
+    } else {
+      const blueskyRef = platform === 'bluesky'
+        ? new URL(parsed.url).pathname.match(/^\/profile\/([^/]+)\/post\/[A-Za-z0-9]+\/?$/)
+        : null;
+      let blueskyDid = null;
+      if (blueskyRef && BLUESKY_DID_PATTERN.test(blueskyRef[1])) {
+        const profileFetch = typeof options.profileFetch === 'function'
+          ? options.profileFetch
+          : globalThis.fetch;
+        const profile = await runSubmittedWithDeadline(
+          (signal) => resolveBlueskyDidHandle(blueskyRef[1], profileFetch, signal),
+          operationTimeoutMs,
+          { abort: true },
+        );
+        if (profile === SUBMITTED_OPERATION_TIMEOUT) {
+          return submittedDownloadResult(false, 'resolution_timeout', platform);
+        }
+        const handle = profile;
+        if (!handle) {
+          return submittedDownloadResult(false, 'access_or_unavailable', platform);
+        }
+        blueskyDid = { did: blueskyRef[1], handle };
+      }
+      const submittedIdentity = submittedPageIdentity(parsed, blueskyDid);
+
+      const tab = await chrome.tabs.create({ url: parsed.url, active: false });
+      if (!Number.isInteger(tab?.id)) {
+        return submittedDownloadResult(false, 'unexpected', platform);
+      }
+      createdTabId = tab.id;
+      const loaded = tab.status === 'complete'
+        || await waitForSubmittedTab(createdTabId, tabLoadTimeoutMs);
+      if (!loaded) {
+        return submittedDownloadResult(false, 'resolution_timeout', platform);
+      }
+
+      let finalTab;
+      try {
+        finalTab = await chrome.tabs.get(createdTabId);
+      } catch {
+        return submittedDownloadResult(false, 'access_or_unavailable', platform);
+      }
+      const finalParsed = parseSubmittedPageUrl(finalTab?.url);
+      if (finalParsed.error || finalParsed.platform !== platform) {
+        return submittedDownloadResult(false, 'access_or_unavailable', platform);
+      }
+      const finalIdentity = submittedPageIdentity(finalParsed, blueskyDid);
+      if (!submittedIdentitiesMatch(submittedIdentity, finalIdentity)) {
+        return submittedDownloadResult(false, 'access_or_unavailable', platform);
+      }
+      resolved = await resolveSubmittedTab(
+        createdTabId,
+        finalParsed.url,
+        resolveAttempts,
+        retryDelayMs,
+        operationTimeoutMs,
+        blueskyDid?.handle,
+      );
+    }
+
+    if (!resolved?.items) {
+      return submittedDownloadResult(
+        false,
+        resolved?.code || (platform === 'instagram' ? 'unexpected' : 'access_or_unavailable'),
+        platform,
+      );
+    }
+
+    const items = resolved.items
+      .filter((item) => item && typeof item === 'object')
+      .slice(0, SUBMITTED_MAX_ITEMS);
+    if (items.length === 0) {
+      return submittedDownloadResult(false, 'no_media', platform);
+    }
+
+    let count = 0;
+    let hadDownloadFailure = false;
+    let hadHistoryFailure = false;
+    let hadResolutionTimeout = false;
+    for (const [position, item] of items.entries()) {
+      let downloadItem = item;
+      if (item.needsVideoLookup) {
+        const resolvedUrl = await runSubmittedWithDeadline(
+          (signal) => resolveItemUrl(item, { fetchImpl: submittedFetch, signal }),
+          operationTimeoutMs,
+          { abort: true },
+        );
+        if (resolvedUrl === SUBMITTED_OPERATION_TIMEOUT) {
+          hadDownloadFailure = true;
+          hadResolutionTimeout = true;
+          continue;
+        }
+        if (!resolvedUrl) {
+          hadDownloadFailure = true;
+          continue;
+        }
+        downloadItem = { ...item, url: resolvedUrl, needsVideoLookup: false };
+      }
+
+      let saved = null;
+      try {
+        saved = await downloadMedia(downloadItem, platform, position + 1);
+      } catch {
+        // Keep trying the remaining bounded items. The response reports only
+        // how many succeeded, never the failed item's URL or filename.
+      }
+      if (!saved) {
+        hadDownloadFailure = true;
+        continue;
+      }
+      try {
+        await recordDownload({ ...item, filename: saved.filename }, platform, saved.downloadId);
+      } catch {
+        // The browser download has already started. Count it as saved while the
+        // incomplete batch result tells the page not every operation finished.
+        hadHistoryFailure = true;
+      }
+      count++;
+    }
+
+    if (hadDownloadFailure || count !== items.length) {
+      if (count === 0 && hadResolutionTimeout) {
+        return submittedDownloadResult(false, 'resolution_timeout', platform);
+      }
+      return submittedDownloadResult(false, 'download_failed', platform, count);
+    }
+    if (hadHistoryFailure) {
+      return submittedDownloadResult(false, 'history_failed', platform, count);
+    }
+    return submittedDownloadResult(true, 'ok', platform, count);
+  } catch {
+    return submittedDownloadResult(false, 'unexpected', platform);
+  } finally {
+    if (createdTabId !== null) {
+      try {
+        await chrome.tabs.remove(createdTabId);
+      } catch {
+        console.warn('SocialSnag: could not close the temporary resolver tab.');
+      }
+    }
+  }
+}
+
+const SUBMITTED_SENDER_ORIGIN = 'https://jamditis.github.io';
+
+function isAllowedSubmittedSender(sender) {
+  if (!sender || typeof sender.url !== 'string') return false;
+  if (sender.origin && sender.origin !== SUBMITTED_SENDER_ORIGIN) return false;
+
+  let url;
+  try {
+    url = new URL(sender.url, sender.origin || undefined);
+  } catch {
+    return false;
+  }
+  return url.origin === SUBMITTED_SENDER_ORIGIN
+    && !url.username
+    && !url.password
+    && !url.port
+    && url.pathname.startsWith('/socialsnag/');
+}
+
+function isSubmittedDownloadRequest(message) {
+  if (!message || typeof message !== 'object' || Array.isArray(message)) return false;
+  const keys = Object.keys(message);
+  return keys.length === 2
+    && keys.includes('action')
+    && keys.includes('url')
+    && message.action === 'downloadSubmittedUrl'
+    && typeof message.url === 'string';
+}
+
+let submittedDownloadActive = false;
+
+// Kept separate from runtime.onMessage: web pages have a different trust model
+// from extension-owned content scripts and must pass both sender and URL gates.
+chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => {
+  Promise.resolve().then(async () => {
+    if (!isAllowedSubmittedSender(sender)) {
+      return submittedDownloadResult(false, 'invalid_sender');
+    }
+    if (!isSubmittedDownloadRequest(message)) {
+      return submittedDownloadResult(false, 'invalid_request');
+    }
+    if (message.url.length === 0 || message.url.length > MAX_SUBMITTED_URL_LENGTH) {
+      return submittedDownloadResult(false, 'invalid_url');
+    }
+
+    const parsed = parseSubmittedPageUrl(message.url);
+    if (parsed.error) return submittedDownloadResult(false, parsed.error);
+    if (submittedDownloadActive) {
+      return submittedDownloadResult(false, 'busy', parsed.platform);
+    }
+
+    submittedDownloadActive = true;
+    try {
+      return await orchestrateSubmittedDownload(parsed.url);
+    } finally {
+      submittedDownloadActive = false;
+    }
+  }).then(
+    sendResponse,
+    () => sendResponse(submittedDownloadResult(false, 'unexpected')),
+  );
+  return true;
+});
 
 // Show a browser notification
 function showNotification(message) {

@@ -10,6 +10,8 @@ import {
   imageInScope,
   resolveAll,
   resolveSingle,
+  resolvePage,
+  resolveContentMessage,
 } from '../src/platforms/twitter.js';
 
 // Minimal DOM stub in the same plain-object style as common.test.js. A node
@@ -492,6 +494,157 @@ describe('resolveAll', () => {
     // value back at all proves the loop is cut.
     const { mainText } = textOnlyQuotingTree();
     expect(resolveAll(mainText)).toEqual([]);
+  });
+});
+
+describe('resolvePage', () => {
+  it('resolves the direct post without a right-click target', async () => {
+    const t = quotedTweetTree();
+    const root = { querySelectorAll: () => [t.article] };
+
+    const items = await resolvePage(root, 'https://x.com/main/status/111');
+
+    expect(items).toHaveLength(1);
+    expect(items[0].url).toContain('MAIN.jpg');
+  });
+
+  it('resolves a submitted canonical /i/web/status/ URL by its exact id', async () => {
+    const t = quotedTweetTree();
+    const root = { querySelectorAll: () => [t.article] };
+
+    const items = await resolvePage(root, 'https://x.com/i/web/status/111');
+
+    expect(items).toHaveLength(1);
+    expect(items[0].url).toContain('MAIN.jpg');
+  });
+
+  it('adds one verified video placeholder after submitted post images', async () => {
+    const t = quotedTweetTree({ mainVideo: true });
+    const root = { querySelectorAll: () => [t.article] };
+
+    const items = await resolvePage(root, 'https://x.com/main/status/111');
+
+    expect(items).toHaveLength(2);
+    expect(items[0].url).toContain('MAIN.jpg');
+    expect(items[1]).toEqual({
+      type: 'video',
+      filename: 'tweet_111',
+      tweetId: '111',
+      needsVideoLookup: true,
+    });
+  });
+
+  it('does not add a placeholder for a video owned by a quoted tweet', async () => {
+    const t = quotedTweetTree({ quotedVideo: true });
+    const root = { querySelectorAll: () => [t.article] };
+
+    const items = await resolvePage(root, 'https://x.com/main/status/111');
+
+    expect(items).toHaveLength(1);
+    expect(items[0].url).toContain('MAIN.jpg');
+    expect(items.some((item) => item.needsVideoLookup)).toBe(false);
+  });
+
+  it('reserves one of the 20 submitted item slots for the verified video', async () => {
+    const status = makeNode({ tag: 'A', href: '/user/status/333' });
+    const images = Array.from({ length: 20 }, (_, index) => makeNode({
+      tag: 'IMG',
+      src: `https://pbs.twimg.com/media/IMAGE_${index}.jpg`,
+    }));
+    const video = makeNode({ tag: 'VIDEO' });
+    const article = makeNode({
+      tag: 'ARTICLE',
+      is: ['article[data-testid="tweet"]', 'article[role="article"]'],
+      children: [status, ...images, video],
+    });
+    const root = { querySelectorAll: () => [article] };
+
+    const items = await resolvePage(root, 'https://x.com/user/status/333');
+
+    expect(items).toHaveLength(20);
+    expect(items.filter((item) => item.needsVideoLookup)).toEqual([{
+      type: 'video',
+      filename: 'tweet_333',
+      tweetId: '333',
+      needsVideoLookup: true,
+    }]);
+    expect(items.filter((item) => item.type === 'image')).toHaveLength(19);
+  });
+
+  it('handles a resolvePage message without a stored right-click target', async () => {
+    const t = quotedTweetTree();
+    const root = { querySelectorAll: () => [t.article] };
+
+    const items = await resolveContentMessage({
+      action: 'resolvePage',
+      pageUrl: 'https://x.com/main/status/111',
+    }, null, root);
+
+    expect(items).toHaveLength(1);
+    expect(items[0].url).toContain('MAIN.jpg');
+  });
+
+  it('chooses the container whose permalink matches the submitted status URL', async () => {
+    const makeDirectTweet = (id, label) => {
+      const status = makeNode({ tag: 'A', href: `/user/status/${id}` });
+      const media = makeNode({
+        tag: 'IMG',
+        src: `https://pbs.twimg.com/media/${label}.jpg`,
+      });
+      return makeNode({
+        tag: 'ARTICLE',
+        is: ['article[data-testid="tweet"]', 'article[role="article"]'],
+        children: [status, media],
+      });
+    };
+    const unrelated = makeDirectTweet('111', 'UNRELATED');
+    const requested = makeDirectTweet('222', 'REQUESTED');
+    const root = { querySelectorAll: () => [unrelated, requested] };
+
+    const items = await resolvePage(root, 'https://x.com/user/status/222');
+
+    expect(items).toHaveLength(1);
+    expect(items[0].url).toContain('REQUESTED.jpg');
+    expect(items[0].url).not.toContain('UNRELATED.jpg');
+  });
+
+  it('returns no media when no container proves the submitted status id', async () => {
+    const t = quotedTweetTree();
+    const root = { querySelectorAll: () => [t.article] };
+
+    expect(await resolvePage(root, 'https://x.com/user/status/999')).toEqual([]);
+  });
+
+  it('uses the verified tweet id instead of a page-wide captured reply video', async () => {
+    const status = makeNode({ tag: 'A', href: '/user/status/444' });
+    const video = makeNode({ tag: 'VIDEO' });
+    const article = makeNode({
+      tag: 'ARTICLE',
+      is: ['article[data-testid="tweet"]', 'article[role="article"]'],
+      children: [status, video],
+    });
+    const root = { querySelectorAll: () => [article] };
+    const originalSendMessage = chrome.runtime.sendMessage;
+    chrome.runtime.sendMessage = (_message, callback) => callback({
+      urls: [{
+        url: 'https://video.twimg.com/ext_tw_video/999/reply.mp4',
+        type: 'video',
+        timestamp: 999,
+      }],
+    });
+
+    try {
+      const items = await resolvePage(root, 'https://x.com/user/status/444');
+
+      expect(items).toEqual([{
+        type: 'video',
+        filename: 'tweet_444',
+        tweetId: '444',
+        needsVideoLookup: true,
+      }]);
+    } finally {
+      chrome.runtime.sendMessage = originalSendMessage;
+    }
   });
 });
 

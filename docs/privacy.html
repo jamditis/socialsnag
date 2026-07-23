@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Privacy policy - SocialSnag</title>
-    <meta name="description" content="SocialSnag privacy policy. No data collection, no analytics, no servers.">
+    <meta name="description" content="SocialSnag privacy policy. No developer-operated backend, analytics scripts, or remote logging.">
 
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 128 128'%3E%3Crect x='16' y='16' width='96' height='96' rx='18' fill='%233b82f6'/%3E%3Crect x='57' y='34' width='14' height='30' rx='2' fill='%23fff'/%3E%3Cpolygon points='64,82 42,58 86,58' fill='%23fff'/%3E%3Crect x='36' y='90' width='56' height='6' rx='3' fill='%23fff'/%3E%3C/svg%3E">
 
@@ -293,17 +293,29 @@
 
     <div class="content">
         <h1>Privacy policy</h1>
-        <p class="updated">Last updated: July 7, 2026</p>
+        <p class="updated">Last updated: July 22, 2026</p>
 
-        <h2>What SocialSnag collects</h2>
-        <p>Nothing. SocialSnag does not collect, transmit, or share any user data.</p>
+        <h2>Developer and server boundary</h2>
+        <p>SocialSnag has no developer-operated backend. It does not send browsing history, account data, browser cookies, submitted post URLs, download history, preferences, analytics, telemetry, or tracking data to a SocialSnag server or another developer-operated server. There are no analytics scripts, remote logging, or usage tracking.</p>
 
         <h2>Data stored on your device</h2>
         <p>SocialSnag stores the following data locally using Chrome's built-in storage APIs:</p>
         <ul>
-            <li><strong>Preferences</strong> (<code>chrome.storage.sync</code>): Which platforms are enabled, notification settings, download path, and the advanced mode toggle. These sync across your Chrome instances if you have Chrome sync turned on.</li>
-            <li><strong>Download history</strong> (<code>chrome.storage.local</code>): Filenames, platform names, and timestamps for recent downloads (up to 50 entries). This stays on your device and is never transmitted. Download history does not contain media URLs.</li>
+            <li><strong>Preferences</strong> (<code>chrome.storage.sync</code>): Enabled platforms, notification setting, download path, .zip preference, advanced mode, and resolver debug setting. Chrome may sync these settings through the signed-in browser account.</li>
+            <li><strong>Download history</strong> (<code>chrome.storage.local</code>): Filename, platform, media type, timestamp, and Chrome download ID for each successful download, up to 50 entries. Download history does not contain media URLs and is not synced.</li>
+            <li><strong>Advanced-mode captures</strong> (<code>chrome.storage.session</code>): Media URL, browser request type, and timestamp, up to 50 entries per tab. These entries are held in browser session storage and removed when the tab closes.</li>
+            <li><strong>Pending .zip cleanup</strong> (<code>chrome.storage.session</code>): A locally created blob URL keyed by its Chrome download ID while a .zip download is active. The entry is removed when the download completes, is erased, or can no longer resume.</li>
         </ul>
+
+        <h2>Two download workflows</h2>
+        <p><strong>Right-click use:</strong> Open a supported post, right-click its media, and choose a SocialSnag action. The extension reads only the page data needed to resolve that media.</p>
+        <p><strong>Direct post-link use:</strong> Paste a direct Instagram, X/Twitter, Facebook, or Bluesky post link into the SocialSnag GitHub Pages form. The static page sends the link directly to the locally installed extension through Chrome's runtime messaging. The extension resolves and downloads the media in your browser, using the platform accounts already signed in to that browser when access is required.</p>
+
+        <h2>Landing-page privacy</h2>
+        <p>The GitHub Pages site has no developer-operated backend, analytics, or remote logging. SocialSnag does not write submitted URLs to extension storage or send them to a SocialSnag server or another developer-operated server. The submitted value remains visible in the form until you change it or close the page.</p>
+        <p>Instagram submissions are resolved through direct platform API requests. X/Twitter, Facebook, and Bluesky submissions may load in a temporary inactive browser tab. That tab uses the browser's existing signed-in session and normal platform network behavior. Normal browser cache and history behavior may apply when a platform page loads. The extension closes the temporary tab when resolution finishes or fails.</p>
+        <p>The extension returns only success or failure, the supported platform name, and the number of downloads that started. Resolved CDN URLs, page content, browser cookies, and account data do not return to the GitHub Pages site.</p>
+        <p>If the extension cannot proceed because you are logged out, lack access, the post is private, expired, or deleted, the platform is rate-limiting requests, or the link is unsupported, the form shows a visible failure message.</p>
 
         <h2>Permissions</h2>
         <table>
@@ -328,7 +340,7 @@
         <p>LinkedIn and TikTok host permissions are optional and only requested if you enable those platforms.</p>
 
         <h2>Third-party services</h2>
-        <p>SocialSnag does not use any third-party analytics, tracking, or data-collection services. When you download a video, the extension may contact the social platform's own public API (for example, Twitter's syndication API or Instagram's media API) to resolve the video URL. These requests go directly to the platform you are already browsing -- no intermediary servers are involved.</p>
+        <p>SocialSnag does not use any third-party analytics, tracking, or data-collection services. When you download media, the extension may contact the social platform's own API or media hosts to resolve the download URL. These requests go directly to the selected platform. No SocialSnag or intermediary server is involved.</p>
 
         <h2>User control</h2>
         <ul>
