@@ -500,9 +500,9 @@ describe('resolveAll', () => {
 describe('resolvePage', () => {
   it('resolves the direct post without a right-click target', async () => {
     const t = quotedTweetTree();
-    const root = { querySelector: () => t.article };
+    const root = { querySelectorAll: () => [t.article] };
 
-    const items = await resolvePage(root);
+    const items = await resolvePage(root, 'https://x.com/main/status/111');
 
     expect(items).toHaveLength(1);
     expect(items[0].url).toContain('MAIN.jpg');
@@ -510,12 +510,46 @@ describe('resolvePage', () => {
 
   it('handles a resolvePage message without a stored right-click target', async () => {
     const t = quotedTweetTree();
-    const root = { querySelector: () => t.article };
+    const root = { querySelectorAll: () => [t.article] };
 
-    const items = await resolveContentMessage({ action: 'resolvePage' }, null, root);
+    const items = await resolveContentMessage({
+      action: 'resolvePage',
+      pageUrl: 'https://x.com/main/status/111',
+    }, null, root);
 
     expect(items).toHaveLength(1);
     expect(items[0].url).toContain('MAIN.jpg');
+  });
+
+  it('chooses the container whose permalink matches the submitted status URL', async () => {
+    const makeDirectTweet = (id, label) => {
+      const status = makeNode({ tag: 'A', href: `/user/status/${id}` });
+      const media = makeNode({
+        tag: 'IMG',
+        src: `https://pbs.twimg.com/media/${label}.jpg`,
+      });
+      return makeNode({
+        tag: 'ARTICLE',
+        is: ['article[data-testid="tweet"]', 'article[role="article"]'],
+        children: [status, media],
+      });
+    };
+    const unrelated = makeDirectTweet('111', 'UNRELATED');
+    const requested = makeDirectTweet('222', 'REQUESTED');
+    const root = { querySelectorAll: () => [unrelated, requested] };
+
+    const items = await resolvePage(root, 'https://x.com/user/status/222');
+
+    expect(items).toHaveLength(1);
+    expect(items[0].url).toContain('REQUESTED.jpg');
+    expect(items[0].url).not.toContain('UNRELATED.jpg');
+  });
+
+  it('returns no media when no container proves the submitted status id', async () => {
+    const t = quotedTweetTree();
+    const root = { querySelectorAll: () => [t.article] };
+
+    expect(await resolvePage(root, 'https://x.com/user/status/999')).toEqual([]);
   });
 });
 

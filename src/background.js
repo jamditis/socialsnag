@@ -116,17 +116,23 @@ const FACEBOOK_RESERVED_ACCOUNTS = new Set([
 
 function isFacebookSubmittedPost(url) {
   const path = url.pathname;
-  if (/^\/groups\/[^/]+\/(?:posts|permalink)\/[A-Za-z0-9._-]+\/?$/.test(path)) return true;
+  const postId = '(?:\\d+|pfbid[A-Za-z0-9]+)';
+  if (new RegExp(`^/groups/[A-Za-z0-9._-]+/(?:posts|permalink)/${postId}/?$`).test(path)) {
+    return true;
+  }
   const account = path.match(/^\/([^/]+)\//)?.[1]?.toLowerCase();
-  const hasAccount = account && !FACEBOOK_RESERVED_ACCOUNTS.has(account);
-  if (hasAccount && /^\/[^/]+\/posts\/[A-Za-z0-9._-]+\/?$/.test(path)) return true;
-  if (hasAccount && /^\/[^/]+\/photos\/(?:[^/]+\/)*\d+\/?$/.test(path)) return true;
-  if (hasAccount && /^\/[^/]+\/videos\/\d+\/?$/.test(path)) return true;
+  const hasAccount = /^[A-Za-z0-9.]+$/.test(account || '')
+    && !FACEBOOK_RESERVED_ACCOUNTS.has(account);
+  if (hasAccount && new RegExp(`^/[A-Za-z0-9.]+/posts/${postId}/?$`).test(path)) return true;
+  if (hasAccount && /^\/[A-Za-z0-9.]+\/photos\/(?:(?:[A-Za-z0-9_-]+\.)?\d+\/)?\d+\/?$/.test(path)) {
+    return true;
+  }
+  if (hasAccount && /^\/[A-Za-z0-9.]+\/videos\/\d+\/?$/.test(path)) return true;
   if (/^\/reel\/\d+\/?$/.test(path)) return true;
   if (/^\/share\/[prv]\/[A-Za-z0-9_-]+\/?$/.test(path)) return true;
   if (/^\/photo\.php$/.test(path)) return /^\d+$/.test(url.searchParams.get('fbid') || '');
   if (/^\/(?:permalink|story)\.php$/.test(path)) {
-    return /^[A-Za-z0-9._-]+$/.test(url.searchParams.get('story_fbid') || '')
+    return new RegExp(`^${postId}$`).test(url.searchParams.get('story_fbid') || '')
       && /^\d+$/.test(url.searchParams.get('id') || '');
   }
   return /^\/watch\/?$/.test(path) && /^\d+$/.test(url.searchParams.get('v') || '');
@@ -138,13 +144,13 @@ function isFacebookSubmittedPost(url) {
 // message boundary without echoing the submitted value.
 export function parseSubmittedPageUrl(rawUrl) {
   if (typeof rawUrl !== 'string' || rawUrl.length === 0
-      || rawUrl.length > MAX_SUBMITTED_URL_LENGTH) {
+      || rawUrl.length > MAX_SUBMITTED_URL_LENGTH || rawUrl !== rawUrl.trim()) {
     return { error: 'invalid_url' };
   }
 
   let url;
   try {
-    url = new URL(rawUrl.trim());
+    url = new URL(rawUrl);
   } catch {
     return { error: 'invalid_url' };
   }
@@ -169,14 +175,18 @@ export function parseSubmittedPageUrl(rawUrl) {
     validPath = isFacebookSubmittedPost(url);
   } else if (submittedHostMatches(host, 'bsky.app')) {
     platform = 'bluesky';
-    validPath = /^\/profile\/[A-Za-z0-9._:-]+\/post\/[A-Za-z0-9]+\/?$/.test(url.pathname);
+    const match = url.pathname.match(/^\/profile\/([^/]+)\/post\/[A-Za-z0-9]+\/?$/);
+    const account = match?.[1] || '';
+    validPath = /^(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,62})\.)+[A-Za-z0-9](?:[A-Za-z0-9-]{0,62})$/.test(account)
+      || /^did:plc:[A-Za-z0-9]+$/.test(account);
   } else {
     return { error: 'unsupported_url' };
   }
 
   if (!validPath) return { error: 'invalid_url' };
-  url.hash = '';
-  return { url: url.toString(), platform };
+  const fragmentStart = rawUrl.indexOf('#');
+  const fragmentlessUrl = fragmentStart === -1 ? rawUrl : rawUrl.slice(0, fragmentStart);
+  return { url: fragmentlessUrl, platform };
 }
 
 // yyyy-mm-dd in the user's own timezone.
@@ -1158,11 +1168,11 @@ function waitForSubmittedRetry(delayMs) {
   return new Promise((resolve) => setTimeout(resolve, delayMs));
 }
 
-async function resolveSubmittedTab(tabId, attempts, retryDelayMs) {
+async function resolveSubmittedTab(tabId, pageUrl, attempts, retryDelayMs) {
   let receivedResponse = false;
   for (let attempt = 0; attempt < attempts; attempt++) {
     try {
-      const response = await chrome.tabs.sendMessage(tabId, { action: 'resolvePage' });
+      const response = await chrome.tabs.sendMessage(tabId, { action: 'resolvePage', pageUrl });
       receivedResponse = true;
       const items = Array.isArray(response?.urls)
         ? response.urls
@@ -1225,7 +1235,12 @@ export async function orchestrateSubmittedDownload(rawUrl, options = {}) {
       if (!loaded) {
         return submittedDownloadResult(false, 'resolution_timeout', platform);
       }
-      resolved = await resolveSubmittedTab(createdTabId, resolveAttempts, retryDelayMs);
+      resolved = await resolveSubmittedTab(
+        createdTabId,
+        parsed.url,
+        resolveAttempts,
+        retryDelayMs,
+      );
     }
 
     if (!resolved?.items) {

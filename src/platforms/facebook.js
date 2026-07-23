@@ -181,7 +181,7 @@ function resolveSingle(srcUrl, target) {
   return [];
 }
 
-async function resolveAll(target) {
+async function resolveAll(target, { allowCaptured = true } = {}) {
   const post = findPostContainer(target, [
     '[role="article"]',
     '[data-pagelet*="FeedUnit"]',
@@ -196,6 +196,7 @@ async function resolveAll(target) {
   // Fall back to webRequest captures if DOM is sparse. Numbering restarts at 1 by
   // construction: this branch only runs when the DOM walk produced nothing.
   if (items.length === 0) {
+    if (!allowCaptured) return resolveSingle(target?.src || '', target);
     const captured = await getCapturedMedia();
     const fallback = buildCapturedItems(captured);
     if (fallback.dropped > 0) {
@@ -212,26 +213,85 @@ async function resolveAll(target) {
   return items;
 }
 
-// Resolve the primary post on an exact Facebook media URL without a context-menu
-// target. Photo/video viewers do not always wrap their media in an article, so
-// their media-specific elements are the narrow fallback. A broad role=main
-// fallback would pick avatars or navigation art from elsewhere on the page.
-export async function resolvePage(root = document) {
-  const post = root.querySelector(
+function facebookSubmittedKey(rawUrl) {
+  let url;
+  try {
+    url = new URL(rawUrl, 'https://www.facebook.com');
+  } catch {
+    return null;
+  }
+  const host = url.hostname.toLowerCase();
+  if (host !== 'facebook.com' && !host.endsWith('.facebook.com')) return null;
+
+  const path = url.pathname;
+  let match = path.match(/^\/groups\/[^/]+\/(?:posts|permalink)\/([^/]+)\/?$/)
+    || path.match(/^\/[^/]+\/posts\/([^/]+)\/?$/);
+  if (match) return `post:${match[1]}`;
+
+  match = path.match(/^\/[^/]+\/photos\/(?:[^/]+\/)?(\d+)\/?$/);
+  if (match) return `photo:${match[1]}`;
+
+  match = path.match(/^\/[^/]+\/videos\/(\d+)\/?$/)
+    || path.match(/^\/reel\/(\d+)\/?$/);
+  if (match) return `video:${match[1]}`;
+
+  match = path.match(/^\/share\/([prv])\/([A-Za-z0-9_-]+)\/?$/);
+  if (match) return `share:${match[1]}:${match[2]}`;
+
+  if (path === '/photo.php') {
+    const id = url.searchParams.get('fbid');
+    return id ? `photo:${id}` : null;
+  }
+  if (path === '/permalink.php' || path === '/story.php') {
+    const id = url.searchParams.get('story_fbid');
+    return id ? `post:${id}` : null;
+  }
+  if (/^\/watch\/?$/.test(path)) {
+    const id = url.searchParams.get('v');
+    return id ? `video:${id}` : null;
+  }
+  return null;
+}
+
+function hasFacebookPermalink(container, requestedKey) {
+  const links = container.querySelectorAll?.('a[href]') || [];
+  return Array.from(links).some((link) => facebookSubmittedKey(link.href) === requestedKey);
+}
+
+// Resolve only a container or media link whose permalink proves it owns the
+// submitted Facebook identifier. Captured-media fallback is intentionally off
+// here because those requests are page-wide and cannot prove post ownership.
+export async function resolvePage(
+  root = document,
+  pageUrl = globalThis.window?.location?.href || '',
+) {
+  const requestedKey = facebookSubmittedKey(pageUrl);
+  if (!requestedKey) return [];
+
+  const candidates = root.querySelectorAll?.(
     '[role="article"], [data-pagelet*="FeedUnit"], '
     + '[data-pagelet*="ProfileTimeline"]',
-  );
-  if (post) return resolveAll(post);
+  ) || [];
+  for (const candidate of candidates) {
+    if (hasFacebookPermalink(candidate, requestedKey)) {
+      return resolveAll(candidate, { allowCaptured: false });
+    }
+  }
 
-  const media = root.querySelector(
-    'img[data-visualcompletion="media-vc-image"], '
-    + '[data-pagelet*="Video"] video, video[data-video-id]',
-  );
-  return media ? resolveSingle(media.src || '', media) : [];
+  const links = root.querySelectorAll?.('a[href]') || [];
+  for (const link of links) {
+    if (facebookSubmittedKey(link.href) !== requestedKey) continue;
+    const media = link.querySelector?.(
+      'img[data-visualcompletion="media-vc-image"], '
+      + '[data-pagelet*="Video"] video, video[data-video-id]',
+    );
+    return media ? resolveSingle(media.src || '', media) : [];
+  }
+  return [];
 }
 
 export async function resolveContentMessage(message, lastTarget, root = document) {
-  if (message.action === 'resolvePage') return resolvePage(root);
+  if (message.action === 'resolvePage') return resolvePage(root, message.pageUrl);
   if (message.action !== 'resolve') return [];
   return message.type === 'single'
     ? resolveSingle(message.srcUrl, lastTarget)

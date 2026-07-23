@@ -279,15 +279,42 @@ export function resolveAll(target) {
   return items.length > 0 ? items : resolveSingle(target?.src || '', target, { allowFallback: false });
 }
 
-// Resolve the primary tweet on an exact status page. Unlike the context-menu
-// path this starts from the page itself, so it never depends on a right-click.
-export async function resolvePage(root = document) {
-  const target = root.querySelector(TWEET_SELECTORS.join(', '));
-  return target ? await resolveAll(target) : [];
+function submittedStatusId(pageUrl) {
+  try {
+    const url = new URL(pageUrl);
+    const host = url.hostname.toLowerCase();
+    if (host !== 'x.com' && host !== 'twitter.com'
+        && !host.endsWith('.x.com') && !host.endsWith('.twitter.com')) {
+      return null;
+    }
+    return url.pathname.match(/^\/[A-Za-z0-9_]+\/status\/(\d+)\/?$/)?.[1] || null;
+  } catch {
+    return null;
+  }
+}
+
+// Resolve only the tweet whose own permalink proves it is the submitted status.
+// The context-menu path stays target-based; this page path deliberately has no
+// first-tweet fallback because status pages also render replies and quoted posts.
+export async function resolvePage(
+  root = document,
+  pageUrl = globalThis.window?.location?.href || '',
+) {
+  const requestedId = submittedStatusId(pageUrl);
+  if (!requestedId) return [];
+
+  const candidates = root.querySelectorAll?.(TWEET_SELECTORS.join(', ')) || [];
+  for (const candidate of candidates) {
+    const found = findTweetScope(candidate);
+    if (found && statusIdInScope(found) === requestedId) {
+      return await resolveAll(candidate);
+    }
+  }
+  return [];
 }
 
 export async function resolveContentMessage(message, lastTarget, root = document) {
-  if (message.action === 'resolvePage') return resolvePage(root);
+  if (message.action === 'resolvePage') return resolvePage(root, message.pageUrl);
   if (message.action !== 'resolve') return [];
   return message.type === 'single'
     ? resolveSingle(message.srcUrl, lastTarget)

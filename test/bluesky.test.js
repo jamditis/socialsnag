@@ -81,45 +81,49 @@ describe('extractPostId', () => {
 });
 
 describe('resolvePage', () => {
-  it('resolves the direct post without a right-click target', async () => {
+  const makePost = (postId, did = 'did:plc:abc') => {
     const media = {
-      src: 'https://cdn.bsky.app/img/feed_thumbnail/plain/did:plc:abc/bafk@jpeg',
+      src: `https://cdn.bsky.app/img/feed_thumbnail/plain/${did}/${postId}@jpeg`,
     };
-    const post = {
+    const permalink = { href: `/profile/alice.bsky.social/post/${postId}` };
+    return {
       matches: (selector) => selector === '[data-testid^="postThreadItem-by-"]',
       parentElement: null,
       querySelectorAll: (selector) => {
         if (selector === 'img[src*="cdn.bsky.app"]') return [media];
+        if (selector === 'a[href*="/post/"]') return [permalink];
         return [];
       },
     };
-    const root = { querySelector: () => post };
+  };
 
-    const items = await resolvePage(root, '/profile/alice.bsky.social/post/3labc123xyz');
+  it('resolves the direct post without a right-click target', async () => {
+    const post = makePost('3labc123xyz');
+    const root = { querySelectorAll: () => [post] };
+
+    const items = await resolvePage(
+      root,
+      'https://bsky.app/profile/alice.bsky.social/post/3labc123xyz',
+    );
 
     expect(items).toHaveLength(1);
     expect(items[0]).toMatchObject({
-      url: 'https://cdn.bsky.app/img/feed_fullsize/plain/did:plc:abc/bafk@jpeg',
+      url: 'https://cdn.bsky.app/img/feed_fullsize/plain/did:plc:abc/3labc123xyz@jpeg',
       filename: 'post_3labc123xyz_1',
     });
   });
 
   it('handles a resolvePage message without a stored right-click target', async () => {
-    const media = {
-      src: 'https://cdn.bsky.app/img/feed_thumbnail/plain/did:plc:abc/bafk@jpeg',
-    };
-    const post = {
-      matches: (selector) => selector === '[data-testid^="postThreadItem-by-"]',
-      parentElement: null,
-      querySelectorAll: (selector) => selector.includes('cdn.bsky.app') ? [media] : [],
-    };
-    const root = { querySelector: () => post };
+    const post = makePost('3labc123xyz');
+    const root = { querySelectorAll: () => [post] };
 
     const items = await resolveContentMessage(
-      { action: 'resolvePage' },
+      {
+        action: 'resolvePage',
+        pageUrl: 'https://bsky.app/profile/alice.bsky.social/post/3labc123xyz',
+      },
       null,
       root,
-      '/profile/alice.bsky.social/post/3labc123xyz',
     );
 
     expect(items).toHaveLength(1);
@@ -136,9 +140,37 @@ describe('resolvePage', () => {
       querySelectorAll: (selector) => selector.includes('cdn.bsky.app') ? [media] : [],
     };
     const root = {
-      querySelector: (selector) => selector.includes('feedItem') ? feedItem : null,
+      querySelectorAll: (selector) => selector.includes('feedItem') ? [feedItem] : [],
     };
 
-    expect(await resolvePage(root, '/profile/alice.bsky.social/post/3labc123xyz')).toEqual([]);
+    expect(await resolvePage(
+      root,
+      'https://bsky.app/profile/alice.bsky.social/post/3labc123xyz',
+    )).toEqual([]);
+  });
+
+  it('chooses the thread item whose permalink matches the submitted post URL', async () => {
+    const unrelated = makePost('3lunrelated', 'did:plc:other');
+    const requested = makePost('3lrequested', 'did:plc:requested');
+    const root = { querySelectorAll: () => [unrelated, requested] };
+
+    const items = await resolvePage(
+      root,
+      'https://bsky.app/profile/alice.bsky.social/post/3lrequested',
+    );
+
+    expect(items).toHaveLength(1);
+    expect(items[0].url).toContain('3lrequested@jpeg');
+    expect(items[0].url).not.toContain('3lunrelated@jpeg');
+  });
+
+  it('returns no media when no thread item proves the submitted post id', async () => {
+    const unrelated = makePost('3lunrelated');
+    const root = { querySelectorAll: () => [unrelated] };
+
+    expect(await resolvePage(
+      root,
+      'https://bsky.app/profile/alice.bsky.social/post/3lmissing',
+    )).toEqual([]);
   });
 });

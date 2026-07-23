@@ -293,48 +293,62 @@ describe('buildCapturedItems', () => {
 });
 
 describe('resolvePage', () => {
-  it('resolves the direct post without a right-click target', async () => {
-    const media = img(`${CDN}/s720x720/123456789012_n.jpg`);
-    const post = {
+  const makePost = (pageUrl, src) => {
+    const media = img(src);
+    const permalink = { href: pageUrl };
+    return {
       matches: (selector) => selector === '[role="article"]',
       parentElement: null,
-      querySelectorAll: (selector) => selector === 'img[src*="fbcdn.net"]' ? [media] : [],
+      querySelectorAll: (selector) => {
+        if (selector === 'img[src*="fbcdn.net"]') return [media];
+        if (selector === 'a[href]') return [permalink];
+        return [];
+      },
     };
-    const root = { querySelector: () => post };
+  };
 
-    const items = await resolvePage(root);
+  it('resolves the direct post without a right-click target', async () => {
+    const pageUrl = 'https://www.facebook.com/example/posts/1234567890/';
+    const post = makePost(pageUrl, `${CDN}/s720x720/123456789012_n.jpg`);
+    const root = { querySelectorAll: () => [post] };
+
+    const items = await resolvePage(root, pageUrl);
 
     expect(items).toHaveLength(1);
     expect(items[0].url).toBe(`${CDN}/123456789012_n.jpg`);
   });
 
   it('handles a resolvePage message without a stored right-click target', async () => {
-    const media = img(`${CDN}/s720x720/123456789012_n.jpg`);
-    const post = {
-      matches: (selector) => selector === '[role="article"]',
-      parentElement: null,
-      querySelectorAll: (selector) => selector === 'img[src*="fbcdn.net"]' ? [media] : [],
-    };
-    const root = { querySelector: () => post };
+    const pageUrl = 'https://www.facebook.com/example/posts/1234567890/';
+    const post = makePost(pageUrl, `${CDN}/s720x720/123456789012_n.jpg`);
+    const root = { querySelectorAll: () => [post] };
 
-    const items = await resolveContentMessage({ action: 'resolvePage' }, null, root);
+    const items = await resolveContentMessage({
+      action: 'resolvePage',
+      pageUrl,
+    }, null, root);
 
     expect(items).toHaveLength(1);
     expect(items[0].url).toBe(`${CDN}/123456789012_n.jpg`);
   });
 
   it('resolves a direct photo-viewer image without a right-click target', async () => {
+    const pageUrl = 'https://www.facebook.com/photo.php?fbid=123456789012&id=42';
     const media = {
       tagName: 'IMG',
       src: `${CDN}/p720x720/123456789012_n.jpg`,
       matches: () => false,
       parentElement: null,
     };
-    const root = {
+    const permalink = {
+      href: pageUrl,
       querySelector: (selector) => selector.includes('media-vc-image') ? media : null,
     };
+    const root = {
+      querySelectorAll: (selector) => selector === 'a[href]' ? [permalink] : [],
+    };
 
-    const items = await resolvePage(root);
+    const items = await resolvePage(root, pageUrl);
 
     expect(items).toEqual([{
       url: `${CDN}/123456789012_n.jpg`,
@@ -344,18 +358,45 @@ describe('resolvePage', () => {
   });
 
   it('does not treat a broad main container avatar as the submitted post', async () => {
-    const avatar = { tagName: 'IMG', src: `${CDN}/avatar_123456789012_n.jpg` };
-    const main = {
-      tagName: 'MAIN',
-      matches: () => false,
-      parentElement: null,
-      querySelector: (selector) => selector === 'img' ? avatar : null,
-      querySelectorAll: () => [],
-    };
-    const root = {
-      querySelector: (selector) => selector.includes('[role="main"]') ? main : null,
-    };
+    const root = { querySelectorAll: () => [] };
 
-    expect(await resolvePage(root)).toEqual([]);
+    expect(await resolvePage(
+      root,
+      'https://www.facebook.com/example/posts/1234567890/',
+    )).toEqual([]);
+  });
+
+  it('chooses the container whose permalink matches the submitted post URL', async () => {
+    const unrelated = makePost(
+      'https://www.facebook.com/example/posts/111/',
+      `${CDN}/s720x720/111111111111_n.jpg`,
+    );
+    const requested = makePost(
+      'https://www.facebook.com/example/posts/222/',
+      `${CDN}/s720x720/222222222222_n.jpg`,
+    );
+    const root = { querySelectorAll: () => [unrelated, requested] };
+
+    const items = await resolvePage(
+      root,
+      'https://www.facebook.com/example/posts/222/',
+    );
+
+    expect(items).toHaveLength(1);
+    expect(items[0].url).toContain('222222222222_n.jpg');
+    expect(items[0].url).not.toContain('111111111111_n.jpg');
+  });
+
+  it('returns no media when no container proves the submitted post identifier', async () => {
+    const unrelated = makePost(
+      'https://www.facebook.com/example/posts/111/',
+      `${CDN}/s720x720/111111111111_n.jpg`,
+    );
+    const root = { querySelectorAll: () => [unrelated] };
+
+    expect(await resolvePage(
+      root,
+      'https://www.facebook.com/example/posts/999/',
+    )).toEqual([]);
   });
 });

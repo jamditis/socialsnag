@@ -103,22 +103,47 @@ function resolveAll(target, pathname) {
   return items.length > 0 ? items : resolveSingle(target?.src || '', target, pathname);
 }
 
-// Resolve the primary post on an exact Bluesky post URL without relying on a
-// stored right-click target.
-export async function resolvePage(root = document, pathname = window.location.pathname) {
-  const target = root.querySelector(
+function blueskySubmittedKey(rawUrl) {
+  let url;
+  try {
+    url = new URL(rawUrl, 'https://bsky.app');
+  } catch {
+    return null;
+  }
+  if (url.hostname.toLowerCase() !== 'bsky.app') return null;
+  const match = url.pathname.match(/^\/profile\/([^/]+)\/post\/([A-Za-z0-9]+)\/?$/);
+  return match ? `${match[1]}:${match[2]}` : null;
+}
+
+// Resolve only the thread item whose permalink proves it is the submitted post.
+// Feed items and the first visible thread item are not safe fallbacks because a
+// direct-post page can render both parents and replies around the requested post.
+export async function resolvePage(
+  root = document,
+  pageUrl = globalThis.window?.location?.href || '',
+) {
+  const requestedKey = blueskySubmittedKey(pageUrl);
+  if (!requestedKey) return [];
+
+  const candidates = root.querySelectorAll?.(
     '[data-testid^="postThreadItem-by-"], [data-testid^="postThreadItem"]',
-  );
-  return target ? resolveAll(target, pathname) : [];
+  ) || [];
+  for (const candidate of candidates) {
+    const links = candidate.querySelectorAll?.('a[href*="/post/"]') || [];
+    if (Array.from(links).some((link) => blueskySubmittedKey(link.href) === requestedKey)) {
+      return resolveAll(candidate, new URL(pageUrl).pathname);
+    }
+  }
+  return [];
 }
 
 export async function resolveContentMessage(
   message,
   lastTarget,
   root = document,
-  pathname = window.location.pathname,
+  pathname = globalThis.window?.location?.pathname || '',
 ) {
-  if (message.action === 'resolvePage') return resolvePage(root, pathname);
+  if (message.action === 'resolvePage') return resolvePage(root, message.pageUrl);
   if (message.action !== 'resolve') return [];
   return message.type === 'single'
     ? resolveSingle(message.srcUrl, lastTarget, pathname)

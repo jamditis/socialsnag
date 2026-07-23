@@ -127,6 +127,7 @@ describe('parseSubmittedPageUrl', () => {
     ['https://www.instagram.com/stories/natgeo/1234567890/', 'instagram', 'https://www.instagram.com/stories/natgeo/1234567890/'],
     ['https://twitter.com/jack/status/20', 'twitter', 'https://twitter.com/jack/status/20'],
     ['https://x.com/example_user/status/1234567890123456789?s=20', 'twitter', 'https://x.com/example_user/status/1234567890123456789?s=20'],
+    ['https://X.COM/example_user/status/123#section', 'twitter', 'https://X.COM/example_user/status/123'],
     ['https://www.facebook.com/example/posts/1234567890/', 'facebook', 'https://www.facebook.com/example/posts/1234567890/'],
     ['https://www.facebook.com/example/posts/pfbid02AbCdEf/', 'facebook', 'https://www.facebook.com/example/posts/pfbid02AbCdEf/'],
     ['https://www.facebook.com/groups/example/posts/1234567890/', 'facebook', 'https://www.facebook.com/groups/example/posts/1234567890/'],
@@ -166,10 +167,15 @@ describe('parseSubmittedPageUrl', () => {
     ['https://www.facebook.com/settings/', 'invalid_url'],
     ['https://www.facebook.com/settings/posts/123', 'invalid_url'],
     ['https://www.facebook.com/login/posts/123', 'invalid_url'],
+    ['https://www.facebook.com/!!!/posts/123/', 'invalid_url'],
+    ['https://www.facebook.com/example/photos/not-a-facebook-photo-route/123/', 'invalid_url'],
     ['https://www.facebook.com/example/', 'invalid_url'],
     ['https://www.facebook.com/watch/', 'invalid_url'],
     ['https://bsky.app/profile/alice.bsky.social', 'invalid_url'],
     ['https://bsky.app/settings', 'invalid_url'],
+    ['https://bsky.app/profile/::::/post/abc', 'invalid_url'],
+    [' https://x.com/user/status/123', 'invalid_url'],
+    ['https://x.com/user/status/123 ', 'invalid_url'],
     ['https://evilinstagram.com/p/ABC/', 'unsupported_url'],
     ['https://instagram.com.evil.example/p/ABC/', 'unsupported_url'],
     ['https://notx.com/user/status/123', 'unsupported_url'],
@@ -1703,7 +1709,10 @@ describe('submitted URL external bridge', () => {
 
     expect(result).toEqual({ ok: true, code: 'ok', platform: 'bluesky', count: 1 });
     expect(chrome.tabs.sendMessage).toHaveBeenCalledTimes(3);
-    expect(chrome.tabs.sendMessage).toHaveBeenLastCalledWith(79, { action: 'resolvePage' });
+    expect(chrome.tabs.sendMessage).toHaveBeenLastCalledWith(79, {
+      action: 'resolvePage',
+      pageUrl: 'https://bsky.app/profile/a.bsky.social/post/3abc',
+    });
     expect(chrome.tabs.remove).toHaveBeenCalledWith(79);
   });
 
