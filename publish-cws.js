@@ -41,6 +41,85 @@ export function interpretUploadState(json) {
   return { ok: false, inProgress: false, message: detail || `upload state: ${state || 'unknown'}` };
 }
 
+// A large upload finishes asynchronously: the upload response reports IN_PROGRESS
+// (Google's upload-response docs also call this UPLOAD_IN_PROGRESS; the substring
+// check in interpretUploadState matches either) instead of a final state. The v2
+// :fetchStatus method reports the settled result of that async upload in
+// lastAsyncUploadState: the same UploadState enum (UPLOAD_STATE_UNSPECIFIED /
+// SUCCEEDED / IN_PROGRESS / FAILED / NOT_FOUND) the upload response puts in
+// uploadState, just under a different field name. So the poll interpreter maps that
+// field onto uploadState and reuses interpretUploadState rather than re-encoding the
+// enum handling. Verified against the v2 discovery doc: GET
+// publishers/{p}/items/{i}:fetchStatus, state in lastAsyncUploadState (NOT
+// uploadState). See docs/cws-publishing.md.
+export function interpretUploadStatus(json) {
+  return interpretUploadState({
+    uploadState: json?.lastAsyncUploadState,
+    itemError: json?.itemError,
+  });
+}
+
+// Bounded exponential backoff: attempt 0 waits baseDelayMs, each later attempt
+// doubles up to maxDelayMs. A slow upload is polled patiently without hammering the
+// API and without a fixed long wait. Pure, so the schedule is tested directly.
+export function backoffDelayMs(attempt, baseDelayMs, maxDelayMs) {
+  return Math.min(baseDelayMs * 2 ** attempt, maxDelayMs);
+}
+
+// Whether a failed status check is worth retrying while polling. A 5xx or a 429
+// rate-limit is transient: the store may just be busy while the upload settles, so
+// keep polling. A network-level failure (fetch rejects with no HTTP status) is also
+// transient. A terminal 4xx (401 revoked/expired token, 403 permissions, 404 bad
+// item id) is not: retrying it just delays an actionable error behind the ~2m poll
+// budget, so surface it right away.
+export function isRetryableStatusError(err) {
+  const status = err?.status;
+  if (typeof status !== 'number') return true; // no HTTP response: a network blip
+  return status === 429 || status >= 500;
+}
+
+// Poll `getStatus` until the upload settles (ok, or a non-in-progress failure) or the
+// attempt budget is spent. `getStatus` returns an interpretUploadState-shaped result;
+// `sleep` and `onWait` are injected so the loop is unit-testable with no network or
+// real clock. A status check that throws a retryable error (`isRetryable`, e.g. a
+// transient 5xx/429 while the store is still processing) must not abort a publish
+// whose upload is fine: it is treated like "still in progress" and polling continues
+// within the same budget. A non-retryable error (a terminal 4xx) is re-thrown so its
+// actionable cause surfaces at once. A successful check clears a prior retryable error,
+// so if the budget runs out the message distinguishes a genuine timeout from a trailing
+// run of status-check failures instead of hiding the latter. `isRetryable` defaults to
+// retrying everything, so callers that never throw are unaffected.
+export async function pollUntilSettled(getStatus, { attempts, baseDelayMs, maxDelayMs, sleep, onWait = () => {}, isRetryable = () => true }) {
+  let waitedMs = 0;
+  let lastError = null;
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    const delay = backoffDelayMs(attempt, baseDelayMs, maxDelayMs);
+    await sleep(delay);
+    waitedMs += delay;
+    let status;
+    try {
+      status = await getStatus();
+    } catch (err) {
+      if (!isRetryable(err)) throw err; // terminal: fail fast with the real cause
+      lastError = err;
+      onWait(waitedMs);
+      continue;
+    }
+    lastError = null;
+    if (!status.inProgress) return status;
+    onWait(waitedMs);
+  }
+  const waitedS = Math.round(waitedMs / 1000);
+  const suffix = lastError
+    ? `; the last status check failed: ${lastError.message}`
+    : '. Re-run, or publish from the dashboard, once it settles.';
+  return {
+    ok: false,
+    inProgress: true,
+    message: `upload still processing after ${attempts} status checks (~${waitedS}s)${suffix}`,
+  };
+}
+
 // The publish response reports state. Only the known v2 success states confirm
 // a publish: PENDING_REVIEW (the normal update path), PUBLISHED, STAGED, and
 // PUBLISHED_TO_TESTERS. Everything else, an empty body, ITEM_STATE_UNSPECIFIED,
@@ -110,6 +189,29 @@ async function uploadZip(token, env, zipBytes) {
   return json;
 }
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// GET publishers/{p}/items/{i}:fetchStatus, the async upload's settled state.
+// v2 method (v1 had no equivalent); the state is in lastAsyncUploadState, read by
+// interpretUploadStatus. Body is empty; the item is named entirely in the path.
+async function fetchItemStatus(token, env) {
+  const url = `${API}/v2/publishers/${env.CWS_PUBLISHER_ID}/items/${env.CWS_ITEM_ID}:fetchStatus`;
+  const res = await fetch(url, {
+    method: 'GET',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    // Attach the HTTP status so the poll can tell a transient blip (5xx/429) from a
+    // terminal error (401 revoked token, 403 permissions, 404 bad item id) and stop
+    // retrying the latter. See isRetryableStatusError.
+    const err = new Error(`status request failed (${res.status}): ${JSON.stringify(json)}`);
+    err.status = res.status;
+    throw err;
+  }
+  return json;
+}
+
 async function publishItem(token, env) {
   const url = `${API}/v2/publishers/${env.CWS_PUBLISHER_ID}/items/${env.CWS_ITEM_ID}:publish`;
   // v2 publish body fields are all optional, and no field selects the release
@@ -160,9 +262,27 @@ async function main() {
   const token = await getAccessToken(env);
 
   const uploadJson = await uploadZip(token, env, await readFile(zipPath));
-  const upload = interpretUploadState(uploadJson);
+  let upload = interpretUploadState(uploadJson);
   if (upload.inProgress) {
-    throw new Error('upload still processing on the store side. Wait a minute and re-run, or publish from the dashboard.');
+    // A larger zip uploads asynchronously: the store reports the upload as still
+    // in progress and finishes in the background. Rather than abort and make the
+    // caller re-run (the old behavior), poll :fetchStatus with bounded backoff
+    // until it settles, then fall through to the same ok/failure checks. The
+    // budget (8 attempts, ~2m of backoff) bounds a hung upload instead of waiting
+    // forever; on exhaustion it throws with guidance rather than a false success.
+    console.log('upload processing asynchronously on the store side; polling until it settles...');
+    upload = await pollUntilSettled(
+      async () => interpretUploadStatus(await fetchItemStatus(token, env)),
+      {
+        attempts: 8,
+        baseDelayMs: 2000,
+        maxDelayMs: 20000,
+        sleep,
+        onWait: (ms) => console.log(`  still processing after ~${Math.round(ms / 1000)}s...`),
+        isRetryable: isRetryableStatusError,
+      },
+    );
+    if (upload.inProgress) throw new Error(upload.message); // budget spent, still not done
   }
   if (!upload.ok) throw new Error(`upload rejected: ${upload.message}`);
   console.log(`uploaded version ${uploadJson.crxVersion || manifest.version}`);
