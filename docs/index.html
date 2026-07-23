@@ -215,7 +215,179 @@
             line-height: 1.7;
             color: var(--text);
             max-width: 420px;
-            margin-bottom: 32px;
+            margin-bottom: 24px;
+        }
+
+        .url-demo {
+            width: 100%;
+            max-width: 520px;
+            margin-bottom: 24px;
+            padding: 20px;
+            background: rgba(12, 16, 36, 0.88);
+            border: 1px solid rgba(96, 165, 250, 0.24);
+            border-radius: 12px;
+            box-shadow: 0 18px 42px -26px rgba(0, 0, 0, 0.9);
+            text-align: left;
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+
+        .url-demo:focus-within {
+            border-color: rgba(96, 165, 250, 0.58);
+            box-shadow: 0 18px 42px -26px rgba(0, 0, 0, 0.9), 0 0 28px -16px var(--blue-glow);
+        }
+
+        .url-demo label {
+            display: block;
+            margin-bottom: 10px;
+            color: var(--text-white);
+            font-family: var(--font-display);
+            font-size: 18px;
+            font-weight: 700;
+            line-height: 1.3;
+        }
+
+        .url-demo-fields {
+            display: flex;
+            align-items: stretch;
+            gap: 10px;
+        }
+
+        .url-demo input {
+            min-width: 0;
+            flex: 1 1 auto;
+            padding: 13px 14px;
+            color: var(--text-white);
+            background: rgba(4, 6, 12, 0.82);
+            border: 1px solid var(--border-hover);
+            border-radius: 8px;
+            font-family: var(--font-body);
+            font-size: 16px;
+            line-height: 1.4;
+            transition: border-color 0.2s, background 0.2s, box-shadow 0.2s;
+        }
+
+        .url-demo input::placeholder { color: #64748b; }
+
+        .url-demo input:hover:not(:disabled) {
+            border-color: rgba(255, 255, 255, 0.24);
+            background: rgba(4, 6, 12, 0.98);
+        }
+
+        .url-demo input:focus-visible,
+        .url-demo button:focus-visible,
+        .demo-status:focus {
+            outline: 3px solid var(--blue-bright);
+            outline-offset: 3px;
+        }
+
+        .url-demo input:focus-visible {
+            border-color: var(--blue-bright);
+            box-shadow: 0 0 0 4px rgba(96, 165, 250, 0.12);
+        }
+
+        .url-demo button {
+            flex: 0 0 auto;
+            padding: 13px 18px;
+            color: var(--text-white);
+            background: var(--blue);
+            border: 1px solid var(--blue);
+            border-radius: 8px;
+            font-family: var(--font-body);
+            font-size: 15px;
+            font-weight: 600;
+            line-height: 1.4;
+            cursor: pointer;
+            transition: background 0.2s, border-color 0.2s, box-shadow 0.2s, transform 0.2s;
+        }
+
+        .url-demo button:hover:not(:disabled) {
+            background: #2563eb;
+            border-color: #2563eb;
+            box-shadow: 0 8px 22px -10px rgba(59, 130, 246, 0.9);
+            transform: translateY(-1px);
+        }
+
+        .url-demo input:disabled,
+        .url-demo button:disabled {
+            opacity: 0.62;
+            cursor: wait;
+        }
+
+        .url-demo-help,
+        .url-demo-privacy {
+            font-size: 13px;
+            line-height: 1.5;
+        }
+
+        .url-demo-help {
+            margin-top: 11px;
+            color: var(--text-bright);
+        }
+
+        .url-demo-privacy {
+            margin-top: 5px;
+            color: var(--text);
+        }
+
+        .demo-status {
+            min-height: 68px;
+            margin-top: 14px;
+            padding: 12px 14px;
+            background: rgba(255, 255, 255, 0.035);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            transition: background 0.2s, border-color 0.2s;
+        }
+
+        .demo-status[data-tone="working"] {
+            background: rgba(59, 130, 246, 0.09);
+            border-color: rgba(96, 165, 250, 0.28);
+        }
+
+        .demo-status[data-tone="success"] {
+            background: rgba(34, 197, 94, 0.08);
+            border-color: rgba(34, 197, 94, 0.34);
+        }
+
+        .demo-status[data-tone="error"] {
+            background: rgba(239, 68, 68, 0.08);
+            border-color: rgba(248, 113, 113, 0.32);
+        }
+
+        .demo-status strong {
+            display: block;
+            color: var(--text-white);
+            font-size: 14px;
+            font-weight: 600;
+            line-height: 1.4;
+        }
+
+        .demo-status span {
+            display: block;
+            margin-top: 3px;
+            color: var(--text);
+            font-size: 13px;
+            line-height: 1.45;
+        }
+
+        .demo-status a {
+            display: inline-block;
+            margin-top: 7px;
+            color: var(--blue-bright);
+            font-size: 13px;
+            font-weight: 600;
+            text-decoration: underline;
+            text-decoration-thickness: 1px;
+            text-underline-offset: 3px;
+        }
+
+        .demo-status a[hidden] { display: none; }
+
+        .demo-status a:hover { color: var(--text-white); }
+
+        .demo-status a:focus-visible {
+            outline: 2px solid var(--blue-bright);
+            outline-offset: 3px;
         }
 
         .hero-badges {
@@ -1084,7 +1256,8 @@
                 text-align: center;
             }
 
-            .hero-text .tagline { margin: 0 auto 32px; }
+            .hero-text .tagline { margin: 0 auto 24px; }
+            .url-demo { margin: 0 auto 24px; }
             .hero-badges { justify-content: center; }
             .demo-window { margin: 0 auto; }
 
@@ -1107,6 +1280,9 @@
         @media (max-width: 600px) {
             .hero { padding: 120px 0 60px; min-height: auto; }
             .hero-text h1 { font-size: 36px; }
+
+            .url-demo-fields { flex-direction: column; }
+            .url-demo button { width: 100%; }
 
             .nav-links a:not(.btn-install) { display: none; }
 
@@ -1144,6 +1320,17 @@
 
             .platform-card { transition: none; }
             .feature { transition: none; }
+            .url-demo,
+            .url-demo input,
+            .url-demo button,
+            .demo-status { transition: none; }
+            .url-demo button:hover:not(:disabled) { transform: none; }
+        }
+
+        @media (max-width: 380px) {
+            .container,
+            .nav-inner { padding-left: 16px; padding-right: 16px; }
+            .url-demo { padding: 16px; }
         }
     </style>
 </head>
@@ -1173,7 +1360,31 @@
         <div class="container">
             <div class="hero-text">
                 <h1>Right-click.<br><span class="accent">Download.</span><br>Done.</h1>
-                <p class="tagline">Full-resolution images and videos from social media. No copy-pasting URLs, no sketchy converter sites. Just right-click.</p>
+                <p class="tagline">Full-resolution images and videos from social media. Right-click while browsing, or paste a direct post link below.</p>
+                <form class="url-demo" id="url-demo-form" novalidate>
+                    <label for="submitted-post-url">Paste a post link</label>
+                    <div class="url-demo-fields">
+                        <input
+                            id="submitted-post-url"
+                            name="submitted-post-url"
+                            type="url"
+                            inputmode="url"
+                            autocomplete="url"
+                            spellcheck="false"
+                            placeholder="https://instagram.com/p/..."
+                            aria-describedby="url-demo-help url-demo-privacy"
+                            required
+                        >
+                        <button id="url-demo-submit" type="submit">Download media</button>
+                    </div>
+                    <p class="url-demo-help" id="url-demo-help">Works with direct posts on Instagram, X/Twitter, Facebook, and Bluesky.</p>
+                    <p class="url-demo-privacy" id="url-demo-privacy">The installed SocialSnag extension uses accounts signed in to this browser. Your submitted URL stays on this device.</p>
+                    <div class="demo-status" id="demo-status" role="status" aria-live="polite" aria-atomic="true" tabindex="-1" data-tone="idle">
+                        <strong id="demo-status-title">Ready to download</strong>
+                        <span id="demo-status-detail">Paste a direct post link to start.</span>
+                        <a id="demo-install-link" href="https://chromewebstore.google.com/detail/socialsnag/llbpeneloehnlaomolbalbmhjncpmnfa" hidden>Install or update SocialSnag</a>
+                    </div>
+                </form>
                 <div class="hero-badges">
                     <span class="hero-badge"><span class="dot"></span> Chrome 116+</span>
                     <span class="hero-badge">Manifest V3</span>
@@ -1456,6 +1667,8 @@
             </div>
         </div>
     </footer>
+
+    <script type="module" src="demo.js"></script>
 
 </body>
 </html>
