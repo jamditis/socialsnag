@@ -75,31 +75,6 @@ function directStructuredIds(value) {
     .map(([, fieldValue]) => String(fieldValue));
 }
 
-function videoUrlInsideMatchedObject(value, requestedIds, state, depth = 0) {
-  if (!value || typeof value !== 'object' || depth > 24) return null;
-  if (++state.nodes > SUBMITTED_SCRIPT_NODE_LIMIT) return null;
-
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      const found = videoUrlInsideMatchedObject(item, requestedIds, state, depth + 1);
-      if (found) return found;
-    }
-    return null;
-  }
-
-  const localIds = directStructuredIds(value);
-  if (localIds.some((id) => !requestedIds.has(id))) return null;
-
-  const directUrl = directStructuredVideoUrl(value);
-  if (directUrl) return directUrl;
-
-  for (const child of Object.values(value)) {
-    const found = videoUrlInsideMatchedObject(child, requestedIds, state, depth + 1);
-    if (found) return found;
-  }
-  return null;
-}
-
 function findMatchedStructuredVideo(value, requestedIds, state, depth = 0) {
   if (!value || typeof value !== 'object' || depth > 24) return null;
   if (++state.nodes > SUBMITTED_SCRIPT_NODE_LIMIT) return null;
@@ -107,7 +82,7 @@ function findMatchedStructuredVideo(value, requestedIds, state, depth = 0) {
   if (!Array.isArray(value)) {
     const localIds = directStructuredIds(value);
     if (localIds.length > 0 && localIds.every((id) => requestedIds.has(id))) {
-      const found = videoUrlInsideMatchedObject(value, requestedIds, state, depth);
+      const found = directStructuredVideoUrl(value);
       if (found) return found;
     }
   }

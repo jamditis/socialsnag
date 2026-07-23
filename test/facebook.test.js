@@ -114,6 +114,18 @@ describe('extractSubmittedVideoUrl', () => {
 
     expect(extractSubmittedVideoUrl(scripts, ['1234567890'])).toBeNull();
   });
+
+  it('rejects an ID-less child URL beneath a parent with the submitted ID', () => {
+    const scripts = [JSON.stringify({
+      id: '1234567890',
+      feed: [
+        { label: 'submitted post' },
+        { playable_url_quality_hd: 'https://video.xx.fbcdn.net/unattributed-child.mp4' },
+      ],
+    })];
+
+    expect(extractSubmittedVideoUrl(scripts, ['1234567890'])).toBeNull();
+  });
 });
 
 describe('buildImageItems', () => {
