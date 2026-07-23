@@ -197,7 +197,11 @@ function targetHasVideo(target) {
 // resolveAll is the caller it passes allowFallback:false, so the last resort
 // returns a terminal empty result instead of recursing. Every other terminating
 // path (video detection, nearest-media) still runs, so this only cuts the loop.
-export function resolveSingle(srcUrl, target, { allowFallback = true } = {}) {
+export function resolveSingle(
+  srcUrl,
+  target,
+  { allowFallback = true, allowCapturedVideos = true } = {},
+) {
   // Check if this tweet contains a video — if so, prioritize video download
   // (Twitter blocks right-click on videos, so users right-click the tweet text instead)
   if (targetHasVideo(target)) {
@@ -205,7 +209,7 @@ export function resolveSingle(srcUrl, target, { allowFallback = true } = {}) {
     const isProfilePic = srcUrl && srcUrl.includes('/profile_images/');
     const isMediaImage = srcUrl && srcUrl.includes('/media/');
     if (!isMediaImage || isProfilePic || !srcUrl) {
-      return resolveVideo(target);
+      return resolveVideo(target, { allowCaptured: allowCapturedVideos });
     }
   }
 
@@ -238,26 +242,31 @@ export function resolveSingle(srcUrl, target, { allowFallback = true } = {}) {
         }
       }
       if (nearestMedia.tagName === 'VIDEO' || nearestMedia.closest?.('[data-testid="videoComponent"]')) {
-        return resolveVideo(target);
+        return resolveVideo(target, { allowCaptured: allowCapturedVideos });
       }
     }
   }
 
   if (target?.tagName === 'VIDEO' || target?.closest('video') || target?.closest('[data-testid="videoComponent"]')) {
-    return resolveVideo(target);
+    return resolveVideo(target, { allowCaptured: allowCapturedVideos });
   }
 
   // Last resort: try to find any media in the parent tweet. Skipped when
   // resolveAll is the caller, so a scoped-empty sweep terminates here instead of
   // re-entering resolveAll and looping.
-  return allowFallback ? resolveAll(target) : [];
+  return allowFallback ? resolveAll(target, { allowCapturedVideos }) : [];
 }
 
-export function resolveAll(target) {
+export function resolveAll(target, { allowCapturedVideos = true } = {}) {
   const found = findTweetScope(target);
   // Off any tweet: let resolveSingle try the click target itself, but with the
   // guard off so its last resort does not bounce back here and loop.
-  if (!found) return resolveSingle(target?.src || '', target, { allowFallback: false });
+  if (!found) {
+    return resolveSingle(target?.src || '', target, {
+      allowFallback: false,
+      allowCapturedVideos,
+    });
+  }
 
   const items = [];
   const id = statusIdInScope(found);
@@ -276,7 +285,10 @@ export function resolveAll(target) {
     }
   });
 
-  return items.length > 0 ? items : resolveSingle(target?.src || '', target, { allowFallback: false });
+  return items.length > 0 ? items : resolveSingle(target?.src || '', target, {
+    allowFallback: false,
+    allowCapturedVideos,
+  });
 }
 
 function submittedStatusId(pageUrl) {
@@ -307,7 +319,7 @@ export async function resolvePage(
   for (const candidate of candidates) {
     const found = findTweetScope(candidate);
     if (found && statusIdInScope(found) === requestedId) {
-      return await resolveAll(candidate);
+      return await resolveAll(candidate, { allowCapturedVideos: false });
     }
   }
   return [];
@@ -321,17 +333,20 @@ export async function resolveContentMessage(message, lastTarget, root = document
     : resolveAll(lastTarget);
 }
 
-async function resolveVideo(target) {
+async function resolveVideo(target, { allowCaptured = true } = {}) {
   // First try webRequest captures (advanced mode)
-  const captured = await getCapturedMedia();
-  const mp4s = filterCapturedVideos(captured);
+  if (allowCaptured) {
+    const captured = await getCapturedMedia();
+    const mp4s = filterCapturedVideos(captured);
 
-  if (mp4s.length > 0) {
-    return [{ url: mp4s[0].url, type: 'video', filename: null }];
+    if (mp4s.length > 0) {
+      return [{ url: mp4s[0].url, type: 'video', filename: null }];
+    }
   }
 
   // Fall back to API lookup via background script
-  const tweetId = tweetIdFor(target) || window.location.pathname.match(/\/status\/(\d+)/)?.[1];
+  const tweetId = tweetIdFor(target)
+    || globalThis.window?.location?.pathname.match(/\/status\/(\d+)/)?.[1];
   if (tweetId) {
     return [{ type: 'video', filename: `tweet_${tweetId}`, tweetId, needsVideoLookup: true }];
   }

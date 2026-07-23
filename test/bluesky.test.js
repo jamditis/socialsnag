@@ -223,4 +223,75 @@ describe('resolvePage', () => {
       'https://bsky.app/profile/alice.bsky.social/post/3lmissing',
     )).toEqual([]);
   });
+
+  it('collects only media owned by the verified post from mixed thread content', async () => {
+    const nestedPost = {};
+    const avatarOwner = {};
+    const quotedOwner = {};
+    const embedOwner = {};
+    let post;
+    const media = (src, owner = 'post') => ({
+      src,
+      closest: (selector) => {
+        if (selector.includes('postThreadItem')) {
+          return owner === 'nested' ? nestedPost : post;
+        }
+        if (selector.includes('userAvatarImage')) {
+          return owner === 'avatar' ? avatarOwner : null;
+        }
+        if (selector === 'a[href]') {
+          if (owner === 'avatar') return avatarOwner;
+          if (owner === 'quoted') return quotedOwner;
+          if (owner === 'embed') return embedOwner;
+          return post;
+        }
+        return null;
+      },
+    });
+    const ownImage = media(
+      'https://cdn.bsky.app/img/feed_thumbnail/plain/did:plc:alice/own@jpeg',
+    );
+    const avatar = media(
+      'https://cdn.bsky.app/img/avatar_thumbnail/plain/did:plc:alice/avatar@jpeg',
+      'avatar',
+    );
+    const quotedImage = media(
+      'https://cdn.bsky.app/img/feed_thumbnail/plain/did:plc:quoted/quoted@jpeg',
+      'quoted',
+    );
+    const nestedThreadImage = media(
+      'https://cdn.bsky.app/img/feed_thumbnail/plain/did:plc:nested/nested@jpeg',
+      'nested',
+    );
+    const embedImage = media(
+      'https://cdn.bsky.app/img/feed_thumbnail/plain/did:plc:embed/embed@jpeg',
+      'embed',
+    );
+    const ownVideo = media('https://video.bsky.app/watch/own.mp4');
+    const quotedVideo = media('https://video.bsky.app/watch/quoted.mp4', 'quoted');
+    const permalink = { href: '/profile/alice.bsky.social/post/3lmixed' };
+    post = {
+      matches: (selector) => selector === '[data-testid^="postThreadItem-by-"]',
+      parentElement: null,
+      querySelectorAll: (selector) => {
+        if (selector === 'a[href*="/post/"]') return [permalink];
+        if (selector === 'img[src*="cdn.bsky.app"]') {
+          return [avatar, ownImage, quotedImage, nestedThreadImage, embedImage];
+        }
+        if (selector === 'video') return [quotedVideo, ownVideo];
+        return [];
+      },
+    };
+    const root = { querySelectorAll: () => [post] };
+
+    const items = await resolvePage(
+      root,
+      'https://bsky.app/profile/alice.bsky.social/post/3lmixed',
+    );
+
+    expect(items.map((item) => item.url)).toEqual([
+      'https://cdn.bsky.app/img/feed_fullsize/plain/did:plc:alice/own@jpeg',
+      'https://video.bsky.app/watch/own.mp4',
+    ]);
+  });
 });

@@ -413,4 +413,31 @@ describe('resolvePage', () => {
       'https://www.facebook.com/example/posts/999/',
     )).toEqual([]);
   });
+
+  it('does not use document-wide video scripts for a verified submitted post', async () => {
+    const pageUrl = 'https://www.facebook.com/example/posts/444/';
+    const permalink = { href: pageUrl };
+    const post = {
+      tagName: 'ARTICLE',
+      matches: (selector) => selector === '[role="article"]',
+      parentElement: null,
+      closest: (selector) => selector === '[role="article"]' ? post : null,
+      querySelector: () => null,
+      querySelectorAll: (selector) => selector === 'a[href]' ? [permalink] : [],
+    };
+    const root = { querySelectorAll: () => [post] };
+    const originalDocument = globalThis.document;
+    globalThis.document = {
+      querySelectorAll: (selector) => selector === 'script' ? [
+        { textContent: '{"playable_url_quality_hd":"https:\\/\\/video.xx.fbcdn.net\\/reply.mp4"}' },
+        { textContent: '{"playable_url":"https:\\/\\/video.xx.fbcdn.net\\/advert.mp4"}' },
+      ] : [],
+    };
+
+    try {
+      expect(await resolvePage(root, pageUrl)).toEqual([]);
+    } finally {
+      globalThis.document = originalDocument;
+    }
+  });
 });

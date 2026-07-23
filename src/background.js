@@ -252,11 +252,14 @@ function submittedIdentitiesMatch(submitted, final) {
     && (submitted.platform !== 'bluesky' || submitted.account === final.account);
 }
 
-async function resolveBlueskyDidHandle(did, profileFetch) {
+async function resolveBlueskyDidHandle(did, profileFetch, signal) {
   try {
     const endpoint = new URL('https://public.api.bsky.app/xrpc/app.bsky.actor.getProfile');
     endpoint.searchParams.set('actor', did);
-    const response = await profileFetch(endpoint.toString(), { credentials: 'omit' });
+    const response = await profileFetch(endpoint.toString(), {
+      credentials: 'omit',
+      signal,
+    });
     if (!response?.ok) return null;
     const data = await response.json();
     return isValidBlueskyHandle(data?.handle) ? data.handle.toLowerCase() : null;
@@ -764,18 +767,22 @@ async function resolveTwitterVideo(tweetId) {
 
 // Fetch and enumerate every media item in an Instagram post (single image/video
 // or full carousel) via the private web API.
-export async function resolveInstagramPost(shortcode) {
+export async function resolveInstagramPost(
+  shortcode,
+  { fetchImpl = globalThis.fetch, signal } = {},
+) {
   try {
     const mediaId = shortcodeToMediaId(shortcode);
     if (!mediaId) return { error: null };
 
-    const resp = await fetch(
+    const resp = await fetchImpl(
       `https://i.instagram.com/api/v1/media/${mediaId}/info/`,
       {
         headers: {
           'x-ig-app-id': IG_APP_ID,
         },
         credentials: 'include',
+        signal,
       }
     );
     if (!resp.ok) {
@@ -808,11 +815,14 @@ export async function resolveInstagramPost(shortcode) {
 // Look up an Instagram username's numeric user id via the private web API.
 // Returns `{ userId }` or `{ error }`, so a story lookup that fails at this step
 // still carries its reason back to the click that asked for it.
-async function fetchInstagramUserId(username) {
+async function fetchInstagramUserId(
+  username,
+  { fetchImpl = globalThis.fetch, signal } = {},
+) {
   try {
-    const resp = await fetch(
+    const resp = await fetchImpl(
       `https://www.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(username)}`,
-      { headers: { 'x-ig-app-id': IG_APP_ID }, credentials: 'include' },
+      { headers: { 'x-ig-app-id': IG_APP_ID }, credentials: 'include', signal },
     );
     if (!resp.ok) {
       await traceResolver({ platform: 'instagram', path: 'user-lookup', outcome: 'http-error', status: resp.status });
@@ -837,14 +847,17 @@ async function fetchInstagramUserId(username) {
 
 // Resolve a story ref to its media via the reels_media API. storyId null means
 // the whole active tray.
-export async function resolveInstagramStories({ username, storyId }) {
-  const lookup = await fetchInstagramUserId(username);
+export async function resolveInstagramStories(
+  { username, storyId },
+  { fetchImpl = globalThis.fetch, signal } = {},
+) {
+  const lookup = await fetchInstagramUserId(username, { fetchImpl, signal });
   if (!lookup.userId) return { error: lookup.error, code: lookup.code };
   const userId = lookup.userId;
   try {
-    const resp = await fetch(
+    const resp = await fetchImpl(
       `https://i.instagram.com/api/v1/feed/reels_media/?reel_ids=${userId}`,
-      { headers: { 'x-ig-app-id': IG_APP_ID }, credentials: 'include' },
+      { headers: { 'x-ig-app-id': IG_APP_ID }, credentials: 'include', signal },
     );
     if (!resp.ok) {
       await traceResolver({ platform: 'instagram', path: 'story-api', outcome: 'http-error', status: resp.status });
@@ -1204,9 +1217,11 @@ async function recordDownload(item, platform, downloadId) {
 }
 
 const SUBMITTED_TAB_LOAD_TIMEOUT_MS = 15000;
+const SUBMITTED_OPERATION_TIMEOUT_MS = 15000;
 const SUBMITTED_RESOLVE_ATTEMPTS = 4;
 const SUBMITTED_RETRY_DELAY_MS = 500;
 const SUBMITTED_MAX_ITEMS = 20;
+const SUBMITTED_OPERATION_TIMEOUT = Symbol('submitted-operation-timeout');
 
 function submittedDownloadResult(ok, code, platform = null, count = 0) {
   return { ok, code, platform, count };
@@ -1244,11 +1259,35 @@ function waitForSubmittedRetry(delayMs) {
   return new Promise((resolve) => setTimeout(resolve, delayMs));
 }
 
+// Apply one deadline shape to submitted network and content-script operations.
+// Promise.race installs rejection handlers on the operation promise, so a late
+// rejection after the timeout cannot become an unhandled rejection. The timer is
+// cleared on every other exit, and abort-capable work receives a fresh signal.
+async function runSubmittedWithDeadline(operation, timeoutMs, { abort = false } = {}) {
+  const controller = abort && typeof globalThis.AbortController !== 'undefined'
+    ? new globalThis.AbortController()
+    : null;
+  let timer;
+  const task = Promise.resolve().then(() => operation(controller?.signal));
+  const deadline = new Promise((resolve) => {
+    timer = setTimeout(() => {
+      resolve(SUBMITTED_OPERATION_TIMEOUT);
+      controller?.abort();
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([task, deadline]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function resolveSubmittedTab(
   tabId,
   pageUrl,
   attempts,
   retryDelayMs,
+  operationTimeoutMs,
   canonicalHandle = null,
 ) {
   let receivedResponse = false;
@@ -1256,7 +1295,13 @@ async function resolveSubmittedTab(
     try {
       const message = { action: 'resolvePage', pageUrl };
       if (canonicalHandle) message.canonicalHandle = canonicalHandle;
-      const response = await chrome.tabs.sendMessage(tabId, message);
+      const response = await runSubmittedWithDeadline(
+        () => chrome.tabs.sendMessage(tabId, message),
+        operationTimeoutMs,
+      );
+      if (response === SUBMITTED_OPERATION_TIMEOUT) {
+        return { code: 'resolution_timeout' };
+      }
       receivedResponse = true;
       const items = Array.isArray(response?.urls)
         ? response.urls
@@ -1275,14 +1320,14 @@ async function resolveSubmittedTab(
   };
 }
 
-async function resolveSubmittedInstagram(parsed) {
+async function resolveSubmittedInstagram(parsed, options = {}) {
   const pathname = new URL(parsed.url).pathname;
   const storyRef = extractStoryRef(pathname);
-  if (storyRef) return resolveInstagramStories(storyRef);
+  if (storyRef) return resolveInstagramStories(storyRef, options);
 
   const shortcode = pathname.match(/^\/(?:p|reel|tv)\/([A-Za-z0-9_-]+)/)?.[1];
   if (!shortcode) return { code: 'invalid_url' };
-  return resolveInstagramPost(shortcode);
+  return resolveInstagramPost(shortcode, options);
 }
 
 // Resolve and download one exact submitted post entirely inside the extension.
@@ -1302,12 +1347,28 @@ export async function orchestrateSubmittedDownload(rawUrl, options = {}) {
   const retryDelayMs = Number.isFinite(options.retryDelayMs)
     ? Math.max(0, options.retryDelayMs)
     : SUBMITTED_RETRY_DELAY_MS;
+  const operationTimeoutMs = Number.isFinite(options.operationTimeoutMs)
+    ? Math.max(0, options.operationTimeoutMs)
+    : SUBMITTED_OPERATION_TIMEOUT_MS;
 
   let createdTabId = null;
   try {
     let resolved;
     if (platform === 'instagram') {
-      resolved = await resolveSubmittedInstagram(parsed);
+      const submittedFetch = typeof options.submittedFetch === 'function'
+        ? options.submittedFetch
+        : globalThis.fetch;
+      resolved = await runSubmittedWithDeadline(
+        (signal) => resolveSubmittedInstagram(parsed, {
+          fetchImpl: submittedFetch,
+          signal,
+        }),
+        operationTimeoutMs,
+        { abort: true },
+      );
+      if (resolved === SUBMITTED_OPERATION_TIMEOUT) {
+        resolved = { code: 'resolution_timeout' };
+      }
     } else {
       const blueskyRef = platform === 'bluesky'
         ? new URL(parsed.url).pathname.match(/^\/profile\/([^/]+)\/post\/[A-Za-z0-9]+\/?$/)
@@ -1317,7 +1378,15 @@ export async function orchestrateSubmittedDownload(rawUrl, options = {}) {
         const profileFetch = typeof options.profileFetch === 'function'
           ? options.profileFetch
           : globalThis.fetch;
-        const handle = await resolveBlueskyDidHandle(blueskyRef[1], profileFetch);
+        const profile = await runSubmittedWithDeadline(
+          (signal) => resolveBlueskyDidHandle(blueskyRef[1], profileFetch, signal),
+          operationTimeoutMs,
+          { abort: true },
+        );
+        if (profile === SUBMITTED_OPERATION_TIMEOUT) {
+          return submittedDownloadResult(false, 'resolution_timeout', platform);
+        }
+        const handle = profile;
         if (!handle) {
           return submittedDownloadResult(false, 'access_or_unavailable', platform);
         }
@@ -1355,6 +1424,7 @@ export async function orchestrateSubmittedDownload(rawUrl, options = {}) {
         finalParsed.url,
         resolveAttempts,
         retryDelayMs,
+        operationTimeoutMs,
         blueskyDid?.handle,
       );
     }

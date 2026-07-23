@@ -140,7 +140,7 @@ export function buildCapturedItems(captured, limit = 5) {
 
 // --- Browser wiring (not exported) ---
 
-function findVideoUrl(target) {
+function findVideoUrl(target, { allowDocumentScripts = true } = {}) {
   const container = target?.closest('[role="article"]') || target?.parentElement;
   if (!container) return null;
 
@@ -150,13 +150,15 @@ function findVideoUrl(target) {
     if (src && !src.startsWith('blob:')) return src;
   }
 
+  if (!allowDocumentScripts) return null;
+
   // Try to find playable_url in page scripts
   const scripts = document.querySelectorAll('script');
   const scriptTexts = Array.from(scripts).map((s) => s.textContent);
   return extractVideoUrlFromScripts(scriptTexts);
 }
 
-function resolveSingle(srcUrl, target) {
+function resolveSingle(srcUrl, target, { allowDocumentScripts = true } = {}) {
   const url = upgradeUrl(srcUrl);
   if (url) {
     const id = extractPhotoId(srcUrl);
@@ -173,7 +175,7 @@ function resolveSingle(srcUrl, target) {
     }
   }
 
-  const videoUrl = findVideoUrl(target);
+  const videoUrl = findVideoUrl(target, { allowDocumentScripts });
   if (videoUrl) {
     return [{ url: videoUrl, type: 'video', filename: null }];
   }
@@ -181,13 +183,16 @@ function resolveSingle(srcUrl, target) {
   return [];
 }
 
-async function resolveAll(target, { allowCaptured = true } = {}) {
+async function resolveAll(
+  target,
+  { allowCaptured = true, allowDocumentScripts = true } = {},
+) {
   const post = findPostContainer(target, [
     '[role="article"]',
     '[data-pagelet*="FeedUnit"]',
     '[data-pagelet*="ProfileTimeline"]',
   ]);
-  if (!post) return resolveSingle(target?.src || '', target);
+  if (!post) return resolveSingle(target?.src || '', target, { allowDocumentScripts });
 
   // querySelectorAll returns document order, which is the album's own slide order.
   const domImages = Array.from(post.querySelectorAll('img[src*="fbcdn.net"]'));
@@ -196,7 +201,9 @@ async function resolveAll(target, { allowCaptured = true } = {}) {
   // Fall back to webRequest captures if DOM is sparse. Numbering restarts at 1 by
   // construction: this branch only runs when the DOM walk produced nothing.
   if (items.length === 0) {
-    if (!allowCaptured) return resolveSingle(target?.src || '', target);
+    if (!allowCaptured) {
+      return resolveSingle(target?.src || '', target, { allowDocumentScripts });
+    }
     const captured = await getCapturedMedia();
     const fallback = buildCapturedItems(captured);
     if (fallback.dropped > 0) {
@@ -207,7 +214,7 @@ async function resolveAll(target, { allowCaptured = true } = {}) {
     }
     return fallback.items.length > 0
       ? fallback.items
-      : resolveSingle(target?.src || '', target);
+      : resolveSingle(target?.src || '', target, { allowDocumentScripts });
   }
 
   return items;
@@ -274,7 +281,10 @@ export async function resolvePage(
   ) || [];
   for (const candidate of candidates) {
     if (hasFacebookPermalink(candidate, requestedKey)) {
-      return resolveAll(candidate, { allowCaptured: false });
+      return resolveAll(candidate, {
+        allowCaptured: false,
+        allowDocumentScripts: false,
+      });
     }
   }
 
@@ -285,7 +295,7 @@ export async function resolvePage(
       'img[data-visualcompletion="media-vc-image"], '
       + '[data-pagelet*="Video"] video, video[data-video-id]',
     );
-    return media ? resolveSingle(media.src || '', media) : [];
+    return media ? resolveSingle(media.src || '', media, { allowDocumentScripts: false }) : [];
   }
   return [];
 }

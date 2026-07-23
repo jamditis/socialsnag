@@ -1439,6 +1439,22 @@ function sendExternal(request, sender = LANDING_PAGE_SENDER) {
   });
 }
 
+function settleWithin(promise, timeoutMs = 30) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(null), timeoutMs);
+    promise.then(
+      (result) => {
+        clearTimeout(timer);
+        resolve({ result });
+      },
+      (error) => {
+        clearTimeout(timer);
+        resolve({ error });
+      },
+    );
+  });
+}
+
 describe('submitted URL external bridge', () => {
   const originalTabs = {
     create: chrome.tabs.create,
@@ -1822,7 +1838,10 @@ describe('submitted URL external bridge', () => {
     expect(result).toEqual({ ok: true, code: 'ok', platform: 'bluesky', count: 1 });
     expect(profileFetch).toHaveBeenCalledWith(
       'https://public.api.bsky.app/xrpc/app.bsky.actor.getProfile?actor=did%3Aplc%3Aabc123',
-      { credentials: 'omit' },
+      expect.objectContaining({
+        credentials: 'omit',
+        signal: expect.any(AbortSignal),
+      }),
     );
     expect(chrome.tabs.sendMessage).toHaveBeenCalledWith(89, {
       action: 'resolvePage',
@@ -1851,6 +1870,52 @@ describe('submitted URL external bridge', () => {
     });
     expect(chrome.tabs.create).not.toHaveBeenCalled();
     expect(chrome.tabs.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      platform: 'instagram',
+      url: 'https://www.instagram.com/p/ABC/',
+      fetchOption: 'submittedFetch',
+      replaceGlobalFetch: true,
+    },
+    {
+      platform: 'bluesky',
+      url: 'https://bsky.app/profile/did:plc:abc123/post/3lrequested',
+      fetchOption: 'profileFetch',
+      replaceGlobalFetch: false,
+    },
+  ])('aborts a never-settling submitted $platform fetch at its hard deadline', async ({
+    platform,
+    url,
+    fetchOption,
+    replaceGlobalFetch,
+  }) => {
+    const originalFetch = globalThis.fetch;
+    let releaseFetch;
+    let receivedSignal;
+    const neverFetch = vi.fn((_url, init) => {
+      receivedSignal = init?.signal;
+      return new Promise((resolve) => { releaseFetch = resolve; });
+    });
+    if (replaceGlobalFetch) globalThis.fetch = neverFetch;
+
+    try {
+      const operation = orchestrateSubmittedDownload(url, {
+        operationTimeoutMs: 5,
+        [fetchOption]: neverFetch,
+      });
+      const settled = await settleWithin(operation);
+      releaseFetch?.({ ok: false, status: 503, json: async () => ({}) });
+      if (!settled) await operation;
+
+      expect(settled?.result).toEqual({
+        ok: false, code: 'resolution_timeout', platform, count: 0,
+      });
+      expect(receivedSignal?.aborted).toBe(true);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   it.each([
@@ -1914,6 +1979,31 @@ describe('submitted URL external bridge', () => {
     });
     expect(chrome.tabs.sendMessage).toHaveBeenCalledTimes(2);
     expect(chrome.tabs.remove).toHaveBeenCalledWith(81);
+  });
+
+  it('times out a never-settling resolver message and closes its temporary tab', async () => {
+    let releaseMessage;
+    chrome.tabs.create = vi.fn(async () => ({ id: 91, status: 'complete' }));
+    chrome.tabs.get = vi.fn(async () => ({
+      id: 91, status: 'complete', url: 'https://x.com/user/status/123',
+    }));
+    chrome.tabs.remove = vi.fn();
+    chrome.tabs.sendMessage = vi.fn(() => new Promise((resolve) => {
+      releaseMessage = resolve;
+    }));
+
+    const operation = orchestrateSubmittedDownload(
+      'https://x.com/user/status/123',
+      { operationTimeoutMs: 5, resolveAttempts: 1 },
+    );
+    const settled = await settleWithin(operation);
+    releaseMessage?.({ urls: [], platform: 'twitter' });
+    if (!settled) await operation;
+
+    expect(settled?.result).toEqual({
+      ok: false, code: 'resolution_timeout', platform: 'twitter', count: 0,
+    });
+    expect(chrome.tabs.remove).toHaveBeenCalledWith(91);
   });
 
   it('reports a partial download failure with only the successful count and closes the tab', async () => {

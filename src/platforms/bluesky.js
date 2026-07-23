@@ -61,7 +61,28 @@ function resolveSingle(srcUrl, target, pathname) {
   return [];
 }
 
-function resolveAll(target, pathname) {
+const BLUESKY_POST_BOUNDARY_SELECTOR = [
+  '[data-testid^="postThreadItem-by-"]',
+  '[data-testid^="feedItem-by-"]',
+  '[data-testid^="postThreadItem"]',
+  '[data-testid^="feedItem"]',
+].join(', ');
+const BLUESKY_AVATAR_OWNER_SELECTOR = '[data-testid="userAvatarImage"]';
+const BLUESKY_LINK_OWNER_SELECTOR = 'a[href]';
+
+function belongsToSubmittedPost(media, post) {
+  const nearestPost = media.closest?.(BLUESKY_POST_BOUNDARY_SELECTOR);
+  if (nearestPost && nearestPost !== post) return false;
+  if (media.closest?.(BLUESKY_AVATAR_OWNER_SELECTOR)) return false;
+  // Bluesky's post container is itself a link. Its own gallery and video media
+  // therefore resolve to `post`, while avatars, quoted posts, and link-card
+  // previews resolve to a nested link that owns that media.
+  const nearestLink = media.closest?.(BLUESKY_LINK_OWNER_SELECTOR);
+  if (nearestLink && nearestLink !== post) return false;
+  return true;
+}
+
+function resolveAll(target, pathname, { submittedPost = null } = {}) {
   const post = findPostContainer(target, [
     '[data-testid^="postThreadItem-by-"]',
     '[data-testid^="feedItem-by-"]',
@@ -76,6 +97,7 @@ function resolveAll(target, pathname) {
 
   // Collect images from CDN
   post.querySelectorAll('img[src*="cdn.bsky.app"]').forEach((img) => {
+    if (submittedPost && !belongsToSubmittedPost(img, submittedPost)) return;
     const url = upgradeImageUrl(img.src);
     if (url) {
       items.push({
@@ -89,6 +111,7 @@ function resolveAll(target, pathname) {
 
   // Collect video elements
   post.querySelectorAll('video').forEach((video) => {
+    if (submittedPost && !belongsToSubmittedPost(video, submittedPost)) return;
     const src = video.src;
     if (src && !src.startsWith('blob:')) {
       items.push({
@@ -100,7 +123,8 @@ function resolveAll(target, pathname) {
     }
   });
 
-  return items.length > 0 ? items : resolveSingle(target?.src || '', target, pathname);
+  if (items.length > 0 || submittedPost) return items;
+  return resolveSingle(target?.src || '', target, pathname);
 }
 
 function blueskySubmittedKey(rawUrl) {
@@ -151,7 +175,7 @@ export async function resolvePage(
     if (Array.from(links).some((link) => (
       matchesBlueskySubmission(requestedKey, blueskySubmittedKey(link.href))
     ))) {
-      return resolveAll(candidate, new URL(pageUrl).pathname);
+      return resolveAll(candidate, new URL(pageUrl).pathname, { submittedPost: candidate });
     }
   }
   return [];

@@ -551,6 +551,38 @@ describe('resolvePage', () => {
 
     expect(await resolvePage(root, 'https://x.com/user/status/999')).toEqual([]);
   });
+
+  it('uses the verified tweet id instead of a page-wide captured reply video', async () => {
+    const status = makeNode({ tag: 'A', href: '/user/status/444' });
+    const video = makeNode({ tag: 'VIDEO' });
+    const article = makeNode({
+      tag: 'ARTICLE',
+      is: ['article[data-testid="tweet"]', 'article[role="article"]'],
+      children: [status, video],
+    });
+    const root = { querySelectorAll: () => [article] };
+    const originalSendMessage = chrome.runtime.sendMessage;
+    chrome.runtime.sendMessage = (_message, callback) => callback({
+      urls: [{
+        url: 'https://video.twimg.com/ext_tw_video/999/reply.mp4',
+        type: 'video',
+        timestamp: 999,
+      }],
+    });
+
+    try {
+      const items = await resolvePage(root, 'https://x.com/user/status/444');
+
+      expect(items).toEqual([{
+        type: 'video',
+        filename: 'tweet_444',
+        tweetId: '444',
+        needsVideoLookup: true,
+      }]);
+    } finally {
+      chrome.runtime.sendMessage = originalSendMessage;
+    }
+  });
 });
 
 describe('resolveSingle', () => {
