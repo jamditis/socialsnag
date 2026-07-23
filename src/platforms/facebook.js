@@ -88,7 +88,7 @@ function videoUrlInsideMatchedObject(value, requestedIds, state, depth = 0) {
   }
 
   const localIds = directStructuredIds(value);
-  if (localIds.length > 0 && !localIds.some((id) => requestedIds.has(id))) return null;
+  if (localIds.some((id) => !requestedIds.has(id))) return null;
 
   const directUrl = directStructuredVideoUrl(value);
   if (directUrl) return directUrl;
@@ -106,7 +106,7 @@ function findMatchedStructuredVideo(value, requestedIds, state, depth = 0) {
 
   if (!Array.isArray(value)) {
     const localIds = directStructuredIds(value);
-    if (localIds.some((id) => requestedIds.has(id))) {
+    if (localIds.length > 0 && localIds.every((id) => requestedIds.has(id))) {
       const found = videoUrlInsideMatchedObject(value, requestedIds, state, depth);
       if (found) return found;
     }

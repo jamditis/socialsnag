@@ -551,6 +551,10 @@ describe('the landing-page markup', () => {
     expect(html).not.toContain('novalidate');
     expect(html).not.toContain('Your submitted URL stays on this device');
     expect(html).toContain('never to a SocialSnag or developer-operated server');
+    expect(html).not.toContain('no servers');
+    expect(html).not.toContain('Your browsing data stays on your device');
+    expect(html).toContain('No developer-operated servers');
+    expect(html).toContain('selected platform and its media hosts');
   });
 
   it('uses text-only rendering and never logs a submitted URL', async () => {

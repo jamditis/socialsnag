@@ -3,6 +3,7 @@ import {
   upgradeUrl,
   extractPhotoId,
   extractVideoUrlFromScripts,
+  extractSubmittedVideoUrl,
   buildImageItems,
   buildCapturedItems,
   resolvePage,
@@ -100,6 +101,18 @@ describe('extractVideoUrlFromScripts', () => {
 
   it('returns null for empty array', () => {
     expect(extractVideoUrlFromScripts([])).toBeNull();
+  });
+});
+
+describe('extractSubmittedVideoUrl', () => {
+  it('rejects a playable URL when sibling ID fields conflict with the submitted media', () => {
+    const scripts = [JSON.stringify({
+      id: '1234567890',
+      video_id: '9999999999',
+      playable_url_quality_hd: 'https://video.xx.fbcdn.net/unrelated.mp4',
+    })];
+
+    expect(extractSubmittedVideoUrl(scripts, ['1234567890'])).toBeNull();
   });
 });
 
