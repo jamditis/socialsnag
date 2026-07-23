@@ -9,7 +9,7 @@ function loadDemo() {
 }
 
 class FakeElement {
-  constructor({ hidden = false, textContent = '', value = '' } = {}) {
+  constructor({ hidden = false, textContent = '', valid = true, value = '' } = {}) {
     this.attributes = new Map();
     this.dataset = {};
     this.disabled = false;
@@ -17,7 +17,9 @@ class FakeElement {
     this.listeners = new Map();
     this.textContent = textContent;
     this.value = value;
+    this.checkValidity = vi.fn(() => valid);
     this.focus = vi.fn();
+    this.reportValidity = vi.fn();
   }
 
   addEventListener(type, listener) {
@@ -41,9 +43,9 @@ class FakeElement {
   }
 }
 
-function createFormElements(url = 'https://x.com/socialsnag/status/123') {
+function createFormElements(url = 'https://x.com/socialsnag/status/123', valid = true) {
   return {
-    form: new FakeElement(),
+    form: new FakeElement({ valid }),
     input: new FakeElement({ value: url }),
     button: new FakeElement({ textContent: 'Download media' }),
     status: new FakeElement(),
@@ -129,19 +131,104 @@ describe('the web-page runtime request', () => {
     })).resolves.toMatchObject({ ok: false, code: 'extension_unavailable' });
   });
 
-  it('uses a 35-second default and maps a hard timeout to the install or update state', async () => {
+  it('uses a 120-second default and maps a hard timeout to post resolution', async () => {
     vi.useFakeTimers();
     try {
       const { DEFAULT_REQUEST_TIMEOUT_MS, requestSubmittedUrl } = await loadDemo();
       const runtime = { lastError: null, sendMessage: vi.fn() };
 
-      expect(DEFAULT_REQUEST_TIMEOUT_MS).toBe(35_000);
-      const result = requestSubmittedUrl('https://x.com/socialsnag/status/123', { runtime });
-      await vi.advanceTimersByTimeAsync(DEFAULT_REQUEST_TIMEOUT_MS - 1);
+      expect(DEFAULT_REQUEST_TIMEOUT_MS).toBe(120_000);
+      const result = requestSubmittedUrl('https://x.com/socialsnag/status/123', {
+        runtime,
+        timeoutMs: 20,
+      });
+      await vi.advanceTimersByTimeAsync(19);
       expect(runtime.sendMessage).toHaveBeenCalledOnce();
       await vi.advanceTimersByTimeAsync(1);
 
-      await expect(result).resolves.toMatchObject({ ok: false, code: 'extension_unavailable' });
+      await expect(result).resolves.toEqual({
+        ok: false,
+        code: 'resolution_timeout',
+        platform: null,
+        count: 0,
+      });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('clears the timer when the callback wins so time cannot replace the result', async () => {
+    vi.useFakeTimers();
+    try {
+      const { requestSubmittedUrl } = await loadDemo();
+      const response = { ok: true, code: 'ok', platform: 'twitter', count: 1 };
+      const runtime = {
+        lastError: null,
+        sendMessage: vi.fn((_id, _message, callback) => callback(response)),
+      };
+
+      const result = requestSubmittedUrl('https://x.com/socialsnag/status/123', {
+        runtime,
+        timeoutMs: 20,
+      });
+      await expect(result).resolves.toEqual(response);
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(20);
+      await expect(result).resolves.toEqual(response);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('ignores a callback that arrives after the hard timeout', async () => {
+    vi.useFakeTimers();
+    try {
+      const { requestSubmittedUrl } = await loadDemo();
+      let callback;
+      const runtime = {
+        lastError: null,
+        sendMessage: vi.fn((_id, _message, sendResponse) => {
+          callback = sendResponse;
+        }),
+      };
+      const result = requestSubmittedUrl('https://x.com/socialsnag/status/123', {
+        runtime,
+        timeoutMs: 20,
+      });
+
+      await vi.advanceTimersByTimeAsync(20);
+      const timedOut = await result;
+      callback({ ok: true, code: 'ok', platform: 'twitter', count: 1 });
+
+      await expect(result).resolves.toEqual(timedOut);
+      expect(timedOut.code).toBe('resolution_timeout');
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps the first callback result when the runtime calls back twice', async () => {
+    vi.useFakeTimers();
+    try {
+      const { requestSubmittedUrl } = await loadDemo();
+      const first = { ok: true, code: 'ok', platform: 'facebook', count: 2 };
+      const runtime = {
+        lastError: null,
+        sendMessage: vi.fn((_id, _message, callback) => {
+          callback(first);
+          callback({ ok: false, code: 'unexpected', platform: null, count: 0 });
+        }),
+      };
+
+      const result = requestSubmittedUrl('https://facebook.com/user/posts/123', {
+        runtime,
+        timeoutMs: 20,
+      });
+
+      await expect(result).resolves.toEqual(first);
+      expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();
     }
@@ -229,6 +316,38 @@ describe('response copy', () => {
     });
   });
 
+  it.each([
+    ['instagram', 'Instagram'],
+    ['twitter', 'X/Twitter'],
+    ['facebook', 'Facebook'],
+    ['bluesky', 'Bluesky'],
+  ])('accepts the own supported platform key %s', async (platform, label) => {
+    const { responseToViewModel } = await loadDemo();
+
+    expect(responseToViewModel({ ok: true, code: 'ok', platform, count: 1 }).detail).toBe(
+      `1 file from ${label} is downloading.`,
+    );
+  });
+
+  it.each([
+    ['non-boolean ok', { ok: 'yes', code: 'ok', platform: 'instagram', count: 1 }],
+    ['wrong code', { ok: true, code: 'done', platform: 'instagram', count: 1 }],
+    ['unknown platform', { ok: true, code: 'ok', platform: 'unknown', count: 1 }],
+    ['inherited platform name', { ok: true, code: 'ok', platform: 'toString', count: 1 }],
+    ['zero count', { ok: true, code: 'ok', platform: 'instagram', count: 0 }],
+    ['count above the cap', { ok: true, code: 'ok', platform: 'instagram', count: 21 }],
+    ['fractional count', { ok: true, code: 'ok', platform: 'instagram', count: 1.5 }],
+  ])('maps an invalid success shape to a generic failure: %s', async (_label, response) => {
+    const { responseToViewModel } = await loadDemo();
+
+    expect(responseToViewModel(response)).toEqual({
+      title: 'SocialSnag could not start the download',
+      detail: 'Check the link and retry. If the problem continues, update SocialSnag.',
+      tone: 'error',
+      showInstallLink: false,
+    });
+  });
+
   it('includes the successful count in a partial download failure', async () => {
     const { responseToViewModel } = await loadDemo();
 
@@ -247,6 +366,38 @@ describe('response copy', () => {
 });
 
 describe('the form controller', () => {
+  it.each([
+    ['empty', ''],
+    ['malformed', 'not a URL'],
+  ])('uses native validation and does not send an %s value', async (_label, url) => {
+    const { setupDemoForm } = await loadDemo();
+    const elements = createFormElements(url, false);
+    const request = vi.fn();
+    setupDemoForm({ ...elements, request });
+
+    await elements.form.trigger('submit', { preventDefault: vi.fn() });
+
+    expect(elements.form.checkValidity).toHaveBeenCalledOnce();
+    expect(elements.form.reportValidity).toHaveBeenCalledOnce();
+    expect(request).not.toHaveBeenCalled();
+    expect(elements.statusTitle.textContent).toBe('Use a direct supported post link');
+    expect(elements.status.hidden).toBe(false);
+  });
+
+  it('keeps the direct-link status visible when native validation blocks submit', async () => {
+    const { setupDemoForm } = await loadDemo();
+    const elements = createFormElements('not a URL', false);
+    const request = vi.fn();
+    setupDemoForm({ ...elements, request });
+
+    elements.input.trigger('invalid');
+
+    expect(request).not.toHaveBeenCalled();
+    expect(elements.statusTitle.textContent).toBe('Use a direct supported post link');
+    expect(elements.statusDetail.textContent).toContain('Instagram');
+    expect(elements.status.hidden).toBe(false);
+  });
+
   it('prevents double submission, disables controls, and restores them after the result', async () => {
     const { setupDemoForm } = await loadDemo();
     const elements = createFormElements('  https://x.com/socialsnag/status/123  ');
@@ -349,6 +500,7 @@ describe('the landing-page markup', () => {
     expect(html).toMatch(/id="demo-status"[^>]+role="status"[^>]+aria-live="polite"[^>]+tabindex="-1"/);
     expect(html).toContain(CWS_URL);
     expect(html).toContain('<script type="module" src="demo.js"></script>');
+    expect(html).not.toContain('novalidate');
   });
 
   it('uses text-only rendering and never logs a submitted URL', async () => {

@@ -1,10 +1,17 @@
 export const EXTENSION_ID = 'llbpeneloehnlaomolbalbmhjncpmnfa';
-// This covers the extension's bounded tab-load and media-resolution path.
-export const DEFAULT_REQUEST_TIMEOUT_MS = 35_000;
+// This leaves room for bounded DID, tab, resolver, and filename work.
+export const DEFAULT_REQUEST_TIMEOUT_MS = 120_000;
 
 const EXTENSION_UNAVAILABLE = {
   ok: false,
   code: 'extension_unavailable',
+  platform: null,
+  count: 0,
+};
+
+const REQUEST_TIMED_OUT = {
+  ok: false,
+  code: 'resolution_timeout',
   platform: null,
   count: 0,
 };
@@ -29,7 +36,9 @@ function fileCount(count) {
 }
 
 function platformLabel(platform) {
-  return PLATFORM_LABELS[platform] || 'the supported platform';
+  return Object.hasOwn(PLATFORM_LABELS, platform)
+    ? PLATFORM_LABELS[platform]
+    : 'the supported platform';
 }
 
 export function responseToViewModel(response) {
@@ -40,7 +49,14 @@ export function responseToViewModel(response) {
   const count = Number.isInteger(response.count) && response.count > 0 ? response.count : 0;
   const platform = platformLabel(response.platform);
 
-  if (response.ok && response.code === 'ok') {
+  const isValidSuccess = response.ok === true
+    && response.code === 'ok'
+    && Object.hasOwn(PLATFORM_LABELS, response.platform)
+    && Number.isInteger(response.count)
+    && response.count >= 1
+    && response.count <= 20;
+
+  if (isValidSuccess) {
     return {
       title: 'Download started',
       detail: `${fileCount(count)} from ${platform} ${count === 1 ? 'is' : 'are'} downloading.`,
@@ -145,7 +161,7 @@ export function requestSubmittedUrl(rawUrl, {
       clearTimeout(timer);
       resolve(response);
     };
-    const timer = setTimeout(() => finish({ ...EXTENSION_UNAVAILABLE }), requestTimeout);
+    const timer = setTimeout(() => finish({ ...REQUEST_TIMED_OUT }), requestTimeout);
 
     try {
       runtime.sendMessage(
@@ -186,6 +202,11 @@ export function setupDemoForm({
   let submitting = false;
   const idleButtonText = button.textContent;
   const elements = { status, statusTitle, statusDetail, installLink };
+  const showInvalidStatus = () => {
+    renderStatus(elements, responseToViewModel({ ok: false, code: 'invalid_url' }));
+  };
+
+  input.addEventListener('invalid', showInvalidStatus);
 
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
@@ -193,9 +214,9 @@ export function setupDemoForm({
 
     const url = input.value.trim();
     input.value = url;
-    if (!url) {
-      renderStatus(elements, responseToViewModel({ ok: false, code: 'invalid_url' }));
-      status.focus();
+    if (!form.checkValidity()) {
+      showInvalidStatus();
+      form.reportValidity();
       return;
     }
 
