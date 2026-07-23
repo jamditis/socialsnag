@@ -81,11 +81,15 @@ describe('extractPostId', () => {
 });
 
 describe('resolvePage', () => {
-  const makePost = (postId, did = 'did:plc:abc') => {
+  const makePost = (
+    postId,
+    did = 'did:plc:abc',
+    account = 'alice.bsky.social',
+  ) => {
     const media = {
       src: `https://cdn.bsky.app/img/feed_thumbnail/plain/${did}/${postId}@jpeg`,
     };
-    const permalink = { href: `/profile/alice.bsky.social/post/${postId}` };
+    const permalink = { href: `/profile/${account}/post/${postId}` };
     return {
       matches: (selector) => selector === '[data-testid^="postThreadItem-by-"]',
       parentElement: null,
@@ -162,6 +166,50 @@ describe('resolvePage', () => {
     expect(items).toHaveLength(1);
     expect(items[0].url).toContain('3lrequested@jpeg');
     expect(items[0].url).not.toContain('3lunrelated@jpeg');
+  });
+
+  it('matches a DID submission to the rendered handle by stable post id', async () => {
+    const unrelated = makePost('3lunrelated', 'did:plc:other', 'other.bsky.social');
+    const requested = makePost('3lrequested', 'did:plc:requested');
+    const root = { querySelectorAll: () => [unrelated, requested] };
+
+    const items = await resolvePage(
+      root,
+      'https://bsky.app/profile/did:plc:requested/post/3lrequested',
+    );
+
+    expect(items).toHaveLength(1);
+    expect(items[0].url).toContain('3lrequested@jpeg');
+    expect(items[0].url).not.toContain('3lunrelated@jpeg');
+  });
+
+  it('keeps handle submissions anchored to both account and post id', async () => {
+    const sameIdOtherAccount = makePost(
+      '3lshared',
+      'did:plc:other',
+      'other.bsky.social',
+    );
+    const requested = makePost('3lshared', 'did:plc:requested');
+    const root = { querySelectorAll: () => [sameIdOtherAccount, requested] };
+
+    const items = await resolvePage(
+      root,
+      'https://bsky.app/profile/alice.bsky.social/post/3lshared',
+    );
+
+    expect(items).toHaveLength(1);
+    expect(items[0].url).toContain('did:plc:requested');
+    expect(items[0].url).not.toContain('did:plc:other');
+  });
+
+  it('returns no media for a DID submission without its stable post id', async () => {
+    const unrelated = makePost('3lunrelated');
+    const root = { querySelectorAll: () => [unrelated] };
+
+    expect(await resolvePage(
+      root,
+      'https://bsky.app/profile/did:plc:requested/post/3lmissing',
+    )).toEqual([]);
   });
 
   it('returns no media when no thread item proves the submitted post id', async () => {

@@ -173,7 +173,7 @@ export function parseSubmittedPageUrl(rawUrl) {
   } else if (submittedHostMatches(host, 'facebook.com')) {
     platform = 'facebook';
     validPath = isFacebookSubmittedPost(url);
-  } else if (submittedHostMatches(host, 'bsky.app')) {
+  } else if (host === 'bsky.app') {
     platform = 'bluesky';
     const match = url.pathname.match(/^\/profile\/([^/]+)\/post\/[A-Za-z0-9]+\/?$/);
     const account = match?.[1] || '';
@@ -1235,9 +1235,20 @@ export async function orchestrateSubmittedDownload(rawUrl, options = {}) {
       if (!loaded) {
         return submittedDownloadResult(false, 'resolution_timeout', platform);
       }
+
+      let finalTab;
+      try {
+        finalTab = await chrome.tabs.get(createdTabId);
+      } catch {
+        return submittedDownloadResult(false, 'access_or_unavailable', platform);
+      }
+      const finalParsed = parseSubmittedPageUrl(finalTab?.url);
+      if (finalParsed.error || finalParsed.platform !== platform) {
+        return submittedDownloadResult(false, 'access_or_unavailable', platform);
+      }
       resolved = await resolveSubmittedTab(
         createdTabId,
-        parsed.url,
+        finalParsed.url,
         resolveAttempts,
         retryDelayMs,
       );

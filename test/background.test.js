@@ -174,6 +174,7 @@ describe('parseSubmittedPageUrl', () => {
     ['https://bsky.app/profile/alice.bsky.social', 'invalid_url'],
     ['https://bsky.app/settings', 'invalid_url'],
     ['https://bsky.app/profile/::::/post/abc', 'invalid_url'],
+    ['https://staging.bsky.app/profile/alice.bsky.social/post/3labc123xyz', 'unsupported_url'],
     [' https://x.com/user/status/123', 'invalid_url'],
     ['https://x.com/user/status/123 ', 'invalid_url'],
     ['https://evilinstagram.com/p/ABC/', 'unsupported_url'],
@@ -1611,7 +1612,9 @@ describe('submitted URL external bridge', () => {
   it('downloads multiple tab-resolved files, records history, redacts URLs, and closes the created tab', async () => {
     const remove = vi.fn();
     chrome.tabs.create = vi.fn(async () => ({ id: 77, status: 'complete' }));
-    chrome.tabs.get = vi.fn(async () => ({ id: 77, status: 'complete' }));
+    chrome.tabs.get = vi.fn(async () => ({
+      id: 77, status: 'complete', url: 'https://x.com/user/status/123',
+    }));
     chrome.tabs.remove = remove;
     chrome.tabs.sendMessage = vi.fn(async () => ({
       platform: 'twitter',
@@ -1648,7 +1651,9 @@ describe('submitted URL external bridge', () => {
       filename: `tweet_${index}`,
     }));
     chrome.tabs.create = vi.fn(async () => ({ id: 76, status: 'complete' }));
-    chrome.tabs.get = vi.fn(async () => ({ id: 76, status: 'complete' }));
+    chrome.tabs.get = vi.fn(async () => ({
+      id: 76, status: 'complete', url: 'https://x.com/user/status/123',
+    }));
     chrome.tabs.remove = vi.fn();
     chrome.tabs.sendMessage = vi.fn(async () => ({ platform: 'twitter', urls }));
     chrome.downloads.download = vi.fn(async () => 50);
@@ -1666,7 +1671,9 @@ describe('submitted URL external bridge', () => {
   it('times out a tab that never completes and still closes it', async () => {
     const remove = vi.fn();
     chrome.tabs.create = vi.fn(async () => ({ id: 78, status: 'loading' }));
-    chrome.tabs.get = vi.fn(async () => ({ id: 78, status: 'loading' }));
+    chrome.tabs.get = vi.fn(async () => ({
+      id: 78, status: 'loading', url: 'https://x.com/user/status/123',
+    }));
     chrome.tabs.remove = remove;
     chrome.tabs.sendMessage = vi.fn();
 
@@ -1684,7 +1691,11 @@ describe('submitted URL external bridge', () => {
 
   it('retries while SPA media renders, then downloads the resolved item', async () => {
     chrome.tabs.create = vi.fn(async () => ({ id: 79, status: 'complete' }));
-    chrome.tabs.get = vi.fn(async () => ({ id: 79, status: 'complete' }));
+    chrome.tabs.get = vi.fn(async () => ({
+      id: 79,
+      status: 'complete',
+      url: 'https://bsky.app/profile/a.bsky.social/post/3abc',
+    }));
     chrome.tabs.remove = vi.fn();
     chrome.tabs.sendMessage = vi.fn()
       .mockRejectedValueOnce(new Error('content script not ready'))
@@ -1716,9 +1727,64 @@ describe('submitted URL external bridge', () => {
     expect(chrome.tabs.remove).toHaveBeenCalledWith(79);
   });
 
+  it('resolves a Facebook share URL through its validated canonical redirect URL', async () => {
+    const finalUrl = 'https://www.facebook.com/example/posts/9876543210/?mibextid=abc';
+    chrome.tabs.create = vi.fn(async () => ({ id: 85, status: 'complete' }));
+    chrome.tabs.get = vi.fn(async () => ({ id: 85, status: 'complete', url: finalUrl }));
+    chrome.tabs.remove = vi.fn();
+    chrome.tabs.sendMessage = vi.fn(async () => ({
+      platform: 'facebook',
+      urls: [{
+        url: 'https://scontent.xx.fbcdn.net/9876543210.jpg',
+        type: 'image',
+        filename: 'photo_9876543210',
+      }],
+    }));
+    chrome.downloads.download = vi.fn(async () => 86);
+    chrome.downloads.search = async () => [{
+      id: 86, state: 'complete', filename: '/downloads/photo_9876543210.jpg',
+    }];
+
+    const result = await orchestrateSubmittedDownload(
+      'https://www.facebook.com/share/p/AbC_def-123/',
+    );
+
+    expect(result).toEqual({ ok: true, code: 'ok', platform: 'facebook', count: 1 });
+    expect(chrome.tabs.sendMessage).toHaveBeenCalledWith(85, {
+      action: 'resolvePage',
+      pageUrl: finalUrl,
+    });
+    expect(chrome.tabs.remove).toHaveBeenCalledWith(85);
+  });
+
+  it.each([
+    'https://www.facebook.com/login/',
+    'https://example.com/post/1',
+    'https://x.com/user/status/123',
+  ])('rejects an unavailable or cross-platform final tab URL: %s', async (finalUrl) => {
+    chrome.tabs.create = vi.fn(async () => ({ id: 87, status: 'complete' }));
+    chrome.tabs.get = vi.fn(async () => ({ id: 87, status: 'complete', url: finalUrl }));
+    chrome.tabs.remove = vi.fn();
+    chrome.tabs.sendMessage = vi.fn(async () => ({ urls: [], platform: 'facebook' }));
+
+    const result = await orchestrateSubmittedDownload(
+      'https://www.facebook.com/share/p/AbC_def-123/',
+    );
+
+    expect(result).toEqual({
+      ok: false, code: 'access_or_unavailable', platform: 'facebook', count: 0,
+    });
+    expect(chrome.tabs.sendMessage).not.toHaveBeenCalled();
+    expect(chrome.tabs.remove).toHaveBeenCalledWith(87);
+  });
+
   it('reports access or unavailable for an empty page without claiming an auth cause', async () => {
     chrome.tabs.create = vi.fn(async () => ({ id: 80, status: 'complete' }));
-    chrome.tabs.get = vi.fn(async () => ({ id: 80, status: 'complete' }));
+    chrome.tabs.get = vi.fn(async () => ({
+      id: 80,
+      status: 'complete',
+      url: 'https://www.facebook.com/example/posts/123',
+    }));
     chrome.tabs.remove = vi.fn();
     chrome.tabs.sendMessage = vi.fn(async () => ({ urls: [], platform: 'facebook' }));
 
@@ -1736,7 +1802,9 @@ describe('submitted URL external bridge', () => {
 
   it('reports resolution timeout when the content script never becomes available', async () => {
     chrome.tabs.create = vi.fn(async () => ({ id: 81, status: 'complete' }));
-    chrome.tabs.get = vi.fn(async () => ({ id: 81, status: 'complete' }));
+    chrome.tabs.get = vi.fn(async () => ({
+      id: 81, status: 'complete', url: 'https://x.com/user/status/123',
+    }));
     chrome.tabs.remove = vi.fn();
     chrome.tabs.sendMessage = vi.fn(async () => { throw new Error('no receiver'); });
 
@@ -1754,7 +1822,11 @@ describe('submitted URL external bridge', () => {
 
   it('reports a partial download failure with only the successful count and closes the tab', async () => {
     chrome.tabs.create = vi.fn(async () => ({ id: 82, status: 'complete' }));
-    chrome.tabs.get = vi.fn(async () => ({ id: 82, status: 'complete' }));
+    chrome.tabs.get = vi.fn(async () => ({
+      id: 82,
+      status: 'complete',
+      url: 'https://www.facebook.com/example/posts/123',
+    }));
     chrome.tabs.remove = vi.fn();
     chrome.tabs.sendMessage = vi.fn(async () => ({
       platform: 'facebook',
@@ -1786,7 +1858,9 @@ describe('submitted URL external bridge', () => {
   it('does not report full success when history recording fails', async () => {
     const originalSet = chrome.storage.local.set;
     chrome.tabs.create = vi.fn(async () => ({ id: 84, status: 'complete' }));
-    chrome.tabs.get = vi.fn(async () => ({ id: 84, status: 'complete' }));
+    chrome.tabs.get = vi.fn(async () => ({
+      id: 84, status: 'complete', url: 'https://x.com/user/status/123',
+    }));
     chrome.tabs.remove = vi.fn();
     chrome.tabs.sendMessage = vi.fn(async () => ({
       platform: 'twitter',
@@ -1812,7 +1886,9 @@ describe('submitted URL external bridge', () => {
   it('rejects a concurrent valid job with busy', async () => {
     let releaseCreate;
     chrome.tabs.create = vi.fn(() => new Promise((resolve) => { releaseCreate = resolve; }));
-    chrome.tabs.get = vi.fn(async (id) => ({ id, status: 'complete' }));
+    chrome.tabs.get = vi.fn(async (id) => ({
+      id, status: 'complete', url: 'https://x.com/user/status/123',
+    }));
     chrome.tabs.remove = vi.fn();
     chrome.tabs.sendMessage = vi.fn(async () => ({
       platform: 'twitter',

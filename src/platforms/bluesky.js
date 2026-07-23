@@ -112,7 +112,17 @@ function blueskySubmittedKey(rawUrl) {
   }
   if (url.hostname.toLowerCase() !== 'bsky.app') return null;
   const match = url.pathname.match(/^\/profile\/([^/]+)\/post\/([A-Za-z0-9]+)\/?$/);
-  return match ? `${match[1]}:${match[2]}` : null;
+  if (!match) return null;
+  return {
+    account: match[1],
+    postId: match[2],
+    did: match[1].startsWith('did:plc:'),
+  };
+}
+
+function matchesBlueskySubmission(requested, candidate) {
+  if (!candidate || candidate.postId !== requested.postId) return false;
+  return requested.did || candidate.account === requested.account;
 }
 
 // Resolve only the thread item whose permalink proves it is the submitted post.
@@ -130,7 +140,9 @@ export async function resolvePage(
   ) || [];
   for (const candidate of candidates) {
     const links = candidate.querySelectorAll?.('a[href*="/post/"]') || [];
-    if (Array.from(links).some((link) => blueskySubmittedKey(link.href) === requestedKey)) {
+    if (Array.from(links).some((link) => (
+      matchesBlueskySubmission(requestedKey, blueskySubmittedKey(link.href))
+    ))) {
       return resolveAll(candidate, new URL(pageUrl).pathname);
     }
   }

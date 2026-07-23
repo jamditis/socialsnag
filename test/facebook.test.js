@@ -387,6 +387,20 @@ describe('resolvePage', () => {
     expect(items[0].url).not.toContain('111111111111_n.jpg');
   });
 
+  it('resolves the canonical post URL produced by a share redirect', async () => {
+    const canonicalUrl = 'https://www.facebook.com/example/posts/333/?mibextid=abc';
+    const post = makePost(
+      'https://www.facebook.com/example/posts/333/',
+      `${CDN}/s720x720/333333333333_n.jpg`,
+    );
+    const root = { querySelectorAll: () => [post] };
+
+    const items = await resolvePage(root, canonicalUrl);
+
+    expect(items).toHaveLength(1);
+    expect(items[0].url).toContain('333333333333_n.jpg');
+  });
+
   it('returns no media when no container proves the submitted post identifier', async () => {
     const unrelated = makePost(
       'https://www.facebook.com/example/posts/111/',
