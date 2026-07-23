@@ -440,4 +440,101 @@ describe('resolvePage', () => {
       globalThis.document = originalDocument;
     }
   });
+
+  it('resolves only the verified submitted blob video from structured page data', async () => {
+    const pageUrl = 'https://www.facebook.com/reel/1234567890/';
+    let post;
+    const video = {
+      tagName: 'VIDEO',
+      src: 'blob:https://www.facebook.com/requested',
+      dataset: { videoId: '1234567890' },
+      getAttribute: (name) => name === 'data-video-id' ? '1234567890' : null,
+      querySelector: () => null,
+      closest: (selector) => selector === '[role="article"]' ? post : null,
+      parentElement: null,
+    };
+    const unrelatedVideo = {
+      dataset: { videoId: '9999999999' },
+      getAttribute: (name) => name === 'data-video-id' ? '9999999999' : null,
+      closest: () => null,
+    };
+    const permalink = { href: pageUrl };
+    post = {
+      tagName: 'ARTICLE',
+      matches: (selector) => selector === '[role="article"]',
+      parentElement: null,
+      closest: (selector) => selector === '[role="article"]' ? post : null,
+      querySelector: (selector) => selector === 'video' ? video : null,
+      querySelectorAll: (selector) => {
+        if (selector === 'a[href]') return [permalink];
+        if (selector === 'img[src*="fbcdn.net"]') return [];
+        if (selector === 'video') return [unrelatedVideo, video];
+        return [];
+      },
+    };
+    video.parentElement = post;
+    const scripts = [{
+      textContent: JSON.stringify({
+        feed: [
+          {
+            id: '9999999999',
+            playable_url_quality_hd: 'https://video.xx.fbcdn.net/reply.mp4',
+          },
+          {
+            id: '1234567890',
+            playable_url_quality_hd: 'https://video.xx.fbcdn.net/requested-hd.mp4',
+            playable_url: 'https://video.xx.fbcdn.net/requested-sd.mp4',
+          },
+        ],
+      }),
+    }];
+    const root = {
+      querySelectorAll: (selector) => {
+        if (selector === 'script') return scripts;
+        if (selector === 'a[href]') return [];
+        return [post];
+      },
+    };
+
+    expect(await resolvePage(root, pageUrl)).toEqual([{
+      url: 'https://video.xx.fbcdn.net/requested-hd.mp4',
+      type: 'video',
+      filename: 'video_1234567890',
+    }]);
+  });
+
+  it('rejects a blob video when structured page data identifies a different post', async () => {
+    const pageUrl = 'https://www.facebook.com/reel/1234567890/';
+    let post;
+    const video = {
+      tagName: 'VIDEO',
+      src: 'blob:https://www.facebook.com/requested',
+      dataset: { videoId: '1234567890' },
+      getAttribute: () => '1234567890',
+      querySelector: () => null,
+      closest: (selector) => selector === '[role="article"]' ? post : null,
+      parentElement: null,
+    };
+    post = {
+      matches: (selector) => selector === '[role="article"]',
+      parentElement: null,
+      querySelector: (selector) => selector === 'video' ? video : null,
+      querySelectorAll: (selector) => {
+        if (selector === 'a[href]') return [{ href: pageUrl }];
+        if (selector === 'img[src*="fbcdn.net"]') return [];
+        return [];
+      },
+    };
+    video.parentElement = post;
+    const root = {
+      querySelectorAll: (selector) => selector === 'script'
+        ? [{ textContent: JSON.stringify({
+          id: '9999999999',
+          playable_url_quality_hd: 'https://video.xx.fbcdn.net/reply.mp4',
+        }) }]
+        : [post],
+    };
+
+    expect(await resolvePage(root, pageUrl)).toEqual([]);
+  });
 });

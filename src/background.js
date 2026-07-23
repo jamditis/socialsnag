@@ -137,7 +137,9 @@ function isFacebookSubmittedPost(url) {
   if (hasAccount && /^\/[A-Za-z0-9.]+\/videos\/\d+\/?$/.test(path)) return true;
   if (/^\/reel\/\d+\/?$/.test(path)) return true;
   if (/^\/share\/[prv]\/[A-Za-z0-9_-]+\/?$/.test(path)) return true;
-  if (/^\/photo\.php$/.test(path)) return /^\d+$/.test(url.searchParams.get('fbid') || '');
+  if (path === '/photo.php' || path === '/photo' || path === '/photo/') {
+    return /^\d+$/.test(url.searchParams.get('fbid') || '');
+  }
   if (/^\/(?:permalink|story)\.php$/.test(path)) {
     return new RegExp(`^${postId}$`).test(url.searchParams.get('story_fbid') || '')
       && /^\d+$/.test(url.searchParams.get('id') || '');
@@ -211,7 +213,7 @@ function facebookSubmittedIdentity(url) {
   match = path.match(/^\/share\/([prv])\/[A-Za-z0-9_-]+\/?$/);
   if (match) return { platform: 'facebook', kind: 'share', shareType: match[1] };
 
-  if (path === '/photo.php') {
+  if (path === '/photo.php' || /^\/photo\/?$/.test(path)) {
     return { platform: 'facebook', kind: 'photo', id: url.searchParams.get('fbid') };
   }
   if (path === '/permalink.php' || path === '/story.php') {
@@ -1457,7 +1459,8 @@ export async function orchestrateSubmittedDownload(rawUrl, options = {}) {
     }
 
     let count = 0;
-    let hadFailure = false;
+    let hadDownloadFailure = false;
+    let hadHistoryFailure = false;
     let hadResolutionTimeout = false;
     for (const [position, item] of items.entries()) {
       let downloadItem = item;
@@ -1468,12 +1471,12 @@ export async function orchestrateSubmittedDownload(rawUrl, options = {}) {
           { abort: true },
         );
         if (resolvedUrl === SUBMITTED_OPERATION_TIMEOUT) {
-          hadFailure = true;
+          hadDownloadFailure = true;
           hadResolutionTimeout = true;
           continue;
         }
         if (!resolvedUrl) {
-          hadFailure = true;
+          hadDownloadFailure = true;
           continue;
         }
         downloadItem = { ...item, url: resolvedUrl, needsVideoLookup: false };
@@ -1487,7 +1490,7 @@ export async function orchestrateSubmittedDownload(rawUrl, options = {}) {
         // how many succeeded, never the failed item's URL or filename.
       }
       if (!saved) {
-        hadFailure = true;
+        hadDownloadFailure = true;
         continue;
       }
       try {
@@ -1495,16 +1498,19 @@ export async function orchestrateSubmittedDownload(rawUrl, options = {}) {
       } catch {
         // The browser download has already started. Count it as saved while the
         // incomplete batch result tells the page not every operation finished.
-        hadFailure = true;
+        hadHistoryFailure = true;
       }
       count++;
     }
 
-    if (hadFailure || count !== items.length) {
+    if (hadDownloadFailure || count !== items.length) {
       if (count === 0 && hadResolutionTimeout) {
         return submittedDownloadResult(false, 'resolution_timeout', platform);
       }
       return submittedDownloadResult(false, 'download_failed', platform, count);
+    }
+    if (hadHistoryFailure) {
+      return submittedDownloadResult(false, 'history_failed', platform, count);
     }
     return submittedDownloadResult(true, 'ok', platform, count);
   } catch {

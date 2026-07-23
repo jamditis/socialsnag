@@ -5,7 +5,7 @@
 SocialSnag is a Chrome extension (Manifest V3) that downloads full-resolution images and videos from social media through a right-click context menu or a direct post-link form on its GitHub Pages site.
 
 **Repo:** https://github.com/jamditis/socialsnag (public)
-**Version:** 1.2.1
+**Version:** 1.3.0
 **Author:** Joe Amditis
 
 ## Architecture
@@ -157,10 +157,11 @@ This works without advanced mode (webRequest) enabled.
 
 ## Current status
 
-### Implemented, not yet released
+### Implemented, not yet released (v1.3.0)
 
 - The GitHub Pages landing page includes a prominent direct post-link form that delegates downloads to the locally installed extension while preserving the right-click workflow.
 - The GitHub Pages deployment and Chrome Web Store extension update are separate release gates. Both must be live before the pasted-link workflow is available to users. Publishing either one does not publish the other.
+- Release order is Chrome Web Store first, then GitHub Pages. Do not merge the Pages form to `master` until v1.3.0 is live in the store, so the public form never advertises a workflow that the published extension cannot receive.
 
 ### Done (v1.2.1)
 - Instagram feed and profile-grid carousels enumerate every slide. The content script recovers the post's shortcode from the DOM permalink (clicked-target ancestor link first, then the enclosing article, then the container) and hands it to the background, which resolves the whole post through the media API. Fixes feed/grid "download all" capping at the ~2 slides Instagram lazy-renders (#32).

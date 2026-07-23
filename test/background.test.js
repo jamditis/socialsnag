@@ -137,6 +137,7 @@ describe('parseSubmittedPageUrl', () => {
     ['https://www.facebook.com/permalink.php?story_fbid=1234567890&id=42', 'facebook', 'https://www.facebook.com/permalink.php?story_fbid=1234567890&id=42'],
     ['https://www.facebook.com/story.php?story_fbid=pfbid02AbCdEf&id=42', 'facebook', 'https://www.facebook.com/story.php?story_fbid=pfbid02AbCdEf&id=42'],
     ['https://www.facebook.com/photo.php?fbid=1234567890&id=42', 'facebook', 'https://www.facebook.com/photo.php?fbid=1234567890&id=42'],
+    ['https://www.facebook.com/photo/?fbid=1234567890', 'facebook', 'https://www.facebook.com/photo/?fbid=1234567890'],
     ['https://www.facebook.com/example/photos/a.123/4567890123/', 'facebook', 'https://www.facebook.com/example/photos/a.123/4567890123/'],
     ['https://www.facebook.com/example/videos/1234567890/', 'facebook', 'https://www.facebook.com/example/videos/1234567890/'],
     ['https://www.facebook.com/reel/1234567890/', 'facebook', 'https://www.facebook.com/reel/1234567890/'],
@@ -1498,6 +1499,17 @@ describe('submitted URL external bridge', () => {
     });
   });
 
+  it('uses a publishable feature version consistently', () => {
+    const manifest = JSON.parse(readFileSync(new URL('../manifest.json', import.meta.url), 'utf8'));
+    const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+    const packageLock = JSON.parse(readFileSync(new URL('../package-lock.json', import.meta.url), 'utf8'));
+
+    expect(manifest.version).toBe('1.3.0');
+    expect(packageJson.version).toBe(manifest.version);
+    expect(packageLock.version).toBe(manifest.version);
+    expect(packageLock.packages[''].version).toBe(manifest.version);
+  });
+
   it.each([
     { origin: 'http://jamditis.github.io', url: 'http://jamditis.github.io/socialsnag/' },
     { origin: 'https://jamditis.github.io', url: 'https://jamditis.github.io/socialsnag-evil/' },
@@ -1829,6 +1841,35 @@ describe('submitted URL external bridge', () => {
       pageUrl: finalUrl,
     });
     expect(chrome.tabs.remove).toHaveBeenCalledWith(85);
+  });
+
+  it('keeps a modern Facebook photo URL anchored through its canonical redirect', async () => {
+    const submitted = 'https://www.facebook.com/photo/?fbid=1234567890';
+    const finalUrl = 'https://www.facebook.com/example/photos/a.42/1234567890/';
+    chrome.tabs.create = vi.fn(async () => ({ id: 86, status: 'complete' }));
+    chrome.tabs.get = vi.fn(async () => ({ id: 86, status: 'complete', url: finalUrl }));
+    chrome.tabs.remove = vi.fn();
+    chrome.tabs.sendMessage = vi.fn(async () => ({
+      platform: 'facebook',
+      urls: [{
+        url: 'https://scontent.xx.fbcdn.net/1234567890.jpg',
+        type: 'image',
+        filename: 'photo_1234567890',
+      }],
+    }));
+    chrome.downloads.download = vi.fn(async () => 87);
+    chrome.downloads.search = async () => [{
+      id: 87, state: 'complete', filename: '/downloads/photo_1234567890.jpg',
+    }];
+
+    const result = await orchestrateSubmittedDownload(submitted);
+
+    expect(result).toEqual({ ok: true, code: 'ok', platform: 'facebook', count: 1 });
+    expect(chrome.tabs.sendMessage).toHaveBeenCalledWith(86, {
+      action: 'resolvePage',
+      pageUrl: finalUrl,
+    });
+    expect(chrome.tabs.remove).toHaveBeenCalledWith(86);
   });
 
   it.each([
@@ -2232,7 +2273,7 @@ describe('submitted URL external bridge', () => {
     expect(chrome.tabs.remove).toHaveBeenCalledWith(82);
   });
 
-  it('does not report full success when history recording fails', async () => {
+  it('reports a started download separately when history recording fails', async () => {
     const originalSet = chrome.storage.local.set;
     chrome.tabs.create = vi.fn(async () => ({ id: 84, status: 'complete' }));
     chrome.tabs.get = vi.fn(async () => ({
@@ -2252,7 +2293,7 @@ describe('submitted URL external bridge', () => {
     try {
       const result = await orchestrateSubmittedDownload('https://x.com/user/status/123');
       expect(result).toEqual({
-        ok: false, code: 'download_failed', platform: 'twitter', count: 1,
+        ok: false, code: 'history_failed', platform: 'twitter', count: 1,
       });
       expect(chrome.tabs.remove).toHaveBeenCalledWith(84);
     } finally {

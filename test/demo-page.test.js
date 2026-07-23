@@ -247,15 +247,22 @@ describe('response copy', () => {
     ['no_media', 'Media may be unavailable', 'error', false],
     ['resolution_timeout', 'The post took too long', 'error', false],
     ['download_failed', 'Download failed', 'error', false],
+    ['history_failed', 'Download started', 'success', false, 1],
     ['unexpected', 'SocialSnag could not start the download', 'error', false],
     ['invalid_sender', 'SocialSnag could not start the download', 'error', false],
     ['invalid_request', 'SocialSnag could not start the download', 'error', false],
     ['extension_unavailable', 'Install or update SocialSnag', 'error', true],
   ];
 
-  it.each(cases)('maps %s to safe visible copy', async (code, title, tone, showInstallLink) => {
+  it.each(cases)('maps %s to safe visible copy', async (
+    code,
+    title,
+    tone,
+    showInstallLink,
+    count = 0,
+  ) => {
     const { responseToViewModel } = await loadDemo();
-    const view = responseToViewModel({ ok: false, code, platform: 'twitter', count: 0 });
+    const view = responseToViewModel({ ok: false, code, platform: 'twitter', count });
 
     expect(view).toEqual({
       title,
@@ -309,6 +316,28 @@ describe('response copy', () => {
       tone: 'error',
       showInstallLink: false,
     });
+  });
+
+  it('distinguishes a history write problem from a media download failure', async () => {
+    const { responseToViewModel } = await loadDemo();
+
+    expect(responseToViewModel({
+      ok: false,
+      code: 'history_failed',
+      platform: 'facebook',
+      count: 2,
+    })).toEqual({
+      title: 'Download started',
+      detail: '2 files from Facebook are downloading, but SocialSnag could not update its download history.',
+      tone: 'success',
+      showInstallLink: false,
+    });
+    expect(responseToViewModel({
+      ok: false,
+      code: 'history_failed',
+      platform: 'facebook',
+      count: 0,
+    }).title).toBe('SocialSnag could not start the download');
   });
 
   it('uses singular count and the public platform label on success', async () => {
@@ -513,11 +542,15 @@ describe('the landing-page markup', () => {
     expect(formIndex).toBeLessThan(badgesIndex);
     expect(html).toMatch(/<label[^>]+for="submitted-post-url"[^>]*>Paste a post link<\/label>/);
     expect(html).toMatch(/<input[^>]+id="submitted-post-url"[^>]+type="url"/);
+    const submittedInput = html.match(/<input[\s\S]*?id="submitted-post-url"[\s\S]*?>/)?.[0];
+    expect(submittedInput).not.toMatch(/\sname=/);
     expect(html).toMatch(/<button[^>]+type="submit"[^>]*>Download media<\/button>/);
     expect(html).toMatch(/id="demo-status"[^>]+role="status"[^>]+aria-live="polite"[^>]+tabindex="-1"/);
     expect(html).toContain(CWS_URL);
     expect(html).toContain('<script type="module" src="demo.js"></script>');
     expect(html).not.toContain('novalidate');
+    expect(html).not.toContain('Your submitted URL stays on this device');
+    expect(html).toContain('never to a SocialSnag or developer-operated server');
   });
 
   it('uses text-only rendering and never logs a submitted URL', async () => {

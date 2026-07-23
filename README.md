@@ -20,7 +20,7 @@ Download full-resolution images and videos from social media. Right-click while 
 
 The landing page has no backend. It receives a result containing only the platform, download count, and success or failure status. Resolved CDN URLs and account data stay inside the browser extension. Unsupported links, logged-out sessions, private or inaccessible posts, expired or deleted posts, and rate limits produce a visible failure message.
 
-The GitHub Pages site deployment and the Chrome Web Store extension update are separate release gates. The pasted-link workflow is available only after both releases are live and the current extension release that supports submitted URLs is installed. An older installed version does not support the form. Right-click use continues to work independently from the landing-page form.
+The GitHub Pages site deployment and the Chrome Web Store extension update are separate release gates. Publish v1.3.0 to the Chrome Web Store first, wait until it is live, and only then deploy the Pages form. The pasted-link workflow is available only after both releases are live and v1.3.0 or newer is installed. An older installed version does not support the form. Right-click use continues to work independently from the landing-page form.
 
 ## Features
 

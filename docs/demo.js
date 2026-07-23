@@ -132,6 +132,19 @@ export function responseToViewModel(response) {
         tone: 'error',
         showInstallLink: false,
       };
+    case 'history_failed':
+      if (!Object.hasOwn(PLATFORM_LABELS, response.platform)
+          || !Number.isInteger(response.count)
+          || response.count < 1
+          || response.count > 20) {
+        return { ...GENERIC_FAILURE };
+      }
+      return {
+        title: 'Download started',
+        detail: `${fileCount(count)} from ${platform} ${count === 1 ? 'is' : 'are'} downloading, but SocialSnag could not update its download history.`,
+        tone: 'success',
+        showInstallLink: false,
+      };
     case 'extension_unavailable':
       return {
         title: 'Install or update SocialSnag',
