@@ -98,6 +98,7 @@ export function validateDownloadUrl(url) {
 const MAX_SUBMITTED_URL_LENGTH = 2048;
 const BLUESKY_DID_PATTERN = /^did:plc:[A-Za-z0-9]+$/;
 const BLUESKY_HANDLE_PATTERN = /^(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/;
+const TWITTER_SUBMITTED_STATUS_PATTERN = /^\/(?:[A-Za-z0-9_]+\/status|i\/web\/status)\/(\d+)\/?$/;
 
 function submittedHostMatches(hostname, domain) {
   return hostname === domain || hostname.endsWith(`.${domain}`);
@@ -175,7 +176,7 @@ export function parseSubmittedPageUrl(rawUrl) {
       || /^\/stories\/(?!highlights(?:\/|$))[A-Za-z0-9._]+\/\d+\/?$/i.test(url.pathname);
   } else if (submittedHostMatches(host, 'twitter.com') || submittedHostMatches(host, 'x.com')) {
     platform = 'twitter';
-    validPath = /^\/[A-Za-z0-9_]+\/status\/\d+\/?$/.test(url.pathname);
+    validPath = TWITTER_SUBMITTED_STATUS_PATTERN.test(url.pathname);
   } else if (submittedHostMatches(host, 'facebook.com')) {
     platform = 'facebook';
     validPath = isFacebookSubmittedPost(url);
@@ -225,7 +226,7 @@ function facebookSubmittedIdentity(url) {
 function submittedPageIdentity(parsed, blueskyDid = null) {
   const url = new URL(parsed.url);
   if (parsed.platform === 'twitter') {
-    const id = url.pathname.match(/^\/[A-Za-z0-9_]+\/status\/(\d+)\/?$/)?.[1];
+    const id = url.pathname.match(TWITTER_SUBMITTED_STATUS_PATTERN)?.[1];
     return id ? { platform: 'twitter', kind: 'post', id } : null;
   }
   if (parsed.platform === 'facebook') return facebookSubmittedIdentity(url);
@@ -694,10 +695,14 @@ export async function resolveViaApi(platform, pageUrl) {
 
 // --- API-based video resolvers ---
 
-async function resolveTwitterVideo(tweetId) {
+async function resolveTwitterVideo(
+  tweetId,
+  { fetchImpl = globalThis.fetch, signal } = {},
+) {
   try {
-    const resp = await fetch(
-      `https://cdn.syndication.twimg.com/tweet-result?id=${tweetId}&token=0`
+    const resp = await fetchImpl(
+      `https://cdn.syndication.twimg.com/tweet-result?id=${tweetId}&token=0`,
+      { signal },
     );
     if (!resp.ok) {
       console.warn('SocialSnag: syndication API returned', resp.status);
@@ -746,6 +751,7 @@ async function resolveTwitterVideo(tweetId) {
     });
     return null;
   } catch (e) {
+    if (signal?.aborted) return null;
     console.error('SocialSnag: Twitter video API failed:', e);
     await traceResolver({ platform: 'twitter', path: 'syndication', outcome: 'threw' });
     return null;
@@ -1061,9 +1067,9 @@ chrome.downloads.onErased.addListener(async (downloadId) => {
 // URL. Items that already carry a url pass straight through. Returns null if a
 // placeholder cannot be resolved. Shared by the download and copy-URL paths so
 // both handle these items identically.
-export async function resolveItemUrl(item) {
+export async function resolveItemUrl(item, options = {}) {
   if (!item.needsVideoLookup) return item.url;
-  if (item.tweetId) return resolveTwitterVideo(item.tweetId);
+  if (item.tweetId) return resolveTwitterVideo(item.tweetId, options);
   // The reason is dropped here, not reported. This runs after the handler's
   // notification branch, so a lookup that fails at this point (logged out,
   // rate-limited) reaches the user as the generic copy-failure message rather
@@ -1350,14 +1356,20 @@ export async function orchestrateSubmittedDownload(rawUrl, options = {}) {
   const operationTimeoutMs = Number.isFinite(options.operationTimeoutMs)
     ? Math.max(0, options.operationTimeoutMs)
     : SUBMITTED_OPERATION_TIMEOUT_MS;
+  const submittedFetch = typeof options.submittedFetch === 'function'
+    ? options.submittedFetch
+    : globalThis.fetch;
 
   let createdTabId = null;
   try {
+    const platformSetting = `platform_${platform}`;
+    const settings = await chrome.storage.sync.get({ [platformSetting]: true });
+    if (settings[platformSetting] === false) {
+      return submittedDownloadResult(false, 'platform_disabled', platform);
+    }
+
     let resolved;
     if (platform === 'instagram') {
-      const submittedFetch = typeof options.submittedFetch === 'function'
-        ? options.submittedFetch
-        : globalThis.fetch;
       resolved = await runSubmittedWithDeadline(
         (signal) => resolveSubmittedInstagram(parsed, {
           fetchImpl: submittedFetch,
@@ -1446,10 +1458,30 @@ export async function orchestrateSubmittedDownload(rawUrl, options = {}) {
 
     let count = 0;
     let hadFailure = false;
+    let hadResolutionTimeout = false;
     for (const [position, item] of items.entries()) {
+      let downloadItem = item;
+      if (item.needsVideoLookup) {
+        const resolvedUrl = await runSubmittedWithDeadline(
+          (signal) => resolveItemUrl(item, { fetchImpl: submittedFetch, signal }),
+          operationTimeoutMs,
+          { abort: true },
+        );
+        if (resolvedUrl === SUBMITTED_OPERATION_TIMEOUT) {
+          hadFailure = true;
+          hadResolutionTimeout = true;
+          continue;
+        }
+        if (!resolvedUrl) {
+          hadFailure = true;
+          continue;
+        }
+        downloadItem = { ...item, url: resolvedUrl, needsVideoLookup: false };
+      }
+
       let saved = null;
       try {
-        saved = await downloadMedia(item, platform, position + 1);
+        saved = await downloadMedia(downloadItem, platform, position + 1);
       } catch {
         // Keep trying the remaining bounded items. The response reports only
         // how many succeeded, never the failed item's URL or filename.
@@ -1469,6 +1501,9 @@ export async function orchestrateSubmittedDownload(rawUrl, options = {}) {
     }
 
     if (hadFailure || count !== items.length) {
+      if (count === 0 && hadResolutionTimeout) {
+        return submittedDownloadResult(false, 'resolution_timeout', platform);
+      }
       return submittedDownloadResult(false, 'download_failed', platform, count);
     }
     return submittedDownloadResult(true, 'ok', platform, count);

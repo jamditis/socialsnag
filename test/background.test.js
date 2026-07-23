@@ -128,6 +128,8 @@ describe('parseSubmittedPageUrl', () => {
     ['https://twitter.com/jack/status/20', 'twitter', 'https://twitter.com/jack/status/20'],
     ['https://x.com/example_user/status/1234567890123456789?s=20', 'twitter', 'https://x.com/example_user/status/1234567890123456789?s=20'],
     ['https://X.COM/example_user/status/123#section', 'twitter', 'https://X.COM/example_user/status/123'],
+    ['https://x.com/i/web/status/1234567890123456789?s=20', 'twitter', 'https://x.com/i/web/status/1234567890123456789?s=20'],
+    ['https://twitter.com/i/web/status/20', 'twitter', 'https://twitter.com/i/web/status/20'],
     ['https://www.facebook.com/example/posts/1234567890/', 'facebook', 'https://www.facebook.com/example/posts/1234567890/'],
     ['https://www.facebook.com/example/posts/pfbid02AbCdEf/', 'facebook', 'https://www.facebook.com/example/posts/pfbid02AbCdEf/'],
     ['https://www.facebook.com/groups/example/posts/1234567890/', 'facebook', 'https://www.facebook.com/groups/example/posts/1234567890/'],
@@ -163,6 +165,9 @@ describe('parseSubmittedPageUrl', () => {
     ['https://x.com/settings/account', 'invalid_url'],
     ['https://x.com/user/status/not-a-number', 'invalid_url'],
     ['https://x.com/user/status/123/photo/1', 'invalid_url'],
+    ['https://x.com/i/web/status/not-a-number', 'invalid_url'],
+    ['https://x.com/i/web/status/123/photo/1', 'invalid_url'],
+    ['https://x.com/i/web/status/', 'invalid_url'],
     ['https://www.facebook.com/login/', 'invalid_url'],
     ['https://www.facebook.com/settings/', 'invalid_url'],
     ['https://www.facebook.com/settings/posts/123', 'invalid_url'],
@@ -1553,6 +1558,27 @@ describe('submitted URL external bridge', () => {
     expect(create).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['twitter', 'https://x.com/user/status/123'],
+    ['instagram', 'https://www.instagram.com/p/ABC/'],
+  ])('stops a submitted %s job when that platform is disabled', async (platform, url) => {
+    await chrome.storage.sync.set({ [`platform_${platform}`]: false });
+    const submittedFetch = vi.fn();
+    chrome.tabs.create = vi.fn();
+    chrome.tabs.sendMessage = vi.fn();
+    chrome.downloads.download = vi.fn();
+
+    const result = await orchestrateSubmittedDownload(url, { submittedFetch });
+
+    expect(result).toEqual({
+      ok: false, code: 'platform_disabled', platform, count: 0,
+    });
+    expect(submittedFetch).not.toHaveBeenCalled();
+    expect(chrome.tabs.create).not.toHaveBeenCalled();
+    expect(chrome.tabs.sendMessage).not.toHaveBeenCalled();
+    expect(chrome.downloads.download).not.toHaveBeenCalled();
+  });
+
   it('downloads Instagram media through the authenticated API without opening a tab', async () => {
     installFetch((url) => url.includes('i.instagram.com') ? {
       status: 200,
@@ -1658,6 +1684,38 @@ describe('submitted URL external bridge', () => {
     expect(remove).toHaveBeenCalledWith(77);
     const { downloadHistory } = await chrome.storage.local.get({ downloadHistory: [] });
     expect(downloadHistory).toHaveLength(2);
+  });
+
+  it.each([
+    ['https://x.com/i/web/status/123', 'https://x.com/user/status/123'],
+    ['https://twitter.com/user/status/123', 'https://twitter.com/i/web/status/123'],
+  ])('keeps the submitted X post identity across a canonical redirect', async (submitted, finalUrl) => {
+    chrome.tabs.create = vi.fn(async () => ({ id: 75, status: 'complete' }));
+    chrome.tabs.get = vi.fn(async () => ({
+      id: 75, status: 'complete', url: finalUrl,
+    }));
+    chrome.tabs.remove = vi.fn();
+    chrome.tabs.sendMessage = vi.fn(async () => ({
+      platform: 'twitter',
+      urls: [{
+        url: 'https://pbs.twimg.com/media/canonical.jpg',
+        type: 'image',
+        filename: 'tweet_123',
+      }],
+    }));
+    chrome.downloads.download = vi.fn(async () => 49);
+    chrome.downloads.search = async () => [{
+      id: 49, state: 'complete', filename: '/downloads/tweet_123.jpg',
+    }];
+
+    const result = await orchestrateSubmittedDownload(submitted);
+
+    expect(result).toEqual({ ok: true, code: 'ok', platform: 'twitter', count: 1 });
+    expect(chrome.tabs.sendMessage).toHaveBeenCalledWith(75, {
+      action: 'resolvePage',
+      pageUrl: finalUrl,
+    });
+    expect(chrome.tabs.remove).toHaveBeenCalledWith(75);
   });
 
   it('caps a resolved post before downloading', async () => {
@@ -1776,6 +1834,11 @@ describe('submitted URL external bridge', () => {
   it.each([
     {
       submitted: 'https://x.com/user/status/123',
+      finalUrl: 'https://x.com/other/status/999',
+      platform: 'twitter',
+    },
+    {
+      submitted: 'https://x.com/i/web/status/123',
       finalUrl: 'https://x.com/other/status/999',
       platform: 'twitter',
     },
@@ -1916,6 +1979,134 @@ describe('submitted URL external bridge', () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+
+  it('aborts a stalled submitted X video lookup, closes the tab, and accepts the next job', async () => {
+    const originalFetch = globalThis.fetch;
+    const nativeSetTimeout = globalThis.setTimeout;
+    let releaseFetch;
+    let receivedSignal;
+    const neverFetch = vi.fn((_url, init) => {
+      receivedSignal = init?.signal;
+      return new Promise((resolve) => { releaseFetch = resolve; });
+    });
+    const timeoutSpy = vi.spyOn(globalThis, 'setTimeout')
+      .mockImplementation((callback, delay, ...args) => (
+        nativeSetTimeout(callback, delay === 15000 ? 5 : delay, ...args)
+      ));
+    globalThis.fetch = neverFetch;
+    chrome.tabs.create = vi.fn()
+      .mockResolvedValueOnce({ id: 92, status: 'complete' })
+      .mockResolvedValueOnce({ id: 93, status: 'complete' });
+    chrome.tabs.get = vi.fn(async (id) => ({
+      id,
+      status: 'complete',
+      url: `https://x.com/user/status/${id === 92 ? '123' : '456'}`,
+    }));
+    chrome.tabs.remove = vi.fn();
+    chrome.tabs.sendMessage = vi.fn()
+      .mockResolvedValueOnce({
+        platform: 'twitter',
+        urls: [{
+          type: 'video',
+          filename: 'tweet_123',
+          tweetId: '123',
+          needsVideoLookup: true,
+        }],
+      })
+      .mockResolvedValueOnce({
+        platform: 'twitter',
+        urls: [{
+          url: 'https://pbs.twimg.com/media/next.jpg',
+          type: 'image',
+          filename: 'tweet_456',
+        }],
+      });
+    chrome.downloads.download = vi.fn(async () => 94);
+    chrome.downloads.search = async () => [{
+      id: 94, state: 'complete', filename: '/downloads/tweet_456.jpg',
+    }];
+
+    try {
+      const first = sendExternal({
+        action: 'downloadSubmittedUrl',
+        url: 'https://x.com/user/status/123',
+      });
+      const settled = await settleWithin(first);
+      if (!settled) {
+        releaseFetch?.({ ok: false, status: 503, json: async () => ({}) });
+        await first;
+      }
+
+      expect(settled?.result).toEqual({
+        ok: false, code: 'resolution_timeout', platform: 'twitter', count: 0,
+      });
+      expect(receivedSignal?.aborted).toBe(true);
+      expect(chrome.tabs.remove).toHaveBeenCalledWith(92);
+
+      await expect(sendExternal({
+        action: 'downloadSubmittedUrl',
+        url: 'https://x.com/user/status/456',
+      })).resolves.toEqual({
+        ok: true, code: 'ok', platform: 'twitter', count: 1,
+      });
+      expect(chrome.tabs.remove).toHaveBeenCalledWith(93);
+      expect(chrome.downloads.download).toHaveBeenCalledOnce();
+    } finally {
+      globalThis.fetch = originalFetch;
+      timeoutSpy.mockRestore();
+    }
+  });
+
+  it('reports a partial result when a submitted X video lookup times out after an image', async () => {
+    let releaseFetch;
+    let receivedSignal;
+    const neverFetch = vi.fn((_url, init) => {
+      receivedSignal = init?.signal;
+      return new Promise((resolve) => { releaseFetch = resolve; });
+    });
+    chrome.tabs.create = vi.fn(async () => ({ id: 95, status: 'complete' }));
+    chrome.tabs.get = vi.fn(async () => ({
+      id: 95, status: 'complete', url: 'https://x.com/user/status/123',
+    }));
+    chrome.tabs.remove = vi.fn();
+    chrome.tabs.sendMessage = vi.fn(async () => ({
+      platform: 'twitter',
+      urls: [
+        {
+          url: 'https://pbs.twimg.com/media/one.jpg',
+          type: 'image',
+          filename: 'tweet_123_1',
+        },
+        {
+          type: 'video',
+          filename: 'tweet_123',
+          tweetId: '123',
+          needsVideoLookup: true,
+        },
+      ],
+    }));
+    chrome.downloads.download = vi.fn(async () => 96);
+    chrome.downloads.search = async () => [{
+      id: 96, state: 'complete', filename: '/downloads/tweet_123_1.jpg',
+    }];
+
+    const operation = orchestrateSubmittedDownload(
+      'https://x.com/user/status/123',
+      { operationTimeoutMs: 5, submittedFetch: neverFetch },
+    );
+    const settled = await settleWithin(operation);
+    if (!settled) {
+      releaseFetch?.({ ok: false, status: 503, json: async () => ({}) });
+      await operation;
+    }
+
+    expect(settled?.result).toEqual({
+      ok: false, code: 'download_failed', platform: 'twitter', count: 1,
+    });
+    expect(receivedSignal?.aborted).toBe(true);
+    expect(chrome.tabs.remove).toHaveBeenCalledWith(95);
+    expect(chrome.downloads.download).toHaveBeenCalledOnce();
   });
 
   it.each([

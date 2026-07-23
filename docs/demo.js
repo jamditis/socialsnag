@@ -81,6 +81,13 @@ export function responseToViewModel(response) {
         tone: 'working',
         showInstallLink: false,
       };
+    case 'platform_disabled':
+      return {
+        title: `Enable ${platform} in SocialSnag settings`,
+        detail: `Open SocialSnag settings, turn on ${platform}, and retry.`,
+        tone: 'error',
+        showInstallLink: false,
+      };
     case 'auth_required':
       return {
         title: 'Log in to continue',

@@ -508,6 +508,69 @@ describe('resolvePage', () => {
     expect(items[0].url).toContain('MAIN.jpg');
   });
 
+  it('resolves a submitted canonical /i/web/status/ URL by its exact id', async () => {
+    const t = quotedTweetTree();
+    const root = { querySelectorAll: () => [t.article] };
+
+    const items = await resolvePage(root, 'https://x.com/i/web/status/111');
+
+    expect(items).toHaveLength(1);
+    expect(items[0].url).toContain('MAIN.jpg');
+  });
+
+  it('adds one verified video placeholder after submitted post images', async () => {
+    const t = quotedTweetTree({ mainVideo: true });
+    const root = { querySelectorAll: () => [t.article] };
+
+    const items = await resolvePage(root, 'https://x.com/main/status/111');
+
+    expect(items).toHaveLength(2);
+    expect(items[0].url).toContain('MAIN.jpg');
+    expect(items[1]).toEqual({
+      type: 'video',
+      filename: 'tweet_111',
+      tweetId: '111',
+      needsVideoLookup: true,
+    });
+  });
+
+  it('does not add a placeholder for a video owned by a quoted tweet', async () => {
+    const t = quotedTweetTree({ quotedVideo: true });
+    const root = { querySelectorAll: () => [t.article] };
+
+    const items = await resolvePage(root, 'https://x.com/main/status/111');
+
+    expect(items).toHaveLength(1);
+    expect(items[0].url).toContain('MAIN.jpg');
+    expect(items.some((item) => item.needsVideoLookup)).toBe(false);
+  });
+
+  it('reserves one of the 20 submitted item slots for the verified video', async () => {
+    const status = makeNode({ tag: 'A', href: '/user/status/333' });
+    const images = Array.from({ length: 20 }, (_, index) => makeNode({
+      tag: 'IMG',
+      src: `https://pbs.twimg.com/media/IMAGE_${index}.jpg`,
+    }));
+    const video = makeNode({ tag: 'VIDEO' });
+    const article = makeNode({
+      tag: 'ARTICLE',
+      is: ['article[data-testid="tweet"]', 'article[role="article"]'],
+      children: [status, ...images, video],
+    });
+    const root = { querySelectorAll: () => [article] };
+
+    const items = await resolvePage(root, 'https://x.com/user/status/333');
+
+    expect(items).toHaveLength(20);
+    expect(items.filter((item) => item.needsVideoLookup)).toEqual([{
+      type: 'video',
+      filename: 'tweet_333',
+      tweetId: '333',
+      needsVideoLookup: true,
+    }]);
+    expect(items.filter((item) => item.type === 'image')).toHaveLength(19);
+  });
+
   it('handles a resolvePage message without a stored right-click target', async () => {
     const t = quotedTweetTree();
     const root = { querySelectorAll: () => [t.article] };

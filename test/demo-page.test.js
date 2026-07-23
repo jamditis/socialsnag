@@ -240,6 +240,7 @@ describe('response copy', () => {
     ['invalid_url', 'Use a direct supported post link', 'error', false],
     ['unsupported_url', 'Use a direct supported post link', 'error', false],
     ['busy', 'SocialSnag is already working', 'working', false],
+    ['platform_disabled', 'Enable X/Twitter in SocialSnag settings', 'error', false],
     ['auth_required', 'Log in to continue', 'error', false],
     ['rate_limited', 'Wait before retrying', 'error', false],
     ['access_or_unavailable', 'Media may be unavailable', 'error', false],
@@ -292,6 +293,22 @@ describe('response copy', () => {
     expect(responseToViewModel({ ok: false, code: 'resolution_timeout' }).detail).toBe(
       'Open the post in this browser, make sure you are logged in, and retry.',
     );
+  });
+
+  it('tells the user to enable a disabled platform in SocialSnag settings', async () => {
+    const { responseToViewModel } = await loadDemo();
+
+    expect(responseToViewModel({
+      ok: false,
+      code: 'platform_disabled',
+      platform: 'instagram',
+      count: 0,
+    })).toEqual({
+      title: 'Enable Instagram in SocialSnag settings',
+      detail: 'Open SocialSnag settings, turn on Instagram, and retry.',
+      tone: 'error',
+      showInstallLink: false,
+    });
   });
 
   it('uses singular count and the public platform label on success', async () => {

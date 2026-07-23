@@ -67,6 +67,7 @@ export function filterCapturedVideos(captured) {
 // match lets an external card masquerade as a quoted tweet and its path number be
 // read as a tweet id (issue #42).
 const STATUS_PATH = /\/status\/\d+/;
+const SUBMITTED_STATUS_PATH = /^\/(?:[A-Za-z0-9_]+\/status|i\/web\/status)\/(\d+)\/?$/;
 export function isTwitterStatusHref(href) {
   if (!href) return false;
   // A rooted path (/user/status/1) is same-origin, so its path decides. A
@@ -299,7 +300,7 @@ function submittedStatusId(pageUrl) {
         && !host.endsWith('.x.com') && !host.endsWith('.twitter.com')) {
       return null;
     }
-    return url.pathname.match(/^\/[A-Za-z0-9_]+\/status\/(\d+)\/?$/)?.[1] || null;
+    return url.pathname.match(SUBMITTED_STATUS_PATH)?.[1] || null;
   } catch {
     return null;
   }
@@ -312,6 +313,7 @@ export async function resolvePage(
   root = document,
   pageUrl = globalThis.window?.location?.href || '',
 ) {
+  const submittedItemLimit = 20;
   const requestedId = submittedStatusId(pageUrl);
   if (!requestedId) return [];
 
@@ -319,7 +321,23 @@ export async function resolvePage(
   for (const candidate of candidates) {
     const found = findTweetScope(candidate);
     if (found && statusIdInScope(found) === requestedId) {
-      return await resolveAll(candidate, { allowCapturedVideos: false });
+      const items = await resolveAll(candidate, { allowCapturedVideos: false });
+      if (!scopeHasVideo(found)) return items.slice(0, submittedItemLimit);
+
+      const hasVerifiedPlaceholder = items.some((item) => (
+        item?.needsVideoLookup === true && item.tweetId === requestedId
+      ));
+      if (hasVerifiedPlaceholder) return items.slice(0, submittedItemLimit);
+
+      return [
+        ...items.slice(0, submittedItemLimit - 1),
+        {
+          type: 'video',
+          filename: `tweet_${requestedId}`,
+          tweetId: requestedId,
+          needsVideoLookup: true,
+        },
+      ];
     }
   }
   return [];
