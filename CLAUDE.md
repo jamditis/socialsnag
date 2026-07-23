@@ -2,7 +2,7 @@
 
 ## What this is
 
-SocialSnag — Chrome extension (Manifest V3) that downloads full-resolution images and videos from social media via right-click context menu.
+SocialSnag is a Chrome extension (Manifest V3) that downloads full-resolution images and videos from social media through a right-click context menu or a direct post-link form on its GitHub Pages site.
 
 **Repo:** https://github.com/jamditis/socialsnag (public)
 **Version:** 1.2.1
@@ -14,7 +14,7 @@ ESM modules in `src/`, bundled by esbuild to `dist/`. Chrome loads from `dist/`.
 
 ```
 src/
-  background.js          — service worker: context menu (SocialSnag submenu), downloads, URL validation, download history, Instagram API resolution (posts + stories), zip and copy-URL routing, optional webRequest
+  background.js          - service worker for context menus, external landing-page requests, downloads, URL validation, download history, Instagram API resolution, zip and copy-URL routing, and optional webRequest
   platforms/common.js    — shared exports: ALLOWED_DOMAINS, isAllowedDomain, isHttps, sanitizeFilename, findPostContainer, findNearestMedia, getCapturedMedia
   platforms/instagram.js — Instagram DOM resolver (srcset upgrade, JSON extraction, video script extraction, carousel support) — the fallback when the API path fails
   platforms/instagram-api.js — Instagram private web API (pure module): shortcodeToMediaId, parsePostMedia (single + carousel), extractStoryRef, parseStoryTray, mapIgStatusToMessage
@@ -30,6 +30,8 @@ src/
   offscreen-host.js      — service-worker side helpers to create the offscreen doc and call it (copyViaOffscreen, zipViaOffscreen, revokeViaOffscreen)
   fonts/syne.woff2       — Syne display font (bundled, not CDN)
   fonts/outfit.woff2     — Outfit body font (bundled, not CDN)
+docs/
+  demo.js                - landing-page form controller for external extension messaging, visible response mapping, and timeout handling
 ```
 
 ### Build
@@ -38,12 +40,12 @@ src/
 npm install                    # install dev deps (esbuild, vitest, eslint)
 npm run build                  # bundle to dist/
 npm run build:zip              # bundle + minify + create socialsnag-{version}.zip
-npm test                       # run vitest (221 tests)
+npm test                       # run the full test suite
 npm run lint                   # eslint src/
 npm run publish:cws            # upload the built zip and publish (needs CWS_* env; see docs/cws-publishing.md)
 ```
 
-### Message flow
+### Right-click message flow
 
 1. User right-clicks on supported site
 2. Background receives `contextMenus.onClicked`, calls `chrome.tabs.sendMessage({ action: 'resolve' })`
@@ -51,6 +53,16 @@ npm run publish:cws            # upload the built zip and publish (needs CWS_* e
 4. Content script responds with `{ urls: [...], platform: '...' }`
 5. Background validates each URL (HTTPS, domain allowlist, dot-boundary check), sanitizes filename, downloads
 6. Background records download to `chrome.storage.local` history
+
+### Submitted post-link flow
+
+1. The GitHub Pages form sends `{ action: 'downloadSubmittedUrl', url }` to the published extension ID through `chrome.runtime.sendMessage()`
+2. `onMessageExternal` accepts only the exact GitHub Pages origin and `/socialsnag/` path, then validates the direct post URL before network or tab work
+3. The extension resolves the post through a bounded platform API request or an inactive browser tab, using the browser's existing signed-in session where needed
+4. The extension validates each media URL, starts downloads, and records the same filename, platform, and timestamp history used by right-click downloads
+5. Only `{ ok, code, platform, count }` returns to the page, which renders a visible success or failure state
+
+Submitted post URLs, resolved CDN URLs, page content, cookies, and account data do not cross back to the GitHub Pages site or enter SocialSnag storage. Logged-out, private, inaccessible, expired, deleted, rate-limited, and unsupported cases return bounded failure codes instead of success.
 
 ### ESM module pattern
 
@@ -74,6 +86,7 @@ The `typeof document` guard prevents ReferenceErrors when Vitest imports the mod
 - `chrome.storage.sync` — user preferences (platform toggles, notification setting, advancedMode flag)
 - `chrome.storage.local` — download history (max 50 entries, pruned on write)
 - `chrome.storage.session` — captured media URLs from webRequest (ephemeral)
+- Submitted post URLs are not stored in any Chrome storage area
 
 ### Domain allowlist (single source of truth)
 
@@ -104,6 +117,8 @@ Instagram, Twitter/X, Facebook, Bluesky.
 - **Sender validation** — `sender.id === chrome.runtime.id` on all background onMessage handlers
 - **No remote code** — everything bundled, fonts included as woff2
 - **No URL storage** — download history stores filename/platform/timestamp, NOT the CDN URL
+- **External sender validation:** landing-page requests are limited to the exact GitHub Pages origin and project path
+- **Bounded external response:** the landing page receives only success or failure, platform, and count, never resolved URLs or account data
 
 ## Development
 
@@ -114,13 +129,14 @@ Instagram, Twitter/X, Facebook, Bluesky.
 ### Key files to check after changes
 - `manifest.json` — permissions, content_scripts, version
 - `src/background.js` — the security gate (URL validation, `validateDownloadUrl()`)
+- `docs/demo.js`: the GitHub Pages form controller and external request wrapper
 - `src/platforms/common.js` — shared domain allowlist
 - `src/offscreen.js` / `src/offscreen-host.js` — the offscreen document and its service-worker callers (sender validation, zip/copy/revoke)
 - `build.js` — entry points, manifest rewrite, asset copying
 
 ### Testing
 ```bash
-npm test                           # all 221 tests
+npm test                           # run the full test suite
 npx vitest run test/instagram.test.js  # single file
 npm run test:watch                 # watch mode
 ```
@@ -140,6 +156,11 @@ Instagram videos use `blob:` URLs (MediaSource API). Direct `video.src` is alway
 This works without advanced mode (webRequest) enabled.
 
 ## Current status
+
+### Implemented, not yet released
+
+- The GitHub Pages landing page includes a prominent direct post-link form that delegates downloads to the locally installed extension while preserving the right-click workflow.
+- The GitHub Pages deployment and Chrome Web Store extension update are separate release gates. Both must be live before the pasted-link workflow is available to users. Publishing either one does not publish the other.
 
 ### Done (v1.2.1)
 - Instagram feed and profile-grid carousels enumerate every slide. The content script recovers the post's shortcode from the DOM permalink (clicked-target ancestor link first, then the enclosing article, then the container) and hands it to the background, which resolves the whole post through the media API. Fixes feed/grid "download all" capping at the ~2 slides Instagram lazy-renders (#32).

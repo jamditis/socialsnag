@@ -6,15 +6,26 @@
 
 # SocialSnag
 
-Right-click to download full-resolution images and videos from social media.
+Download full-resolution images and videos from social media. Right-click while browsing a supported site, or paste a direct post link into the landing page.
 
 **[View the landing page](https://jamditis.github.io/socialsnag/)**
 
 ![SocialSnag](og-image.png)
 
+## Two ways to download
+
+**Right-click while browsing:** Open a supported post, right-click its media, and choose a SocialSnag action from the context menu.
+
+**Paste a post link:** Open the [SocialSnag landing page](https://jamditis.github.io/socialsnag/), paste a direct Instagram, X/Twitter, Facebook, or Bluesky post link, and select **Download media**. The static page delegates the request to the locally installed extension. The extension resolves and downloads the media in your browser, using the platform accounts already signed in to that browser when access is required.
+
+The landing page has no backend. It receives a result containing only the platform, download count, and success or failure status. Resolved CDN URLs and account data stay inside the browser extension. Unsupported links, logged-out sessions, private or inaccessible posts, expired or deleted posts, and rate limits produce a visible failure message.
+
+The GitHub Pages site deployment and the Chrome Web Store extension update are separate release gates. The pasted-link workflow is available only after both releases are live. Right-click use continues to work independently from the landing-page form.
+
 ## Features
 
-- **Right-click download** — context menu on any supported page, no copy-pasting URLs
+- **Right-click download:** Use the context menu on any supported page
+- **Direct post-link download:** Paste a supported post link into the landing page and delegate the download to the installed extension
 - **HD quality** — rewrites CDN URLs to fetch the highest available resolution
 - **Multi-image posts** — download every slide of an Instagram carousel, in order, resolved through Instagram's media API
 - **Instagram stories** — download the story you're viewing, or the user's whole active tray
@@ -54,7 +65,7 @@ Right-click to download full-resolution images and videos from social media.
 
 ## Privacy
 
-SocialSnag stores data locally in your browser and has no custom server component. Some non-sensitive settings (like platform toggles and advanced mode) use Chrome's sync storage and may be synced via Google if Chrome Sync is enabled in your browser. The extension does not collect analytics, telemetry, or personal information. See the [privacy policy](https://jamditis.github.io/socialsnag/privacy.html) for details.
+SocialSnag stores preferences and download history in Chrome and has no custom server component. Some non-sensitive settings, such as platform toggles and advanced mode, use Chrome's sync storage and may be synced via Google if Chrome Sync is enabled in your browser. The landing page does not log or store submitted post URLs, and it never receives resolved CDN URLs or account data from the extension. SocialSnag does not collect analytics, telemetry, or personal information. See the [privacy policy](https://jamditis.github.io/socialsnag/privacy.html) for details.
 
 ## License
 
