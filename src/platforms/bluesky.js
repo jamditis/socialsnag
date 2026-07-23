@@ -114,7 +114,7 @@ function blueskySubmittedKey(rawUrl) {
   const match = url.pathname.match(/^\/profile\/([^/]+)\/post\/([A-Za-z0-9]+)\/?$/);
   if (!match) return null;
   return {
-    account: match[1],
+    account: match[1].toLowerCase(),
     postId: match[2],
     did: match[1].startsWith('did:plc:'),
   };
@@ -122,7 +122,7 @@ function blueskySubmittedKey(rawUrl) {
 
 function matchesBlueskySubmission(requested, candidate) {
   if (!candidate || candidate.postId !== requested.postId) return false;
-  return requested.did || candidate.account === requested.account;
+  return candidate.account === requested.account;
 }
 
 // Resolve only the thread item whose permalink proves it is the submitted post.
@@ -131,9 +131,17 @@ function matchesBlueskySubmission(requested, candidate) {
 export async function resolvePage(
   root = document,
   pageUrl = globalThis.window?.location?.href || '',
+  canonicalHandle = null,
 ) {
   const requestedKey = blueskySubmittedKey(pageUrl);
   if (!requestedKey) return [];
+  if (requestedKey.did) {
+    if (typeof canonicalHandle !== 'string'
+        || !/^(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/.test(canonicalHandle)) {
+      return [];
+    }
+    requestedKey.account = canonicalHandle.toLowerCase();
+  }
 
   const candidates = root.querySelectorAll?.(
     '[data-testid^="postThreadItem-by-"], [data-testid^="postThreadItem"]',
@@ -155,7 +163,9 @@ export async function resolveContentMessage(
   root = document,
   pathname = globalThis.window?.location?.pathname || '',
 ) {
-  if (message.action === 'resolvePage') return resolvePage(root, message.pageUrl);
+  if (message.action === 'resolvePage') {
+    return resolvePage(root, message.pageUrl, message.canonicalHandle);
+  }
   if (message.action !== 'resolve') return [];
   return message.type === 'single'
     ? resolveSingle(message.srcUrl, lastTarget, pathname)

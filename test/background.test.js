@@ -1758,6 +1758,102 @@ describe('submitted URL external bridge', () => {
   });
 
   it.each([
+    {
+      submitted: 'https://x.com/user/status/123',
+      finalUrl: 'https://x.com/other/status/999',
+      platform: 'twitter',
+    },
+    {
+      submitted: 'https://www.facebook.com/example/posts/111/',
+      finalUrl: 'https://www.facebook.com/example/posts/222/',
+      platform: 'facebook',
+    },
+    {
+      submitted: 'https://bsky.app/profile/alice.bsky.social/post/3loriginal',
+      finalUrl: 'https://bsky.app/profile/other.bsky.social/post/3ldifferent',
+      platform: 'bluesky',
+    },
+  ])('rejects same-platform substitution of the submitted $platform post', async ({
+    submitted,
+    finalUrl,
+    platform,
+  }) => {
+    chrome.tabs.create = vi.fn(async () => ({ id: 88, status: 'complete' }));
+    chrome.tabs.get = vi.fn(async () => ({ id: 88, status: 'complete', url: finalUrl }));
+    chrome.tabs.remove = vi.fn();
+    chrome.tabs.sendMessage = vi.fn(async () => ({ urls: [], platform }));
+
+    const result = await orchestrateSubmittedDownload(submitted, { resolveAttempts: 1 });
+
+    expect(result).toEqual({
+      ok: false, code: 'access_or_unavailable', platform, count: 0,
+    });
+    expect(chrome.tabs.sendMessage).not.toHaveBeenCalled();
+    expect(chrome.tabs.remove).toHaveBeenCalledWith(88);
+  });
+
+  it('resolves a Bluesky DID through AppView and keeps its canonical handle internal', async () => {
+    const submitted = 'https://bsky.app/profile/did:plc:abc123/post/3lrequested';
+    const profileFetch = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ handle: 'alice.bsky.social' }),
+    }));
+    chrome.tabs.create = vi.fn(async () => ({ id: 89, status: 'complete' }));
+    chrome.tabs.get = vi.fn(async () => ({
+      id: 89, status: 'complete', url: submitted,
+    }));
+    chrome.tabs.remove = vi.fn();
+    chrome.tabs.sendMessage = vi.fn(async () => ({
+      platform: 'bluesky',
+      urls: [{
+        url: 'https://cdn.bsky.app/img/feed_fullsize/plain/did:plc:abc123/3lrequested@jpeg',
+        type: 'image',
+        filename: 'post_3lrequested',
+      }],
+    }));
+    chrome.downloads.download = vi.fn(async () => 90);
+    chrome.downloads.search = async () => [{
+      id: 90, state: 'complete', filename: '/downloads/post_3lrequested.jpg',
+    }];
+
+    const result = await orchestrateSubmittedDownload(submitted, { profileFetch });
+
+    expect(result).toEqual({ ok: true, code: 'ok', platform: 'bluesky', count: 1 });
+    expect(profileFetch).toHaveBeenCalledWith(
+      'https://public.api.bsky.app/xrpc/app.bsky.actor.getProfile?actor=did%3Aplc%3Aabc123',
+      { credentials: 'omit' },
+    );
+    expect(chrome.tabs.sendMessage).toHaveBeenCalledWith(89, {
+      action: 'resolvePage',
+      pageUrl: submitted,
+      canonicalHandle: 'alice.bsky.social',
+    });
+    expect(JSON.stringify(result)).not.toContain('alice.bsky.social');
+    expect(chrome.tabs.remove).toHaveBeenCalledWith(89);
+  });
+
+  it.each([
+    { ok: false, status: 503, json: async () => ({}) },
+    { ok: true, status: 200, json: async () => ({ handle: 'not a handle' }) },
+  ])('reports an unavailable DID profile lookup without opening a tab', async (response) => {
+    const profileFetch = vi.fn(async () => response);
+    chrome.tabs.create = vi.fn();
+    chrome.tabs.sendMessage = vi.fn();
+
+    const result = await orchestrateSubmittedDownload(
+      'https://bsky.app/profile/did:plc:abc123/post/3lrequested',
+      { profileFetch },
+    );
+
+    expect(result).toEqual({
+      ok: false, code: 'access_or_unavailable', platform: 'bluesky', count: 0,
+    });
+    expect(chrome.tabs.create).not.toHaveBeenCalled();
+    expect(chrome.tabs.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it.each([
     'https://www.facebook.com/login/',
     'https://example.com/post/1',
     'https://x.com/user/status/123',

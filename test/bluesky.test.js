@@ -168,19 +168,20 @@ describe('resolvePage', () => {
     expect(items[0].url).not.toContain('3lunrelated@jpeg');
   });
 
-  it('matches a DID submission to the rendered handle by stable post id', async () => {
-    const unrelated = makePost('3lunrelated', 'did:plc:other', 'other.bsky.social');
-    const requested = makePost('3lrequested', 'did:plc:requested');
+  it('uses the canonical handle to disambiguate a DID submission rkey collision', async () => {
+    const unrelated = makePost('3lshared', 'did:plc:other', 'other.bsky.social');
+    const requested = makePost('3lshared', 'did:plc:requested');
     const root = { querySelectorAll: () => [unrelated, requested] };
 
     const items = await resolvePage(
       root,
-      'https://bsky.app/profile/did:plc:requested/post/3lrequested',
+      'https://bsky.app/profile/did:plc:requested/post/3lshared',
+      'alice.bsky.social',
     );
 
     expect(items).toHaveLength(1);
-    expect(items[0].url).toContain('3lrequested@jpeg');
-    expect(items[0].url).not.toContain('3lunrelated@jpeg');
+    expect(items[0].url).toContain('did:plc:requested');
+    expect(items[0].url).not.toContain('did:plc:other');
   });
 
   it('keeps handle submissions anchored to both account and post id', async () => {
@@ -209,6 +210,7 @@ describe('resolvePage', () => {
     expect(await resolvePage(
       root,
       'https://bsky.app/profile/did:plc:requested/post/3lmissing',
+      'alice.bsky.social',
     )).toEqual([]);
   });
 

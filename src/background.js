@@ -96,9 +96,15 @@ export function validateDownloadUrl(url) {
 }
 
 const MAX_SUBMITTED_URL_LENGTH = 2048;
+const BLUESKY_DID_PATTERN = /^did:plc:[A-Za-z0-9]+$/;
+const BLUESKY_HANDLE_PATTERN = /^(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/;
 
 function submittedHostMatches(hostname, domain) {
   return hostname === domain || hostname.endsWith(`.${domain}`);
+}
+
+function isValidBlueskyHandle(handle) {
+  return typeof handle === 'string' && BLUESKY_HANDLE_PATTERN.test(handle);
 }
 
 const FACEBOOK_RESERVED_ACCOUNTS = new Set([
@@ -177,8 +183,7 @@ export function parseSubmittedPageUrl(rawUrl) {
     platform = 'bluesky';
     const match = url.pathname.match(/^\/profile\/([^/]+)\/post\/[A-Za-z0-9]+\/?$/);
     const account = match?.[1] || '';
-    validPath = /^(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,62})\.)+[A-Za-z0-9](?:[A-Za-z0-9-]{0,62})$/.test(account)
-      || /^did:plc:[A-Za-z0-9]+$/.test(account);
+    validPath = isValidBlueskyHandle(account) || BLUESKY_DID_PATTERN.test(account);
   } else {
     return { error: 'unsupported_url' };
   }
@@ -187,6 +192,77 @@ export function parseSubmittedPageUrl(rawUrl) {
   const fragmentStart = rawUrl.indexOf('#');
   const fragmentlessUrl = fragmentStart === -1 ? rawUrl : rawUrl.slice(0, fragmentStart);
   return { url: fragmentlessUrl, platform };
+}
+
+function facebookSubmittedIdentity(url) {
+  const path = url.pathname;
+  let match = path.match(/^\/groups\/[A-Za-z0-9._-]+\/(?:posts|permalink)\/([^/]+)\/?$/)
+    || path.match(/^\/[A-Za-z0-9.]+\/posts\/([^/]+)\/?$/);
+  if (match) return { platform: 'facebook', kind: 'post', id: match[1] };
+
+  match = path.match(/^\/[A-Za-z0-9.]+\/photos\/(?:(?:[A-Za-z0-9_-]+\.)?\d+\/)?(\d+)\/?$/);
+  if (match) return { platform: 'facebook', kind: 'photo', id: match[1] };
+
+  match = path.match(/^\/[A-Za-z0-9.]+\/videos\/(\d+)\/?$/)
+    || path.match(/^\/reel\/(\d+)\/?$/);
+  if (match) return { platform: 'facebook', kind: 'video', id: match[1] };
+
+  match = path.match(/^\/share\/([prv])\/[A-Za-z0-9_-]+\/?$/);
+  if (match) return { platform: 'facebook', kind: 'share', shareType: match[1] };
+
+  if (path === '/photo.php') {
+    return { platform: 'facebook', kind: 'photo', id: url.searchParams.get('fbid') };
+  }
+  if (path === '/permalink.php' || path === '/story.php') {
+    return { platform: 'facebook', kind: 'post', id: url.searchParams.get('story_fbid') };
+  }
+  if (/^\/watch\/?$/.test(path)) {
+    return { platform: 'facebook', kind: 'video', id: url.searchParams.get('v') };
+  }
+  return null;
+}
+
+function submittedPageIdentity(parsed, blueskyDid = null) {
+  const url = new URL(parsed.url);
+  if (parsed.platform === 'twitter') {
+    const id = url.pathname.match(/^\/[A-Za-z0-9_]+\/status\/(\d+)\/?$/)?.[1];
+    return id ? { platform: 'twitter', kind: 'post', id } : null;
+  }
+  if (parsed.platform === 'facebook') return facebookSubmittedIdentity(url);
+  if (parsed.platform === 'bluesky') {
+    const match = url.pathname.match(/^\/profile\/([^/]+)\/post\/([A-Za-z0-9]+)\/?$/);
+    if (!match) return null;
+    const account = blueskyDid && match[1] === blueskyDid.did
+      ? blueskyDid.handle
+      : match[1].toLowerCase();
+    return { platform: 'bluesky', kind: 'post', id: match[2], account };
+  }
+  return null;
+}
+
+function submittedIdentitiesMatch(submitted, final) {
+  if (!submitted || !final || submitted.platform !== final.platform) return false;
+  if (submitted.platform === 'facebook' && submitted.kind === 'share') {
+    return submitted.shareType === 'p'
+      ? final.kind === 'post'
+      : final.kind === 'video';
+  }
+  return submitted.kind === final.kind
+    && submitted.id === final.id
+    && (submitted.platform !== 'bluesky' || submitted.account === final.account);
+}
+
+async function resolveBlueskyDidHandle(did, profileFetch) {
+  try {
+    const endpoint = new URL('https://public.api.bsky.app/xrpc/app.bsky.actor.getProfile');
+    endpoint.searchParams.set('actor', did);
+    const response = await profileFetch(endpoint.toString(), { credentials: 'omit' });
+    if (!response?.ok) return null;
+    const data = await response.json();
+    return isValidBlueskyHandle(data?.handle) ? data.handle.toLowerCase() : null;
+  } catch {
+    return null;
+  }
 }
 
 // yyyy-mm-dd in the user's own timezone.
@@ -1168,11 +1244,19 @@ function waitForSubmittedRetry(delayMs) {
   return new Promise((resolve) => setTimeout(resolve, delayMs));
 }
 
-async function resolveSubmittedTab(tabId, pageUrl, attempts, retryDelayMs) {
+async function resolveSubmittedTab(
+  tabId,
+  pageUrl,
+  attempts,
+  retryDelayMs,
+  canonicalHandle = null,
+) {
   let receivedResponse = false;
   for (let attempt = 0; attempt < attempts; attempt++) {
     try {
-      const response = await chrome.tabs.sendMessage(tabId, { action: 'resolvePage', pageUrl });
+      const message = { action: 'resolvePage', pageUrl };
+      if (canonicalHandle) message.canonicalHandle = canonicalHandle;
+      const response = await chrome.tabs.sendMessage(tabId, message);
       receivedResponse = true;
       const items = Array.isArray(response?.urls)
         ? response.urls
@@ -1225,6 +1309,22 @@ export async function orchestrateSubmittedDownload(rawUrl, options = {}) {
     if (platform === 'instagram') {
       resolved = await resolveSubmittedInstagram(parsed);
     } else {
+      const blueskyRef = platform === 'bluesky'
+        ? new URL(parsed.url).pathname.match(/^\/profile\/([^/]+)\/post\/[A-Za-z0-9]+\/?$/)
+        : null;
+      let blueskyDid = null;
+      if (blueskyRef && BLUESKY_DID_PATTERN.test(blueskyRef[1])) {
+        const profileFetch = typeof options.profileFetch === 'function'
+          ? options.profileFetch
+          : globalThis.fetch;
+        const handle = await resolveBlueskyDidHandle(blueskyRef[1], profileFetch);
+        if (!handle) {
+          return submittedDownloadResult(false, 'access_or_unavailable', platform);
+        }
+        blueskyDid = { did: blueskyRef[1], handle };
+      }
+      const submittedIdentity = submittedPageIdentity(parsed, blueskyDid);
+
       const tab = await chrome.tabs.create({ url: parsed.url, active: false });
       if (!Number.isInteger(tab?.id)) {
         return submittedDownloadResult(false, 'unexpected', platform);
@@ -1246,11 +1346,16 @@ export async function orchestrateSubmittedDownload(rawUrl, options = {}) {
       if (finalParsed.error || finalParsed.platform !== platform) {
         return submittedDownloadResult(false, 'access_or_unavailable', platform);
       }
+      const finalIdentity = submittedPageIdentity(finalParsed, blueskyDid);
+      if (!submittedIdentitiesMatch(submittedIdentity, finalIdentity)) {
+        return submittedDownloadResult(false, 'access_or_unavailable', platform);
+      }
       resolved = await resolveSubmittedTab(
         createdTabId,
         finalParsed.url,
         resolveAttempts,
         retryDelayMs,
+        blueskyDid?.handle,
       );
     }
 
