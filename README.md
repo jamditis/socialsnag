@@ -16,11 +16,11 @@ Download full-resolution images and videos from social media. Right-click while 
 
 **Right-click while browsing:** Open a supported post, right-click its media, and choose a SocialSnag action from the context menu.
 
-**Paste a post link:** Open the [SocialSnag landing page](https://jamditis.github.io/socialsnag/), paste a direct Instagram, X/Twitter, Facebook, or Bluesky post link, and select **Download media**. The static page delegates the request to the locally installed extension. The extension resolves and downloads the media in your browser, using the platform accounts already signed in to that browser when access is required.
+**Paste a post link:** After the supporting extension update is live in the Chrome Web Store, install or update to that current SocialSnag release. Then open the [SocialSnag landing page](https://jamditis.github.io/socialsnag/), paste a direct Instagram, X/Twitter, Facebook, or Bluesky post link, and select **Download media**. The static page delegates the request to that locally installed extension. The extension resolves and downloads the media in your browser, using the platform accounts already signed in to that browser when access is required.
 
 The landing page has no backend. It receives a result containing only the platform, download count, and success or failure status. Resolved CDN URLs and account data stay inside the browser extension. Unsupported links, logged-out sessions, private or inaccessible posts, expired or deleted posts, and rate limits produce a visible failure message.
 
-The GitHub Pages site deployment and the Chrome Web Store extension update are separate release gates. The pasted-link workflow is available only after both releases are live. Right-click use continues to work independently from the landing-page form.
+The GitHub Pages site deployment and the Chrome Web Store extension update are separate release gates. The pasted-link workflow is available only after both releases are live and the current extension release that supports submitted URLs is installed. An older installed version does not support the form. Right-click use continues to work independently from the landing-page form.
 
 ## Features
 
