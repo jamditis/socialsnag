@@ -466,6 +466,97 @@ describe('resolvePage', () => {
     }
   });
 
+  it('resolves a direct video only when its own ID matches the submitted reel', async () => {
+    const pageUrl = 'https://www.facebook.com/reel/1234567890/';
+    const video = {
+      tagName: 'VIDEO',
+      src: 'https://video.xx.fbcdn.net/requested.mp4',
+      currentSrc: 'https://video.xx.fbcdn.net/requested.mp4',
+      dataset: { videoId: '1234567890' },
+      getAttribute: (name) => name === 'data-video-id' ? '1234567890' : null,
+      querySelector: () => null,
+    };
+    const post = {
+      tagName: 'ARTICLE',
+      matches: (selector) => selector === '[role="article"]',
+      parentElement: null,
+      closest: (selector) => selector === '[role="article"]' ? post : null,
+      querySelector: (selector) => selector === 'video' ? video : null,
+      querySelectorAll: (selector) => {
+        if (selector === 'a[href]') return [{ href: pageUrl }];
+        if (selector === 'video') return [video];
+        return [];
+      },
+    };
+    video.parentElement = post;
+    const root = { querySelectorAll: () => [post] };
+
+    expect(await resolvePage(root, pageUrl)).toEqual([{
+      url: 'https://video.xx.fbcdn.net/requested.mp4',
+      type: 'video',
+      filename: 'video_1234567890',
+    }]);
+  });
+
+  it.each([
+    ['conflicting', '9999999999'],
+    ['missing', null],
+  ])('rejects a direct video with a %s own ID', async (_case, ownId) => {
+    const pageUrl = 'https://www.facebook.com/reel/1234567890/';
+    const video = {
+      tagName: 'VIDEO',
+      src: 'https://video.xx.fbcdn.net/unverified.mp4',
+      currentSrc: 'https://video.xx.fbcdn.net/unverified.mp4',
+      dataset: ownId ? { videoId: ownId } : {},
+      getAttribute: (name) => name === 'data-video-id' ? ownId : null,
+      querySelector: () => null,
+    };
+    const post = {
+      tagName: 'ARTICLE',
+      matches: (selector) => selector === '[role="article"]',
+      parentElement: null,
+      closest: (selector) => selector === '[role="article"]' ? post : null,
+      querySelector: (selector) => selector === 'video' ? video : null,
+      querySelectorAll: (selector) => {
+        if (selector === 'a[href]') return [{ href: pageUrl }];
+        if (selector === 'video') return [video];
+        return [];
+      },
+    };
+    video.parentElement = post;
+    const root = { querySelectorAll: () => [post] };
+
+    expect(await resolvePage(root, pageUrl)).toEqual([]);
+  });
+
+  it('rejects a direct video when its DOM ID signals conflict', async () => {
+    const pageUrl = 'https://www.facebook.com/reel/1234567890/';
+    const video = {
+      tagName: 'VIDEO',
+      src: 'https://video.xx.fbcdn.net/conflicting.mp4',
+      currentSrc: 'https://video.xx.fbcdn.net/conflicting.mp4',
+      dataset: { videoId: '1234567890' },
+      getAttribute: (name) => name === 'data-video-id' ? '9999999999' : null,
+      querySelector: () => null,
+    };
+    const post = {
+      tagName: 'ARTICLE',
+      matches: (selector) => selector === '[role="article"]',
+      parentElement: null,
+      closest: (selector) => selector === '[role="article"]' ? post : null,
+      querySelector: (selector) => selector === 'video' ? video : null,
+      querySelectorAll: (selector) => {
+        if (selector === 'a[href]') return [{ href: pageUrl }];
+        if (selector === 'video') return [video];
+        return [];
+      },
+    };
+    video.parentElement = post;
+    const root = { querySelectorAll: () => [post] };
+
+    expect(await resolvePage(root, pageUrl)).toEqual([]);
+  });
+
   it('resolves only the verified submitted blob video from structured page data', async () => {
     const pageUrl = 'https://www.facebook.com/reel/1234567890/';
     let post;

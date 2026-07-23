@@ -365,14 +365,36 @@ function submittedVideoIds(requestedKey) {
   return ids;
 }
 
-function resolveSubmittedVideo(container, requestedKey, root) {
-  const video = container.querySelector?.('video');
-  if (!video) return null;
+function directVideoIds(video) {
+  return new Set([
+    video?.dataset?.videoId,
+    video?.getAttribute?.('data-video-id'),
+  ].filter((id) => id !== null && id !== undefined && String(id) !== '')
+    .map((id) => String(id)));
+}
 
-  const directUrl = video.currentSrc || video.src || video.querySelector?.('source')?.src;
+function directVideoMatches(video, requestedIds) {
+  const ownIds = directVideoIds(video);
+  return ownIds.size > 0 && [...ownIds].every((id) => requestedIds.has(id));
+}
+
+function resolveSubmittedVideo(container, requestedKey, root) {
   const ids = submittedVideoIds(requestedKey);
   const filenameId = [...ids][0] || null;
-  if (directUrl && !directUrl.startsWith('blob:')) {
+  const queriedVideos = Array.from(container.querySelectorAll?.('video') || []);
+  const fallbackVideo = container.querySelector?.('video');
+  const videos = queriedVideos.length > 0
+    ? queriedVideos
+    : (fallbackVideo ? [fallbackVideo] : []);
+
+  const directVideo = videos.find((video) => {
+    const url = video.currentSrc || video.src || video.querySelector?.('source')?.src;
+    return url && !url.startsWith('blob:') && directVideoMatches(video, ids);
+  });
+  if (directVideo) {
+    const directUrl = directVideo.currentSrc
+      || directVideo.src
+      || directVideo.querySelector?.('source')?.src;
     return {
       url: directUrl,
       type: 'video',
@@ -407,10 +429,10 @@ export async function resolvePage(
   ) || [];
   for (const candidate of candidates) {
     if (hasFacebookPermalink(candidate, requestedKey)) {
-      const items = await resolveAll(candidate, {
-        allowCaptured: false,
-        allowDocumentScripts: false,
-      });
+      const domImages = Array.from(
+        candidate.querySelectorAll?.('img[src*="fbcdn.net"]') || [],
+      );
+      const { items } = buildImageItems(domImages);
       const video = resolveSubmittedVideo(candidate, requestedKey, root);
       if (!video || items.some((item) => item.url === video.url)) return items;
       return [...items, video];
@@ -425,7 +447,9 @@ export async function resolvePage(
       + '[data-pagelet*="Video"] video, video[data-video-id]',
     );
     if (!media) return [];
-    const items = resolveSingle(media.src || '', media, { allowDocumentScripts: false });
+    const items = media.tagName === 'IMG'
+      ? resolveSingle(media.src || '', media, { allowDocumentScripts: false })
+      : [];
     const video = resolveSubmittedVideo(link, requestedKey, root);
     if (!video || items.some((item) => item.url === video.url)) return items;
     return [...items, video];
