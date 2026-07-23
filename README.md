@@ -65,7 +65,7 @@ The GitHub Pages site deployment and the Chrome Web Store extension update are s
 
 ## Privacy
 
-SocialSnag stores preferences and download history in Chrome and has no custom server component. Some non-sensitive settings, such as platform toggles and advanced mode, use Chrome's sync storage and may be synced via Google if Chrome Sync is enabled in your browser. The landing page does not log or store submitted post URLs, and it never receives resolved CDN URLs or account data from the extension. SocialSnag does not collect analytics, telemetry, or personal information. See the [privacy policy](https://jamditis.github.io/socialsnag/privacy.html) for details.
+SocialSnag stores preferences and download history in Chrome and has no developer-operated server. Some settings use Chrome's sync storage and may be synced via Google if Chrome Sync is enabled in your browser. The landing page does not write submitted post URLs to extension storage or send them to a SocialSnag server or another developer-operated server. A submitted value remains visible in the form until you change it or close the page. Resolved CDN URLs and account data do not return to the landing page. Media resolution makes direct requests to the selected platforms and media hosts. There are no analytics scripts or remote logging. See the [privacy policy](https://jamditis.github.io/socialsnag/privacy.html) for local and session-storage details.
 
 ## License
 

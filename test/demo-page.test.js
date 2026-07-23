@@ -512,3 +512,29 @@ describe('the landing-page markup', () => {
     expect(source).not.toMatch(/console\s*\./);
   });
 });
+
+describe('the privacy copy contract', () => {
+  it('states the browser, platform, storage, and developer-server boundaries', () => {
+    const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
+    const policy = readFileSync(new URL('../PRIVACY.md', import.meta.url), 'utf8');
+    const privacyPage = readFileSync(new URL('../docs/privacy.html', import.meta.url), 'utf8');
+    const optionsPage = readFileSync(new URL('../src/options.html', import.meta.url), 'utf8');
+
+    for (const source of [policy, privacyPage]) {
+      expect(source).not.toContain('held only long enough');
+      expect(source).toContain('remains visible in the form');
+      expect(source).toContain('browser cache and history');
+      expect(source).toContain('temporary inactive browser tab');
+      expect(source).toContain('Chrome download ID');
+      expect(source).toContain('chrome.storage.session');
+      expect(source).toContain('request type');
+    }
+
+    expect(readme).not.toContain('does not collect analytics, telemetry, or personal information');
+    expect(readme).toContain('no analytics scripts or remote logging');
+    expect(optionsPage).not.toContain('publicly accessible media');
+    expect(optionsPage).not.toContain('No data is collected or transmitted');
+    expect(optionsPage).toContain('selected social platforms and media hosts');
+    expect(optionsPage).toContain('developer-operated server');
+  });
+});
