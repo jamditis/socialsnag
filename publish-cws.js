@@ -21,6 +21,7 @@
 import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
+import { zipFileName } from './zip-name.js';
 
 const TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const API = 'https://chromewebstore.googleapis.com';
@@ -57,7 +58,7 @@ export function interpretPublishState(json) {
 
 export function resolveZipPath(args, name, version) {
   const explicit = args.find((a) => a.endsWith('.zip'));
-  return explicit || `${name}-${version}.zip`;
+  return explicit || zipFileName(name, version);
 }
 
 // Which store listing receives the upload. CWS_ITEM_ID from the environment

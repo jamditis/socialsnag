@@ -70,6 +70,12 @@ describe('resolveZipPath', () => {
   it('uses an explicit .zip argument when given', () => {
     expect(resolveZipPath(['some/build.zip'], 'socialsnag', '1.2.1')).toBe('some/build.zip');
   });
+
+  it('flattens a scoped package name so the default zip is not a nested path', () => {
+    // "@org/ext" would otherwise yield "@org/ext-1.0.0.zip" -- a nested path
+    // build.js and this resolver would disagree on. The scope is stripped.
+    expect(resolveZipPath(['--skip-publish'], '@org/ext', '1.0.0')).toBe('ext-1.0.0.zip');
+  });
 });
 
 describe('resolveItemId', () => {
