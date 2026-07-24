@@ -11,6 +11,8 @@ import {
   renderTemplate,
   validateTemplate,
   findNearestMedia,
+  platformLabel,
+  classifyFailure,
 } from '../src/platforms/common.js';
 
 describe('ALLOWED_DOMAINS', () => {
@@ -349,5 +351,83 @@ describe('validateTemplate', () => {
     for (const token of ALWAYS_PRESENT_TOKENS) {
       expect(TEMPLATE_TOKENS).toContain(token);
     }
+  });
+});
+
+describe('platformLabel', () => {
+  it('uses the picker label for a known platform', () => {
+    expect(platformLabel('instagram')).toBe('Instagram');
+    expect(platformLabel('twitter')).toBe('Twitter/X');
+  });
+
+  it('falls back to a neutral label rather than leaking the id', () => {
+    expect(platformLabel('mastodon')).toBe('this site');
+    expect(platformLabel(undefined)).toBe('this site');
+  });
+});
+
+describe('classifyFailure', () => {
+  const msg = (args) => classifyFailure(args).message;
+
+  it('names the platform in the message', () => {
+    expect(msg({ platform: 'twitter', outcome: { kind: 'http', status: 429 } }))
+      .toBe('Twitter/X is rate-limiting downloads. Try again in a minute.');
+  });
+
+  // The retry verdict is the point of the classifier: a caller must be able to
+  // tell "try again" from "give up" without re-reading the message text.
+  it('marks any 5xx transient', () => {
+    for (const status of [500, 502, 503]) {
+      const r = classifyFailure({ platform: 'instagram', outcome: { kind: 'http', status } });
+      expect(r.retry).toBe('transient');
+      expect(r.message).toMatch(/network problem/i);
+    }
+  });
+
+  // Instagram's resolvers pass status 0 for "HTTP 200 but parsed to no items"
+  // (background.js) — an aged-out story or empty post, not a transport failure.
+  // It must stay a terminal generic message: a "network, try again" prompt would
+  // send the user to retry a request that will keep returning empty.
+  it('treats status 0 as an empty result, not a transient network error', () => {
+    const r = classifyFailure({ platform: 'instagram', outcome: { kind: 'http', status: 0 } });
+    expect(r.retry).toBe('terminal');
+    expect(r.message).toBe('Instagram did not return this media. Try refreshing the page.');
+  });
+
+  it('marks rate-limiting transient but a 404 terminal', () => {
+    expect(classifyFailure({ platform: 'instagram', outcome: { kind: 'http', status: 429 } }).retry)
+      .toBe('transient');
+    const notFound = classifyFailure({ platform: 'instagram', outcome: { kind: 'http', status: 404 } });
+    expect(notFound.retry).toBe('terminal');
+    // Names the platform like every sibling branch does — the original Instagram
+    // mapper said "This Instagram media...", and dropping the label on extraction
+    // would be a silent inconsistency a loose /not found/ regex misses.
+    expect(notFound.message).toBe('This Instagram media has expired or was not found.');
+  });
+
+  // A 401/403 is the one status whose meaning depends on the phase: not-logged-in
+  // at the resolver, but an expired signed URL once we already hold one.
+  it('reads a 401/403 by phase', () => {
+    expect(msg({ platform: 'instagram', phase: 'resolve', outcome: { kind: 'http', status: 401 } }))
+      .toBe('Log in to Instagram to download this.');
+    expect(msg({ platform: 'instagram', phase: 'download', outcome: { kind: 'http', status: 403 } }))
+      .toMatch(/link expired/i);
+    // resolve is the default when no phase is given.
+    expect(msg({ platform: 'instagram', outcome: { kind: 'http', status: 401 } }))
+      .toMatch(/log in/i);
+  });
+
+  it('handles non-HTTP reasons without inventing a status message', () => {
+    expect(msg({ platform: 'bluesky', outcome: { kind: 'reason', reason: 'login-required' } }))
+      .toBe('Log in to Bluesky to download this.');
+    expect(msg({ platform: 'bluesky', outcome: { kind: 'reason', reason: 'no-media' } }))
+      .toMatch(/could not find downloadable media/i);
+  });
+
+  it('falls back to a usable message for an unknown status or missing outcome', () => {
+    expect(msg({ platform: 'instagram', outcome: { kind: 'http', status: 418 } }))
+      .toBe('Instagram did not return this media. Try refreshing the page.');
+    expect(msg({ platform: 'instagram' })).toMatch(/did not return this media/i);
+    expect(msg({})).toMatch(/this site/i);
   });
 });
