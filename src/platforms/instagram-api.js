@@ -1,5 +1,7 @@
 // SocialSnag — Instagram private web API helpers (pure, testable)
 
+import { classifyFailure } from './common.js';
+
 export const IG_APP_ID = '936619743392459';
 
 const SHORTCODE_ALPHABET =
@@ -141,12 +143,16 @@ export function parseStoryTray(apiJson, { storyId } = {}) {
   return mapped.map((m) => ({ url: m.url, type: m.type, filename: m.filename, index: m.index }));
 }
 
-// Map an Instagram API HTTP status to a user-facing message.
+// Map an Instagram API HTTP status to a user-facing message. Thin adapter over
+// the shared classifier (common.js) so Instagram speaks the same vocabulary the
+// other platforms will as they move onto it. All of these are resolver-phase
+// failures (page -> media URL); the returned retry verdict is discarded here
+// until the download loop consumes it. See issue #20.
 export function mapIgStatusToMessage(status) {
-  if (status === 401 || status === 403) return 'Log in to Instagram to download this.';
-  if (status === 429) return 'Instagram is rate-limiting downloads. Try again in a minute.';
-  if (status === 404) return 'This Instagram media has expired or was not found.';
-  return 'Instagram did not return this media. Try refreshing the page.';
+  return classifyFailure({
+    platform: 'instagram',
+    outcome: { kind: 'http', status },
+  }).message;
 }
 
 // Machine-readable companion to mapIgStatusToMessage. Keep the human copy above

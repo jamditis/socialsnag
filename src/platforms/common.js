@@ -279,3 +279,77 @@ export async function getCapturedMedia() {
     });
   });
 }
+
+// --- Failure classification (shared across platforms) ---
+//
+// One decision from one input: given a failed resolve or download, return both
+// the user-facing message and whether the failure is worth retrying, so a caller
+// can't surface a message while forgetting to decide retryability. See issue #20.
+
+// Display labels match the platform picker in popup.js. A platform with no entry
+// falls back to a neutral 'this site' rather than leaking its internal id.
+const PLATFORM_LABELS = {
+  instagram: 'Instagram',
+  twitter: 'Twitter/X',
+  facebook: 'Facebook',
+  bluesky: 'Bluesky',
+  linkedin: 'LinkedIn',
+  tiktok: 'TikTok',
+  youtube: 'YouTube',
+};
+
+export function platformLabel(platform) {
+  return PLATFORM_LABELS[platform] || 'this site';
+}
+
+// Classify a failed download step into a user-facing message plus a retry verdict.
+//
+// `outcome` is a discriminated union so a DOM-based platform with no HTTP status
+// can't pass a bogus number and inherit an HTTP message it never earned:
+//   { kind: 'http', status }    an HTTP status read from a response
+//   { kind: 'reason', reason }  a non-HTTP failure: 'login-required' | 'no-media'
+// `phase` splits a resolver failure (page -> media URL) from a download failure
+// (media URL -> file): a 401/403 means "log in" at the resolver but "the signed
+// link expired, refresh" once we already hold a URL and the fetch is rejected.
+//
+// Returns { message, retry } where retry is 'transient' (server/transport fault,
+// safe to retry) or 'terminal' (the user's problem, or unrecoverable — surface now).
+//
+// Only a 5xx and a 429 are transient. Instagram's resolvers reuse status 0 as an
+// "HTTP 200 but parsed to no items" sentinel (an aged-out story, an empty post —
+// see background.js), which is NOT a transport failure: it must fall through to
+// the terminal generic message, never a "network, try again" prompt for a
+// request that will keep coming back empty.
+export function classifyFailure({ platform, phase = 'resolve', outcome } = {}) {
+  const label = platformLabel(platform);
+  const terminal = (message) => ({ message, retry: 'terminal' });
+  const transient = (message) => ({ message, retry: 'transient' });
+
+  if (outcome && outcome.kind === 'reason') {
+    if (outcome.reason === 'login-required') {
+      return terminal(`Log in to ${label} to download this.`);
+    }
+    // 'no-media' and any unrecognized reason: nothing on the element to grab.
+    return terminal('Could not find downloadable media on this element.');
+  }
+
+  const status = outcome && outcome.kind === 'http' ? outcome.status : undefined;
+
+  // A 5xx is the server's fault, not the user's, so it earns one retry.
+  if (typeof status === 'number' && status >= 500 && status <= 599) {
+    return transient(`Network problem reaching ${label}. Try again.`);
+  }
+  if (status === 429) {
+    return transient(`${label} is rate-limiting downloads. Try again in a minute.`);
+  }
+  if (status === 401 || status === 403) {
+    return phase === 'download'
+      ? terminal('This media link expired. Refresh the page and try again.')
+      : terminal(`Log in to ${label} to download this.`);
+  }
+  if (status === 404) {
+    return terminal(`This ${label} media has expired or was not found.`);
+  }
+  // Some other status, or none: we got a response but can't use it.
+  return terminal(`${label} did not return this media. Try refreshing the page.`);
+}
