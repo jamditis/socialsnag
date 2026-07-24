@@ -2,6 +2,7 @@ import * as esbuild from 'esbuild';
 import { cpSync, mkdirSync, readFileSync, writeFileSync, rmSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { execFileSync } from 'child_process';
+import { zipFileName } from './zip-name.js';
 
 const isZip = process.argv.includes('--zip');
 
@@ -60,7 +61,7 @@ if (isZip) {
   // script is copy-paste portable to the other extension repos. publish-cws.js
   // looks for the same <name>-<version>.zip.
   const { name } = JSON.parse(readFileSync('package.json', 'utf8'));
-  const zipName = `${name}-${manifest.version}.zip`;
+  const zipName = zipFileName(name, manifest.version);
   execFileSync('zip', ['-r', `../${zipName}`, '.'], { cwd: 'dist' });
   console.log(`Zip created: ${zipName}`);
 }
