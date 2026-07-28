@@ -17,7 +17,7 @@
 // worker down and the cache goes with it. That is acceptable here because the case
 // this exists for is a burst of downloads from one post, and the worker is alive
 // throughout a burst by definition. A worker restart between bursts just means the
-// next resolve is a miss, which is the behaviour before this cache existed.
+// next resolve is a miss, which is the behavior before this cache existed.
 
 // Instagram and Twitter CDN URLs are time-signed. An entry that outlives its
 // signature hands back a URL that 403s on download, which is a worse outcome than
@@ -74,7 +74,7 @@ export function setResolved(
  * It drops every resolve rather than one key because the download that failed does
  * not carry the id it was resolved from, and threading that through the download
  * path would cost more than the over-eviction does: these entries live two minutes,
- * so the worst case is one extra resolve, the behaviour before this cache existed.
+ * so the worst case is one extra resolve, the behavior before this cache existed.
  */
 export function clearResolveCache() {
   cache.clear();
