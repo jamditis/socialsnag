@@ -5,6 +5,11 @@ function createStorageArea() {
       if (typeof keys === 'string') {
         return { [keys]: data[keys] };
       }
+      // A null or omitted key means the whole area, which is how callers that do
+      // not know the key names up front read it.
+      if (keys == null) {
+        return { ...data };
+      }
       const result = {};
       for (const [key, defaultValue] of Object.entries(keys)) {
         result[key] = key in data ? data[key] : defaultValue;
