@@ -1,11 +1,12 @@
 import { afterEach } from 'vitest';
 import './chrome-mock.js';
+import { clearResolveCache } from '../src/platforms/resolve-cache.js';
 
-// Session storage is a real cache in production and is meant to outlive a single
-// download, but inside one test file it would outlive a single test case too: the
-// resolve cache would answer the next case with the previous case's fixture, so a
-// test that stubs a 429 would silently get a cached success instead. Clearing it
-// between cases keeps each test's fetch stubs the only source of resolver data.
+// The resolve cache lives for the service worker's lifetime, which in production
+// spans many downloads but inside one test file would span test cases too: a
+// cached fixture would answer the next case, so a test that stubs a 429 would
+// silently get the previous case's success. Clearing between cases keeps each
+// test's fetch stubs the only source of resolver data.
 afterEach(() => {
-  globalThis.chrome?.storage?.session?._reset?.();
+  clearResolveCache();
 });

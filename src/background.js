@@ -702,7 +702,7 @@ async function resolveTwitterVideo(
   tweetId,
   { fetchImpl = globalThis.fetch, signal } = {},
 ) {
-  const cached = await getResolved('twitter_video', tweetId);
+  const cached = getResolved('twitter_video', tweetId);
   if (cached) return cached;
   try {
     const resp = await fetchImpl(
@@ -743,7 +743,7 @@ async function resolveTwitterVideo(
         status: resp.status,
         itemCount: mp4s.length,
       });
-      await setResolved('twitter_video', tweetId, mp4s[0].url);
+      setResolved('twitter_video', tweetId, mp4s[0].url);
       return mp4s[0].url;
     }
     console.warn('SocialSnag: no MP4 variants in syndication response');
@@ -783,7 +783,7 @@ export async function resolveInstagramPost(
   shortcode,
   { fetchImpl = globalThis.fetch, signal } = {},
 ) {
-  const cached = await getResolved('instagram_post', shortcode);
+  const cached = getResolved('instagram_post', shortcode);
   if (cached) return { items: cached };
   try {
     const mediaId = shortcodeToMediaId(shortcode);
@@ -818,7 +818,7 @@ export async function resolveInstagramPost(
     }
 
     await traceResolver({ platform: 'instagram', path: 'post-api', outcome: 'ok', status: resp.status, itemCount: items.length });
-    await setResolved('instagram_post', shortcode, items);
+    setResolved('instagram_post', shortcode, items);
     return { items };
   } catch (e) {
     console.error('SocialSnag: Instagram post API failed:', e);
@@ -869,7 +869,7 @@ export async function resolveInstagramStories(
   // Checked before the user-id lookup, not after: that lookup is itself a request,
   // so testing the cache later would still spend one call per re-download.
   const storyKey = `${username}_${storyId ?? 'tray'}`;
-  const cached = await getResolved('instagram_story', storyKey);
+  const cached = getResolved('instagram_story', storyKey);
   if (cached) return { items: cached };
   const lookup = await fetchInstagramUserId(username, { fetchImpl, signal });
   if (!lookup.userId) return { error: lookup.error, code: lookup.code };
@@ -895,7 +895,7 @@ export async function resolveInstagramStories(
       return { error: mapIgStatusToMessage(0), code: mapIgStatusToCode(0) };
     }
     await traceResolver({ platform: 'instagram', path: 'story-api', outcome: 'ok', status: resp.status, itemCount: items.length });
-    await setResolved('instagram_story', storyKey, items);
+    setResolved('instagram_story', storyKey, items);
     return { items };
   } catch (e) {
     console.error('SocialSnag: IG stories API failed:', e);
@@ -1070,7 +1070,7 @@ chrome.downloads.onChanged.addListener(async (delta) => {
   // here, and either can mean the signed URL died early. Chrome fetches that URL
   // itself, so this listener is the only report of it. Clearing is deliberately
   // wider than the failed download: see clearResolveCache for why that is cheap.
-  await clearResolveCache();
+  clearResolveCache();
   // An interrupted download may still be resumable, and resuming reads the blob
   // again -- revoking here would make the resume fail with the source gone. Only
   // an interruption it cannot come back from is really terminal. If the download

@@ -39,53 +39,55 @@ function igPost(url) {
 describe('resolve cache store', () => {
   afterEach(() => resetFetch());
 
-  it('misses on an unknown id', async () => {
-    expect(await getResolved('instagram_post', 'nope')).toBeNull();
+  it('misses on an unknown id', () => {
+    expect(getResolved('instagram_post', 'nope')).toBeNull();
   });
 
-  it('round-trips a value', async () => {
-    await setResolved('instagram_post', 'ABC', [{ url: 'https://cdn.cdninstagram.com/1.jpg' }]);
-    expect(await getResolved('instagram_post', 'ABC')).toEqual([
+  it('round-trips a value', () => {
+    setResolved('instagram_post', 'ABC', [{ url: 'https://cdn.cdninstagram.com/1.jpg' }]);
+    expect(getResolved('instagram_post', 'ABC')).toEqual([
       { url: 'https://cdn.cdninstagram.com/1.jpg' },
     ]);
   });
 
-  it('treats an expired entry as a miss and drops the key', async () => {
-    await setResolved('twitter_video', '99', 'https://video.twimg.com/a.mp4', {
+  it('treats an expired entry as a miss and drops it', () => {
+    setResolved('twitter_video', '99', 'https://video.twimg.com/a.mp4', {
       now: () => 0,
       ttlMs: 1000,
     });
-    expect(await getResolved('twitter_video', '99', { now: () => 500 })).toBe(
+    expect(getResolved('twitter_video', '99', { now: () => 500 })).toBe(
       'https://video.twimg.com/a.mp4',
     );
-    expect(await getResolved('twitter_video', '99', { now: () => 5000 })).toBeNull();
-    // Dropped, not merely reported as expired, so it cannot linger for the session.
-    const key = resolveCacheKey('twitter_video', '99');
-    const stored = await chrome.storage.session.get(key);
-    expect(stored[key]).toBeUndefined();
+    expect(getResolved('twitter_video', '99', { now: () => 5000 })).toBeNull();
+    // Dropped, not merely reported as expired, so it cannot linger for the
+    // life of the worker.
+    expect(getResolved('twitter_video', '99', { now: () => 0 })).toBeNull();
   });
 
-  it('clears on request, for a signature that died before the TTL did', async () => {
-    await setResolved('twitter_video', '7', 'https://video.twimg.com/b.mp4');
-    await setResolved('instagram_post', 'ABC', [{ url: 'https://cdn.cdninstagram.com/1.jpg' }]);
-    await clearResolveCache();
-    expect(await getResolved('twitter_video', '7')).toBeNull();
-    expect(await getResolved('instagram_post', 'ABC')).toBeNull();
+  it('clears on request, for a signature that died before the TTL did', () => {
+    setResolved('twitter_video', '7', 'https://video.twimg.com/b.mp4');
+    setResolved('instagram_post', 'ABC', [{ url: 'https://cdn.cdninstagram.com/1.jpg' }]);
+    clearResolveCache();
+    expect(getResolved('twitter_video', '7')).toBeNull();
+    expect(getResolved('instagram_post', 'ABC')).toBeNull();
   });
 
-  it('clears only its own keys, leaving the rest of session storage alone', async () => {
-    // Session storage is shared with the captured-media store, so a clear that took
-    // the whole area would drop captures the user has not downloaded yet. These are
-    // the real neighbour keys: `captured_<tabId>` and the pending blob list.
-    await chrome.storage.session.set({
-      captured_9: [{ url: 'https://cdn.cdninstagram.com/seen.jpg' }],
-      pendingBlobRevokes: { 4: 'blob:x' },
+  it('never writes resolved URLs to extension storage', () => {
+    // PRIVACY.md enumerates what the extension stores, and its two session
+    // entries are advanced-mode captures and pending zip cleanup. A resolve
+    // cache backed by chrome.storage.session would add an undisclosed third
+    // category and break the submitted-link promise that nothing derived from
+    // a submitted URL is written to storage. This pins the cache in memory.
+    setResolved('instagram_post', 'SECRET', [{ url: 'https://cdn.cdninstagram.com/x.jpg' }]);
+    const blob = JSON.stringify({
+      session: chrome.storage.session._data(),
+      local: chrome.storage.local._data(),
     });
-    await setResolved('twitter_video', '7', 'https://video.twimg.com/b.mp4');
-    await clearResolveCache();
-    const rest = await chrome.storage.session.get(null);
-    expect(rest.captured_9).toEqual([{ url: 'https://cdn.cdninstagram.com/seen.jpg' }]);
-    expect(rest.pendingBlobRevokes).toEqual({ 4: 'blob:x' });
+    expect(blob).not.toContain('SECRET');
+    expect(blob).not.toContain('cdn.cdninstagram.com/x.jpg');
+    // And the value really is cached, so the assertion above is not passing
+    // merely because nothing was stored anywhere.
+    expect(getResolved('instagram_post', 'SECRET')).toHaveLength(1);
   });
 
   it('stays well under the signature lifetime it is guarding against', () => {
@@ -95,9 +97,9 @@ describe('resolve cache store', () => {
     expect(RESOLVE_CACHE_TTL_MS).toBeLessThanOrEqual(5 * 60 * 1000);
   });
 
-  it('ignores an empty id rather than caching under a bare prefix', async () => {
-    await setResolved('instagram_post', '', [{ url: 'https://cdn.cdninstagram.com/x.jpg' }]);
-    expect(await getResolved('instagram_post', '')).toBeNull();
+  it('ignores an empty id rather than caching under a bare prefix', () => {
+    setResolved('instagram_post', '', [{ url: 'https://cdn.cdninstagram.com/x.jpg' }]);
+    expect(getResolved('instagram_post', '')).toBeNull();
   });
 });
 
@@ -123,8 +125,8 @@ describe('resolver caching', () => {
 
     // Age the entry past its TTL rather than waiting it out.
     const key = resolveCacheKey('instagram_post', 'ABC');
-    const { [key]: entry } = await chrome.storage.session.get(key);
-    await chrome.storage.session.set({ [key]: { ...entry, expires: Date.now() - 1 } });
+    expect(key).toBe('instagram_post_ABC');
+    setResolved('instagram_post', 'ABC', [{ url: 'stale' }], { ttlMs: -1 });
 
     await resolveInstagramPost('ABC');
     expect(calls()).toBe(2);
