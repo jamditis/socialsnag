@@ -8,6 +8,9 @@ export const ALLOWED_DOMAINS = [
   'fbcdn.net',
   'cdn.bsky.app',
   'video.bsky.app',
+  // LinkedIn is an optional platform: the host permission gates whether its
+  // resolver ever runs, but a URL it produces still has to pass this allowlist.
+  'media.licdn.com',
 ];
 
 // True if url's hostname is exactly `host` or a subdomain of it. False for an
@@ -221,6 +224,17 @@ export function findPostContainer(element, selectors) {
     el = el.parentElement;
   }
   return null;
+}
+
+// An <img> is content rather than chrome when it is big enough to be worth saving.
+// A post container holds more than the post's media: the author's avatar, a company
+// logo, and reaction icons all come from the same CDN, so a sweep that keys only on
+// the CDN host saves them alongside the photos.
+//
+// A zero or absent width means the element has not laid out yet, which is common for
+// images below the fold, so that case is kept rather than guessed away.
+export function isContentSized(img) {
+  return img.width > 50 || img.naturalWidth > 50 || !img.width;
 }
 
 export function collectMediaInContainer(container) {

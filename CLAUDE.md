@@ -15,13 +15,13 @@ ESM modules in `src/`, bundled by esbuild to `dist/`. Chrome loads from `dist/`.
 ```
 src/
   background.js          - service worker for context menus, external landing-page requests, downloads, URL validation, download history, Instagram API resolution, zip and copy-URL routing, and optional webRequest
-  platforms/common.js    — shared exports: ALLOWED_DOMAINS, isAllowedDomain, isHttps, sanitizeFilename, findPostContainer, findNearestMedia, getCapturedMedia
+  platforms/common.js    — shared exports: ALLOWED_DOMAINS, isAllowedDomain, isHttps, sanitizeFilename, findPostContainer, findNearestMedia, getCapturedMedia, isContentSized
   platforms/instagram.js — Instagram DOM resolver (srcset upgrade, JSON extraction, video script extraction, carousel support) — the fallback when the API path fails
   platforms/instagram-api.js — Instagram private web API (pure module): shortcodeToMediaId, parsePostMedia (single + carousel), extractStoryRef, parseStoryTray, mapIgStatusToMessage
   platforms/twitter.js   — Twitter/X resolver (name=orig rewrite, profile pic upgrade, video via webRequest captures)
   platforms/facebook.js  — Facebook resolver (fbcdn upgrade, video extraction from scripts)
   platforms/bluesky.js   — Bluesky resolver (feed_fullsize upgrade, avatar upgrade, direct video URLs)
-  platforms/linkedin.js  — LinkedIn resolver — NOT in manifest, needs ESM conversion
+  platforms/linkedin.js  — LinkedIn resolver (media.licdn.com host gate, chrome-rendition filter, activity-id extraction); optional platform, off until the user grants site access in options
   platforms/tiktok.js    — TikTok resolver — NOT in manifest, needs ESM conversion
   platforms/youtube.js   — YouTube resolver — NOT in manifest, fully excluded
   popup.html/js/css      — popup UI: dark theme, platform status grid, download history with SVG icons
@@ -91,17 +91,29 @@ The `typeof document` guard prevents ReferenceErrors when Vitest imports the mod
 ### Domain allowlist (single source of truth)
 
 `ALLOWED_DOMAINS` is defined once in `src/platforms/common.js` and imported by `src/background.js`. The list:
-- `cdninstagram.com`, `pbs.twimg.com`, `video.twimg.com`, `fbcdn.net`, `cdn.bsky.app`, `video.bsky.app`
+- `cdninstagram.com`, `pbs.twimg.com`, `video.twimg.com`, `fbcdn.net`, `cdn.bsky.app`, `video.bsky.app`, `media.licdn.com`
+
+An opt-in platform's CDN belongs on this list like any other. The host permission decides whether the resolver ever runs; the allowlist decides whether a URL it hands back may be downloaded, and both have to say yes.
 
 ## Chrome Web Store compliance
 
 ### Platforms included in CWS submission
-Instagram, Twitter/X, Facebook, Bluesky.
+Instagram, Twitter/X, Facebook, Bluesky (upfront host permissions), plus LinkedIn behind an opt-in grant.
+
+### Opt-in platforms
+- **LinkedIn** — shipped, off by default. Bundled by `build.js` and registered at runtime, never declared in `content_scripts`; its hosts live in `optional_host_permissions`, so nothing is injected until the user turns LinkedIn on in options and accepts the site-access prompt. Carries medium-high CWS rejection risk.
+
+The flow, which any further opt-in platform should copy:
+1. `OPTIONAL_PLATFORMS` in `src/background.js` names the origins to request, the page patterns the menu may appear on, and the script to inject. The CDN origin is requested but never becomes a menu pattern or an injection target.
+2. `menuUrlPatterns()` and `contentScriptRegistrations()` add a platform only when **every** one of its origins is granted; a partial grant resolves and then fails the `ALLOWED_DOMAINS` check, so it is treated as off.
+3. **Keep it out of `content_scripts`.** A static entry's match pattern is an install-time host permission: Chrome warns on it at update, grants it, and injects without ever consulting the optional grant, which makes the opt-in cosmetic. `reconcileOptionalContentScripts()` registers it through `chrome.scripting` instead, diffing what is granted against `getRegisteredContentScripts()`. Registrations persist across sessions, so a plain register at startup would fail on a duplicate id.
+4. The registered `js` list names files as `dist` has them, one bundle per platform. `build.js` strips `platforms/common.js` from the static entries because esbuild inlines it; a runtime registration gets no such rewrite, so naming a source-only path fails the whole call.
+5. `chrome.permissions.onAdded` / `onRemoved` rebuild the menu and re-run that reconcile, so a grant or a revoke made from `chrome://extensions` takes effect without a reinstall.
+6. The options toggle requests or removes the origins and restores its checked state from `chrome.permissions.contains`. It keeps **no** mirrored `platform_<name>` flag: the grant is the state, read everywhere through `isPlatformEnabled()`. A stored copy goes stale the moment someone uses `chrome://extensions`, and the menu and the download gate then disagree.
 
 ### Platforms excluded
 - **YouTube** — fully removed. Google removes YT download extensions.
-- **LinkedIn** — code in repo, `optional_host_permissions`. Needs ESM conversion. Medium-high rejection risk.
-- **TikTok** — code in repo, `optional_host_permissions`. Needs ESM conversion. Medium-high rejection risk.
+- **TikTok** — code in repo, `optional_host_permissions`. Still the legacy global pattern, needs ESM conversion plus the Referer-stripped fetch path. Medium-high rejection risk.
 
 ### Permission model
 - Core: `contextMenus`, `downloads`, `activeTab`, `storage`, `notifications`, `scripting`, `offscreen`
@@ -202,5 +214,5 @@ This works without advanced mode (webRequest) enabled.
 - Upload social preview image in GitHub Settings > General > Social preview
 
 ### Future work
-- LinkedIn/TikTok ESM conversion and re-evaluation after CWS approval
+- TikTok as an optional platform, on the LinkedIn pattern, after CWS approval
 - Automated E2E tests with Playwright

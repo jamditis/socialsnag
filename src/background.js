@@ -38,6 +38,37 @@ const SUPPORTED_URL_PATTERNS = [
   '*://*.bsky.app/*',
 ];
 
+// Platforms the user opts into, which ship as optional_host_permissions rather
+// than host_permissions. The grant is the real enable switch, so everything the
+// platform needs follows it: the menu is rebuilt and the content script is
+// registered when it arrives, and both are taken back when it is revoked.
+//
+// The content script is registered at runtime rather than declared in
+// content_scripts. A static entry's match pattern is an install-time host
+// permission -- Chrome warns on it at update, grants it, and injects without
+// ever consulting the optional grant -- which is the opposite of opt-in.
+//
+// `origins` is what the options page requests; `menu` is the page pattern the
+// menu appears on, and `matches` the pattern the script runs on (the CDN host
+// is needed to fetch media, never to show a menu or run a resolver).
+const OPTIONAL_PLATFORMS = {
+  linkedin: {
+    origins: ['*://*.linkedin.com/*', '*://*.media.licdn.com/*'],
+    menu: ['*://*.linkedin.com/*'],
+    matches: ['*://*.linkedin.com/*'],
+    // Files as the PACKAGED extension has them, which is one bundle per
+    // platform: esbuild inlines common.js into each resolver, and build.js
+    // strips it back out of the static content_scripts entries for the same
+    // reason. Naming it here as those entries do would register a path that
+    // does not exist in dist, and the whole registration fails.
+    js: ['platforms/linkedin.js'],
+  },
+};
+
+// Prefix on every registration id this file owns, so the reconcile can drop a
+// stale one of ours without touching a script something else registered.
+const OPTIONAL_SCRIPT_PREFIX = 'optional-';
+
 // CDN patterns for core platforms only (webRequest monitoring)
 const CDN_PATTERNS = [
   '*://*.cdninstagram.com/*',
@@ -49,14 +80,64 @@ const CDN_PATTERNS = [
 
 // --- Pure functions (exported for testing) ---
 
-// Detect the platform from a tab URL (core platforms only)
+// Detect the platform from a tab URL. Optional platforms are recognised here
+// unconditionally; whether anything happens for them is decided by the host
+// permission, which gates both the content script and the menu.
 export function detectPlatform(url) {
   if (!url) return null;
   if (url.includes('instagram.com')) return 'instagram';
   if (url.includes('twitter.com') || url.includes('x.com')) return 'twitter';
   if (url.includes('facebook.com')) return 'facebook';
   if (url.includes('bsky.app')) return 'bluesky';
+  if (url.includes('linkedin.com')) return 'linkedin';
   return null;
+}
+
+// Is this platform switched on for the user?
+//
+// For an optional platform the host grant IS the switch, and no mirrored flag
+// is kept in storage. Storing one lets the two drift: a user who grants or
+// revokes LinkedIn from chrome://extensions never touches the options page, so
+// a stored flag would go stale and silently no-op every download while the
+// menu, driven by the same grant, says the platform is on.
+export async function isPlatformEnabled(platform) {
+  const optional = OPTIONAL_PLATFORMS[platform];
+  if (optional) return chrome.permissions.contains({ origins: optional.origins });
+
+  const key = `platform_${platform}`;
+  const settings = await chrome.storage.sync.get({ [key]: true });
+  return settings[key] !== false;
+}
+
+// URL patterns the context menu should appear on: the core platforms always,
+// plus each optional platform whose origins the user has actually granted.
+// Showing an optional platform's menu before the grant is the half-delivered
+// state issue #13 exists to avoid, because the resolver behind it is not there.
+export function menuUrlPatterns(grantedOrigins) {
+  const granted = new Set(grantedOrigins || []);
+  const patterns = [...SUPPORTED_URL_PATTERNS];
+  for (const platform of Object.values(OPTIONAL_PLATFORMS)) {
+    if (platform.origins.every((o) => granted.has(o))) patterns.push(...platform.menu);
+  }
+  return patterns;
+}
+
+// The content scripts that should be registered right now, given what the user
+// has granted. Shaped for chrome.scripting.registerContentScripts.
+//
+// The id is derived from the platform name so the reconcile below can tell our
+// registrations apart from anything else that ever registers a script here, and
+// so a re-run recognises what it already registered instead of duplicating it.
+export function contentScriptRegistrations(grantedOrigins) {
+  const granted = new Set(grantedOrigins || []);
+  return Object.entries(OPTIONAL_PLATFORMS)
+    .filter(([, platform]) => platform.origins.every((o) => granted.has(o)))
+    .map(([name, platform]) => ({
+      id: `${OPTIONAL_SCRIPT_PREFIX}${name}`,
+      matches: platform.matches,
+      js: platform.js,
+      runAt: 'document_idle',
+    }));
 }
 
 // Guess file extension
@@ -342,16 +423,89 @@ export function sanitizeDownloadPath(rawFilename, platform, ext, downloadPath) {
 // Register the context menu on install. removeAll first so re-registering on an
 // update never hits a duplicate-id error. The four actions nest under one
 // SocialSnag parent; children inherit the parent's contexts and URL patterns.
-chrome.runtime.onInstalled.addListener(() => {
-  chrome.contextMenus.removeAll(() => {
-    const shared = { contexts: MENU_CONTEXTS, documentUrlPatterns: SUPPORTED_URL_PATTERNS };
-    chrome.contextMenus.create({ id: MENU_PARENT, title: 'SocialSnag', ...shared });
-    chrome.contextMenus.create({ id: MENU_DOWNLOAD_SINGLE, parentId: MENU_PARENT, title: 'Download this (HD)', ...shared });
-    chrome.contextMenus.create({ id: MENU_DOWNLOAD_ALL, parentId: MENU_PARENT, title: 'Download all from post', ...shared });
-    chrome.contextMenus.create({ id: MENU_DOWNLOAD_ZIP, parentId: MENU_PARENT, title: 'Download all as .zip', ...shared });
-    chrome.contextMenus.create({ id: MENU_COPY_URL, parentId: MENU_PARENT, title: 'Copy media URL', ...shared });
+async function rebuildContextMenu() {
+  const { origins } = await chrome.permissions.getAll();
+  const documentUrlPatterns = menuUrlPatterns(origins);
+  await new Promise((resolve) => chrome.contextMenus.removeAll(resolve));
+  const shared = { contexts: MENU_CONTEXTS, documentUrlPatterns };
+  chrome.contextMenus.create({ id: MENU_PARENT, title: 'SocialSnag', ...shared });
+  chrome.contextMenus.create({ id: MENU_DOWNLOAD_SINGLE, parentId: MENU_PARENT, title: 'Download this (HD)', ...shared });
+  chrome.contextMenus.create({ id: MENU_DOWNLOAD_ALL, parentId: MENU_PARENT, title: 'Download all from post', ...shared });
+  chrome.contextMenus.create({ id: MENU_DOWNLOAD_ZIP, parentId: MENU_PARENT, title: 'Download all as .zip', ...shared });
+  chrome.contextMenus.create({ id: MENU_COPY_URL, parentId: MENU_PARENT, title: 'Copy media URL', ...shared });
+}
+
+// Serialise the rebuilds, for the reason syncOptionalContentScripts below is
+// serialised. A grant and a revoke land as two permissions events close together, and
+// removeAll is async: interleaved, both runs can clear and then both create, which
+// fails the second create on a duplicate id and leaves the menu half built. The await
+// on removeAll is what makes the chain hold -- the callback form returned before the
+// creates ran, so chaining it would have serialised nothing.
+let menuChain = Promise.resolve();
+function buildContextMenu() {
+  menuChain = menuChain.then(rebuildContextMenu, rebuildContextMenu);
+  return menuChain;
+}
+
+chrome.runtime.onInstalled.addListener(buildContextMenu);
+
+// Bring the registered content scripts back in line with what is granted.
+//
+// Written as a reconcile against what is actually registered, not as a
+// register-on-grant / unregister-on-revoke pair, because the registration
+// outlives the session that made it: registerContentScripts persists by
+// default, so a plain register at startup would fail on a duplicate id, and a
+// grant revoked while the extension was not running would leave a script
+// registered with nothing to notice.
+async function reconcileOptionalContentScripts() {
+  const { origins } = await chrome.permissions.getAll();
+  const wanted = contentScriptRegistrations(origins);
+  const wantedIds = new Set(wanted.map((s) => s.id));
+
+  const registered = await chrome.scripting.getRegisteredContentScripts();
+  const registeredIds = new Set(registered.map((s) => s.id));
+
+  const stale = registered
+    .filter((s) => s.id.startsWith(OPTIONAL_SCRIPT_PREFIX) && !wantedIds.has(s.id))
+    .map((s) => s.id);
+  if (stale.length > 0) await chrome.scripting.unregisterContentScripts({ ids: stale });
+
+  const missing = wanted.filter((s) => !registeredIds.has(s.id));
+  if (missing.length > 0) await chrome.scripting.registerContentScripts(missing);
+}
+
+// Serialise the reconciles. Two of them interleaved would both read the same
+// "not registered yet" state and both try to register it, and the second call
+// fails the whole batch on a duplicate id -- leaving the platform granted but
+// silent, which is the failure this whole path exists to prevent.
+let reconcileChain = Promise.resolve();
+function syncOptionalContentScripts() {
+  reconcileChain = reconcileChain.then(
+    reconcileOptionalContentScripts,
+    reconcileOptionalContentScripts,
+  );
+  // Nothing awaits this from an event listener, so an unreported failure lands
+  // in the service worker console as an anonymous rejection. Say which feature
+  // broke and that the platform still works, or the next reader reads a bare
+  // stack trace as a dead platform. Caught on the returned promise, not inside
+  // the chain, so the recovery above still runs for the next caller.
+  return reconcileChain.catch((err) => {
+    console.warn(`SocialSnag: could not sync optional content scripts: ${err.message}. `
+      + 'Right-clicking the page falls back to injecting the resolver on demand.');
   });
-});
+}
+
+chrome.runtime.onInstalled.addListener(syncOptionalContentScripts);
+chrome.runtime.onStartup.addListener(syncOptionalContentScripts);
+
+// An optional platform's menu and resolver both have to follow its grant, in
+// both directions: a grant that arrives after install would otherwise never
+// reach either, and a revoked grant would leave the menu advertising a resolver
+// that is no longer injected.
+chrome.permissions.onAdded.addListener(buildContextMenu);
+chrome.permissions.onRemoved.addListener(buildContextMenu);
+chrome.permissions.onAdded.addListener(syncOptionalContentScripts);
+chrome.permissions.onRemoved.addListener(syncOptionalContentScripts);
 
 // On startup, check if advanced mode is enabled and register webRequest if so
 chrome.runtime.onStartup.addListener(initAdvancedMode);
@@ -432,12 +586,12 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     }
   }
 
+  if (!await isPlatformEnabled(platform)) return;
+
   const platformSettings = await chrome.storage.sync.get({
-    [`platform_${platform}`]: true,
     showNotifications: true,
     zipMultiPosts: false,
   });
-  if (!platformSettings[`platform_${platform}`]) return;
 
   try {
     // Scoped to this click, so a concurrent click in another tab cannot
@@ -1384,9 +1538,7 @@ export async function orchestrateSubmittedDownload(rawUrl, options = {}) {
 
   let createdTabId = null;
   try {
-    const platformSetting = `platform_${platform}`;
-    const settings = await chrome.storage.sync.get({ [platformSetting]: true });
-    if (settings[platformSetting] === false) {
+    if (!await isPlatformEnabled(platform)) {
       return submittedDownloadResult(false, 'platform_disabled', platform);
     }
 

@@ -2,6 +2,9 @@ import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import {
   detectPlatform,
+  menuUrlPatterns,
+  contentScriptRegistrations,
+  isPlatformEnabled,
   guessExtension,
   validateDownloadUrl,
   sanitizeDownloadPath,
@@ -44,6 +47,100 @@ describe('detectPlatform', () => {
 
   it('returns null for empty string', () => {
     expect(detectPlatform('')).toBeNull();
+  });
+
+  it('detects linkedin', () => {
+    expect(detectPlatform('https://www.linkedin.com/feed/update/urn:li:activity:123/')).toBe('linkedin');
+  });
+});
+
+describe('menuUrlPatterns', () => {
+  const LINKEDIN_ORIGINS = ['*://*.linkedin.com/*', '*://*.media.licdn.com/*'];
+
+  it('lists the five core platform patterns with no optional grants', () => {
+    const patterns = menuUrlPatterns([]);
+    expect(patterns).toEqual([
+      '*://*.instagram.com/*',
+      '*://*.twitter.com/*',
+      '*://*.x.com/*',
+      '*://*.facebook.com/*',
+      '*://*.bsky.app/*',
+    ]);
+  });
+
+  it('omits linkedin until its origins are granted', () => {
+    expect(menuUrlPatterns([])).not.toContain('*://*.linkedin.com/*');
+  });
+
+  it('adds linkedin once its origins are granted', () => {
+    expect(menuUrlPatterns(LINKEDIN_ORIGINS)).toContain('*://*.linkedin.com/*');
+  });
+
+  it('keeps linkedin out when only the site origin is granted', () => {
+    // A partial grant cannot download: upgradeUrl() produces media.licdn.com
+    // URLs, so without the CDN origin the menu would resolve and then fail.
+    expect(menuUrlPatterns(['*://*.linkedin.com/*'])).not.toContain('*://*.linkedin.com/*');
+  });
+
+  it('never advertises the CDN origin as a page the menu appears on', () => {
+    expect(menuUrlPatterns(LINKEDIN_ORIGINS)).not.toContain('*://*.media.licdn.com/*');
+  });
+
+  it('drops linkedin again when the grant is revoked', () => {
+    expect(menuUrlPatterns(LINKEDIN_ORIGINS)).toContain('*://*.linkedin.com/*');
+    expect(menuUrlPatterns([])).not.toContain('*://*.linkedin.com/*');
+  });
+
+  it('tolerates a missing origins list', () => {
+    expect(menuUrlPatterns(undefined)).toHaveLength(5);
+  });
+});
+
+describe('isPlatformEnabled', () => {
+  let origContains;
+  let origGet;
+
+  beforeEach(() => {
+    origContains = globalThis.chrome.permissions.contains;
+    origGet = globalThis.chrome.storage.sync.get;
+  });
+
+  afterEach(() => {
+    globalThis.chrome.permissions.contains = origContains;
+    globalThis.chrome.storage.sync.get = origGet;
+  });
+
+  it('treats a core platform as on when nothing is stored', async () => {
+    globalThis.chrome.storage.sync.get = async (defaults) => ({ ...defaults });
+    expect(await isPlatformEnabled('instagram')).toBe(true);
+  });
+
+  it('honours a core platform turned off in settings', async () => {
+    globalThis.chrome.storage.sync.get = async () => ({ platform_instagram: false });
+    expect(await isPlatformEnabled('instagram')).toBe(false);
+  });
+
+  it('reads an optional platform from the grant, not from storage', async () => {
+    // The regression this pins: options.js used to mirror the grant into
+    // `platform_linkedin`. A user who granted from chrome://extensions left the
+    // stale `false` behind, so the menu appeared and every click silently did
+    // nothing.
+    globalThis.chrome.storage.sync.get = async () => ({ platform_linkedin: false });
+    globalThis.chrome.permissions.contains = async () => true;
+    expect(await isPlatformEnabled('linkedin')).toBe(true);
+  });
+
+  it('treats an optional platform as off without the grant', async () => {
+    globalThis.chrome.storage.sync.get = async () => ({ platform_linkedin: true });
+    globalThis.chrome.permissions.contains = async () => false;
+    expect(await isPlatformEnabled('linkedin')).toBe(false);
+  });
+
+  it('asks for every origin the optional platform needs', async () => {
+    let asked = null;
+    globalThis.chrome.permissions.contains = async (query) => { asked = query; return true; };
+    await isPlatformEnabled('linkedin');
+    expect(asked).toEqual({ origins: ['*://*.linkedin.com/*', '*://*.media.licdn.com/*'] });
   });
 });
 
@@ -958,17 +1055,24 @@ describe('zip download flow', () => {
 });
 
 describe('context menu registration', () => {
-  it('nests the four actions under one SocialSnag parent', () => {
+  // Building the menu reads the live permission set, so it is async now: the
+  // listeners have to be awaited or the assertions run against an empty list.
+  const fireOnInstalled = async () => {
     const created = [];
     const origCreate = globalThis.chrome.contextMenus.create;
     globalThis.chrome.contextMenus.create = (opts) => { created.push(opts); };
     try {
       // onInstalled listener 0 is the menu registration (listener 1 is
       // advanced-mode init); firing all is order-independent and safe.
-      globalThis.chrome.runtime.onInstalled._listeners.forEach((fn) => fn());
+      await Promise.all(globalThis.chrome.runtime.onInstalled._listeners.map((fn) => fn()));
     } finally {
       globalThis.chrome.contextMenus.create = origCreate;
     }
+    return created;
+  };
+
+  it('nests the four actions under one SocialSnag parent', async () => {
+    const created = await fireOnInstalled();
 
     const parent = created.find((m) => m.id === 'socialsnag-parent');
     expect(parent).toBeTruthy();
@@ -991,6 +1095,177 @@ describe('context menu registration', () => {
       expect(c.contexts).toEqual(['page', 'image', 'video', 'link']);
       expect(c.documentUrlPatterns).toBeTruthy();
     });
+  });
+
+  it('leaves linkedin out of the menu when its origins are not granted', async () => {
+    const created = await fireOnInstalled();
+    created.forEach((m) => {
+      expect(m.documentUrlPatterns).not.toContain('*://*.linkedin.com/*');
+    });
+  });
+
+  it('puts linkedin in the menu once its origins are granted', async () => {
+    const origGetAll = globalThis.chrome.permissions.getAll;
+    globalThis.chrome.permissions.getAll = async () => ({
+      permissions: [],
+      origins: ['*://*.linkedin.com/*', '*://*.media.licdn.com/*'],
+    });
+    try {
+      const created = await fireOnInstalled();
+      expect(created.length).toBeGreaterThan(0);
+      created.forEach((m) => {
+        expect(m.documentUrlPatterns).toContain('*://*.linkedin.com/*');
+      });
+    } finally {
+      globalThis.chrome.permissions.getAll = origGetAll;
+    }
+  });
+
+  it('rebuilds the menu when a permission is granted or revoked', () => {
+    // Without these the menu is only ever correct at install time, which is the
+    // bug the grant-driven flow exists to avoid.
+    expect(globalThis.chrome.permissions.onAdded._listeners.length).toBeGreaterThan(0);
+    expect(globalThis.chrome.permissions.onRemoved._listeners.length).toBeGreaterThan(0);
+  });
+});
+
+describe('optional content script registration', () => {
+  const LINKEDIN_ORIGINS = ['*://*.linkedin.com/*', '*://*.media.licdn.com/*'];
+
+  const withGrant = async (origins, fn) => {
+    const orig = globalThis.chrome.permissions.getAll;
+    globalThis.chrome.permissions.getAll = async () => ({ permissions: [], origins });
+    try {
+      return await fn();
+    } finally {
+      globalThis.chrome.permissions.getAll = orig;
+    }
+  };
+
+  const fire = async (event) => {
+    await Promise.all(globalThis.chrome.permissions[event]._listeners.map((fn) => fn()));
+  };
+
+  const registeredIds = () => globalThis.chrome.scripting._registered.map((s) => s.id);
+
+  beforeEach(() => { globalThis.chrome.scripting._registered = []; });
+
+  it('ships no static content script for an optional platform', () => {
+    // A static content_scripts entry is an install-time host permission: Chrome
+    // warns on it at update, grants it, and injects without consulting the
+    // optional grant. Declaring linkedin there would make the opt-in cosmetic.
+    const manifest = JSON.parse(readFileSync(new URL('../manifest.json', import.meta.url), 'utf8'));
+    const statically = manifest.content_scripts.flatMap((cs) => cs.matches);
+    manifest.optional_host_permissions.forEach((origin) => {
+      expect(statically).not.toContain(origin);
+    });
+  });
+
+  it('asks for no CDN origin wider than the downloader will accept', () => {
+    // The grant is the only thing standing between the extension and a host. Asking
+    // for *.licdn.com bought nothing: validateDownloadUrl admits media.licdn.com
+    // alone, so every extra host in the request was permission the user was prompted
+    // for and the code would refuse to use. Pinned in all three places it is written,
+    // since the request, the options page, and the manifest have to agree or the
+    // grant check compares strings that never match.
+    const manifest = JSON.parse(readFileSync(new URL('../manifest.json', import.meta.url), 'utf8'));
+    const options = readFileSync(new URL('../src/options.js', import.meta.url), 'utf8');
+    const background = readFileSync(new URL('../src/background.js', import.meta.url), 'utf8');
+
+    expect(manifest.optional_host_permissions).toContain('*://*.media.licdn.com/*');
+    expect(manifest.optional_host_permissions).not.toContain('*://*.licdn.com/*');
+    expect(options).toContain("'*://*.media.licdn.com/*'");
+    expect(options).not.toContain("'*://*.licdn.com/*'");
+    expect(background).toContain("'*://*.media.licdn.com/*'");
+    expect(background).not.toContain("'*://*.licdn.com/*'");
+
+    expect(validateDownloadUrl('https://media.licdn.com/dms/image/a/feedshare-shrink_800/0/1?e=1').valid).toBe(true);
+    expect(validateDownloadUrl('https://static.licdn.com/tracker.gif').valid).toBe(false);
+  });
+
+  it('registers nothing when no optional origin is granted', () => {
+    expect(contentScriptRegistrations([])).toEqual([]);
+    expect(contentScriptRegistrations(undefined)).toEqual([]);
+  });
+
+  it('registers linkedin once both of its origins are granted', () => {
+    const [script, ...rest] = contentScriptRegistrations(LINKEDIN_ORIGINS);
+    expect(rest).toEqual([]);
+    expect(script.id).toBe('optional-linkedin');
+    // The page pattern only. The CDN host is fetched from, never injected into.
+    expect(script.matches).toEqual(['*://*.linkedin.com/*']);
+    expect(script.js).toEqual(['platforms/linkedin.js']);
+    expect(script.runAt).toBe('document_idle');
+  });
+
+  it('registers only files the build actually emits', () => {
+    // A static content_scripts entry may name platforms/common.js because
+    // build.js strips it on the way to dist, where esbuild has already inlined
+    // it into each resolver. A runtime registration gets no such rewrite, so a
+    // path that is only a source path fails the whole registerContentScripts
+    // call and the granted platform stays silent.
+    const build = readFileSync(new URL('../build.js', import.meta.url), 'utf8');
+    const emitted = new Set(
+      Array.from(build.matchAll(/out:\s*'([^']+)'/g)).map((m) => `${m[1]}.js`),
+    );
+    expect(emitted.size).toBeGreaterThan(0);
+    contentScriptRegistrations(LINKEDIN_ORIGINS).forEach((script) => {
+      script.js.forEach((file) => expect(emitted).toContain(file));
+    });
+  });
+
+  it('treats a partial grant as no grant', () => {
+    // upgradeUrl only ever produces media.licdn.com URLs, so linkedin.com
+    // without licdn.com resolves a post and then fails every download.
+    expect(contentScriptRegistrations(['*://*.linkedin.com/*'])).toEqual([]);
+  });
+
+  it('registers the script when the grant arrives', async () => {
+    await withGrant(LINKEDIN_ORIGINS, () => fire('onAdded'));
+    expect(registeredIds()).toEqual(['optional-linkedin']);
+  });
+
+  it('unregisters the script when the grant is revoked', async () => {
+    await withGrant(LINKEDIN_ORIGINS, () => fire('onAdded'));
+    await withGrant([], () => fire('onRemoved'));
+    expect(registeredIds()).toEqual([]);
+  });
+
+  it('reconciles instead of re-registering, so a second run does not throw', async () => {
+    // Registrations persist across sessions, so onStartup runs against a script
+    // that is already there. A plain register would reject on the duplicate id
+    // and leave the platform granted but silent.
+    await withGrant(LINKEDIN_ORIGINS, async () => {
+      await fire('onAdded');
+      await fire('onAdded');
+    });
+    expect(registeredIds()).toEqual(['optional-linkedin']);
+  });
+
+  it('serialises concurrent reconciles', async () => {
+    // Two of these interleaved read the same "not registered yet" state and both
+    // register, and the second call fails the whole batch on the duplicate id.
+    // Not theoretical: toggling the platform off and straight back on fires
+    // onRemoved and onAdded back to back.
+    //
+    // Watch the warning, not just the registry. The sync reports a failure
+    // rather than throwing it at an unhandled rejection, so on the losing half
+    // of the race the registry still ends up right and only the warning says
+    // the batch failed.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await withGrant(LINKEDIN_ORIGINS, () => Promise.all([fire('onAdded'), fire('onAdded')]));
+      expect(registeredIds()).toEqual(['optional-linkedin']);
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('leaves a registration it does not own alone', async () => {
+    globalThis.chrome.scripting._registered = [{ id: 'something-else', matches: ['*://*.example.com/*'], js: [] }];
+    await withGrant([], () => fire('onRemoved'));
+    expect(registeredIds()).toEqual(['something-else']);
   });
 });
 
@@ -2331,5 +2606,22 @@ describe('submitted URL external bridge', () => {
     expect(chrome.tabs.create).toHaveBeenCalledOnce();
     releaseCreate({ id: 83, status: 'complete' });
     await expect(first).resolves.toEqual({ ok: true, code: 'ok', platform: 'twitter', count: 1 });
+  });
+});
+
+describe('options page platform copy', () => {
+  it('does not advertise an available platform as coming soon', () => {
+    // LinkedIn has a working toggle in Platform support. A second row still
+    // calling it unavailable sends the user who just enabled it looking for a
+    // setting that is right above.
+    const html = readFileSync(new URL('../src/options.html', import.meta.url), 'utf8');
+    const comingSoon = html
+      .split('<div class="toggle-row disabled-row">')
+      .slice(1)
+      .filter((row) => row.includes('Coming soon'));
+    expect(comingSoon.length).toBeGreaterThan(0);
+    comingSoon.forEach((row) => expect(row).not.toContain('LinkedIn'));
+    // The toggle it would contradict.
+    expect(html).toContain('id="linkedin-toggle"');
   });
 });

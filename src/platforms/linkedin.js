@@ -1,13 +1,24 @@
 // SocialSnag — LinkedIn content script
 
-import { findNearestMedia, findPostContainer, hostMatches } from './common.js';
+import {
+  findNearestMedia,
+  findPostContainer,
+  hostMatches,
+  isContentSized,
+} from './common.js';
 
 // --- Pure functions (exported for testing) ---
 
+// The host gate for every LinkedIn image, and, on paper, a size upgrade. Read the
+// second half narrowly: every live URL sampled so far is shaped
+// media.licdn.com/dms/image/<id>/feedshare-shrink_2048_1536/0/<ts>?e=..&v=beta&t=<sig>,
+// where the rendition is hyphen-prefixed and the path is covered by a signature. The
+// bare /shrink_<w>_<h>/ segment this strips has not been observed on a real card, so
+// the replace is inert there, and rewriting the prefixed form would likely break `t`.
+// Kept as the host gate, which is load-bearing. socialsnag#67 tracks whether any
+// client-side upgrade exists; it needs a live card, so it belongs on a browser host.
 export function upgradeUrl(url) {
   if (!hostMatches(url, 'media.licdn.com')) return null;
-  // LinkedIn serves a downscaled copy under a /shrink_<w>_<h>/ path segment;
-  // dropping the segment returns the full-size original.
   return url.replace(/\/shrink_\d+_\d+\//, '/');
 }
 
@@ -23,6 +34,54 @@ export function extractPostId(href) {
   if (urnMatch) return urnMatch[1];
 
   return null;
+}
+
+// A feed card serves the author's avatar and the company mark from the same CDN as
+// the post's photos, and LinkedIn names both renditions in the path. Matching the
+// name is what works here. Size does not: the avatar is served at 100x100 intrinsic
+// and rendered at 48, so it clears any threshold low enough to keep a real photo.
+//
+// A rendition this does not recognize is kept, which costs an extra file in the zip.
+// Erring the other way would drop a photo the user asked for.
+const CHROME_RENDITIONS = /\/(profile-displayphoto|company-logo)/;
+
+export function isPostImage(url) {
+  return !CHROME_RENDITIONS.test(url);
+}
+
+/**
+ * Turn a post's <img> elements into download items, in document order.
+ *
+ * Three things get filtered out: the chrome renditions above, anything too small to
+ * be worth saving (a reaction icon is served at the size it renders), and repeats.
+ *
+ * The repeat check is exact-URL only. An earlier note here claimed upgradeUrl
+ * normalized two renditions of one photo onto one URL so they would not number `_1`
+ * and `_2`; see upgradeUrl for why that does not hold against live URLs. If LinkedIn
+ * does serve one photo at two sizes in a card, this will still emit both.
+ *
+ * @param {Array<{src: string, width?: number, naturalWidth?: number}>} images
+ * @param {string|null} postId names the files when the page URL carries one
+ * @returns {{items: Array<object>, index: number}} items and the next free index
+ */
+export function buildImageItems(images, postId = null) {
+  const items = [];
+  const seen = new Set();
+  let index = 1;
+
+  for (const img of images) {
+    const url = upgradeUrl(img.src);
+    if (!url) continue;
+    if (!isPostImage(url)) continue;
+    if (!isContentSized(img)) continue;
+    if (seen.has(url)) continue;
+    seen.add(url);
+
+    items.push({ url, type: 'image', filename: postId ? `post_${postId}_${index}` : null });
+    index++;
+  }
+
+  return { items, index };
 }
 
 // --- Browser wiring (not exported) ---
@@ -64,17 +123,14 @@ function resolveAll(target) {
   ]);
   if (!post) return resolveSingle(target?.src || '', target);
 
-  const items = [];
   const id = extractPostId(window.location.href);
-  let index = 1;
-
-  post.querySelectorAll('img[src*="media.licdn.com"]').forEach((img) => {
-    const url = upgradeUrl(img.src);
-    if (url) {
-      items.push({ url, type: 'image', filename: id ? `post_${id}_${index}` : null });
-      index++;
-    }
-  });
+  // querySelectorAll returns document order, which is the post's own image order.
+  const { items, index: nextIndex } = buildImageItems(
+    Array.from(post.querySelectorAll('img[src*="media.licdn.com"]')),
+    id,
+  );
+  // The video sweep below continues the image numbering.
+  let index = nextIndex;
 
   post.querySelectorAll('video').forEach((video) => {
     const src = video.src || video.querySelector('source')?.src;

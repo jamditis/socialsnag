@@ -1,6 +1,12 @@
 // SocialSnag — Facebook content script
 
-import { findNearestMedia, findPostContainer, getCapturedMedia, hostMatches } from './common.js';
+import {
+  findNearestMedia,
+  findPostContainer,
+  getCapturedMedia,
+  hostMatches,
+  isContentSized,
+} from './common.js';
 
 // --- Pure functions (exported for testing) ---
 
@@ -126,13 +132,6 @@ export function extractSubmittedVideoUrl(scriptTexts, videoIds) {
     if (state.nodes > SUBMITTED_SCRIPT_NODE_LIMIT) break;
   }
   return null;
-}
-
-// An <img> is content rather than chrome when it is big enough to be worth saving.
-// A zero or absent width means the element has not laid out yet, which is common for
-// images below the fold, so that case is kept rather than guessed away.
-function isContentSized(img) {
-  return img.width > 50 || img.naturalWidth > 50 || !img.width;
 }
 
 /**

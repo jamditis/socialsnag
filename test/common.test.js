@@ -16,14 +16,26 @@ import {
 } from '../src/platforms/common.js';
 
 describe('ALLOWED_DOMAINS', () => {
-  it('contains 6 expected CDN domains', () => {
-    expect(ALLOWED_DOMAINS).toHaveLength(6);
+  it('contains 7 expected CDN domains', () => {
+    expect(ALLOWED_DOMAINS).toHaveLength(7);
     expect(ALLOWED_DOMAINS).toContain('cdninstagram.com');
     expect(ALLOWED_DOMAINS).toContain('pbs.twimg.com');
     expect(ALLOWED_DOMAINS).toContain('video.twimg.com');
     expect(ALLOWED_DOMAINS).toContain('fbcdn.net');
     expect(ALLOWED_DOMAINS).toContain('cdn.bsky.app');
     expect(ALLOWED_DOMAINS).toContain('video.bsky.app');
+    expect(ALLOWED_DOMAINS).toContain('media.licdn.com');
+  });
+
+  it('admits the LinkedIn CDN the resolver actually produces', () => {
+    // upgradeUrl() in platforms/linkedin.js only ever returns media.licdn.com
+    // URLs, so the allowlist and the resolver have to agree or every LinkedIn
+    // download is rejected after the user has already granted site access.
+    expect(isAllowedDomain('https://media.licdn.com/dms/image/v2/abc/feedshare.jpg')).toBe(true);
+  });
+
+  it('does not admit other licdn subdomains', () => {
+    expect(isAllowedDomain('https://static.licdn.com/tracker.gif')).toBe(false);
   });
 });
 
