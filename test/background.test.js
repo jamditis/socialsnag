@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import {
   detectPlatform,
   menuUrlPatterns,
+  contentScriptRegistrations,
   isPlatformEnabled,
   guessExtension,
   validateDownloadUrl,
@@ -1125,6 +1126,124 @@ describe('context menu registration', () => {
     // bug the grant-driven flow exists to avoid.
     expect(globalThis.chrome.permissions.onAdded._listeners.length).toBeGreaterThan(0);
     expect(globalThis.chrome.permissions.onRemoved._listeners.length).toBeGreaterThan(0);
+  });
+});
+
+describe('optional content script registration', () => {
+  const LINKEDIN_ORIGINS = ['*://*.linkedin.com/*', '*://*.licdn.com/*'];
+
+  const withGrant = async (origins, fn) => {
+    const orig = globalThis.chrome.permissions.getAll;
+    globalThis.chrome.permissions.getAll = async () => ({ permissions: [], origins });
+    try {
+      return await fn();
+    } finally {
+      globalThis.chrome.permissions.getAll = orig;
+    }
+  };
+
+  const fire = async (event) => {
+    await Promise.all(globalThis.chrome.permissions[event]._listeners.map((fn) => fn()));
+  };
+
+  const registeredIds = () => globalThis.chrome.scripting._registered.map((s) => s.id);
+
+  beforeEach(() => { globalThis.chrome.scripting._registered = []; });
+
+  it('ships no static content script for an optional platform', () => {
+    // A static content_scripts entry is an install-time host permission: Chrome
+    // warns on it at update, grants it, and injects without consulting the
+    // optional grant. Declaring linkedin there would make the opt-in cosmetic.
+    const manifest = JSON.parse(readFileSync(new URL('../manifest.json', import.meta.url), 'utf8'));
+    const statically = manifest.content_scripts.flatMap((cs) => cs.matches);
+    manifest.optional_host_permissions.forEach((origin) => {
+      expect(statically).not.toContain(origin);
+    });
+  });
+
+  it('registers nothing when no optional origin is granted', () => {
+    expect(contentScriptRegistrations([])).toEqual([]);
+    expect(contentScriptRegistrations(undefined)).toEqual([]);
+  });
+
+  it('registers linkedin once both of its origins are granted', () => {
+    const [script, ...rest] = contentScriptRegistrations(LINKEDIN_ORIGINS);
+    expect(rest).toEqual([]);
+    expect(script.id).toBe('optional-linkedin');
+    // The page pattern only. The CDN host is fetched from, never injected into.
+    expect(script.matches).toEqual(['*://*.linkedin.com/*']);
+    expect(script.js).toEqual(['platforms/linkedin.js']);
+    expect(script.runAt).toBe('document_idle');
+  });
+
+  it('registers only files the build actually emits', () => {
+    // A static content_scripts entry may name platforms/common.js because
+    // build.js strips it on the way to dist, where esbuild has already inlined
+    // it into each resolver. A runtime registration gets no such rewrite, so a
+    // path that is only a source path fails the whole registerContentScripts
+    // call and the granted platform stays silent.
+    const build = readFileSync(new URL('../build.js', import.meta.url), 'utf8');
+    const emitted = new Set(
+      Array.from(build.matchAll(/out:\s*'([^']+)'/g)).map((m) => `${m[1]}.js`),
+    );
+    expect(emitted.size).toBeGreaterThan(0);
+    contentScriptRegistrations(LINKEDIN_ORIGINS).forEach((script) => {
+      script.js.forEach((file) => expect(emitted).toContain(file));
+    });
+  });
+
+  it('treats a partial grant as no grant', () => {
+    // upgradeUrl only ever produces media.licdn.com URLs, so linkedin.com
+    // without licdn.com resolves a post and then fails every download.
+    expect(contentScriptRegistrations(['*://*.linkedin.com/*'])).toEqual([]);
+  });
+
+  it('registers the script when the grant arrives', async () => {
+    await withGrant(LINKEDIN_ORIGINS, () => fire('onAdded'));
+    expect(registeredIds()).toEqual(['optional-linkedin']);
+  });
+
+  it('unregisters the script when the grant is revoked', async () => {
+    await withGrant(LINKEDIN_ORIGINS, () => fire('onAdded'));
+    await withGrant([], () => fire('onRemoved'));
+    expect(registeredIds()).toEqual([]);
+  });
+
+  it('reconciles instead of re-registering, so a second run does not throw', async () => {
+    // Registrations persist across sessions, so onStartup runs against a script
+    // that is already there. A plain register would reject on the duplicate id
+    // and leave the platform granted but silent.
+    await withGrant(LINKEDIN_ORIGINS, async () => {
+      await fire('onAdded');
+      await fire('onAdded');
+    });
+    expect(registeredIds()).toEqual(['optional-linkedin']);
+  });
+
+  it('serialises concurrent reconciles', async () => {
+    // Two of these interleaved read the same "not registered yet" state and both
+    // register, and the second call fails the whole batch on the duplicate id.
+    // Not theoretical: toggling the platform off and straight back on fires
+    // onRemoved and onAdded back to back.
+    //
+    // Watch the warning, not just the registry. The sync reports a failure
+    // rather than throwing it at an unhandled rejection, so on the losing half
+    // of the race the registry still ends up right and only the warning says
+    // the batch failed.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await withGrant(LINKEDIN_ORIGINS, () => Promise.all([fire('onAdded'), fire('onAdded')]));
+      expect(registeredIds()).toEqual(['optional-linkedin']);
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('leaves a registration it does not own alone', async () => {
+    globalThis.chrome.scripting._registered = [{ id: 'something-else', matches: ['*://*.example.com/*'], js: [] }];
+    await withGrant([], () => fire('onRemoved'));
+    expect(registeredIds()).toEqual(['something-else']);
   });
 });
 

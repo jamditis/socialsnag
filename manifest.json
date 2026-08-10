@@ -62,11 +62,6 @@
       "matches": ["*://*.bsky.app/*"],
       "js": ["platforms/common.js", "platforms/bluesky.js"],
       "run_at": "document_idle"
-    },
-    {
-      "matches": ["*://*.linkedin.com/*"],
-      "js": ["platforms/common.js", "platforms/linkedin.js"],
-      "run_at": "document_idle"
     }
   ],
   "options_ui": {

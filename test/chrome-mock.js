@@ -99,6 +99,21 @@ globalThis.chrome = {
   },
   scripting: {
     executeScript: async () => [],
+    // Registered scripts persist across sessions in Chrome, and registering an
+    // id that already exists rejects the whole batch. Both matter to the
+    // reconcile in background.js, so the mock keeps the state and the error.
+    _registered: [],
+    getRegisteredContentScripts: async () => [...globalThis.chrome.scripting._registered],
+    registerContentScripts: async (scripts) => {
+      const existing = new Set(globalThis.chrome.scripting._registered.map((s) => s.id));
+      const clash = scripts.find((s) => existing.has(s.id));
+      if (clash) throw new Error(`Duplicate script ID '${clash.id}'`);
+      globalThis.chrome.scripting._registered.push(...scripts);
+    },
+    unregisterContentScripts: async ({ ids }) => {
+      globalThis.chrome.scripting._registered = globalThis.chrome.scripting._registered
+        .filter((s) => !ids.includes(s.id));
+    },
   },
   offscreen: {
     createDocument: async () => {},

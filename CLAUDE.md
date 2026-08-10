@@ -99,13 +99,15 @@ The `typeof document` guard prevents ReferenceErrors when Vitest imports the mod
 Instagram, Twitter/X, Facebook, Bluesky (upfront host permissions), plus LinkedIn behind an opt-in grant.
 
 ### Opt-in platforms
-- **LinkedIn** — shipped, off by default. Bundled and declared in `content_scripts`, but its hosts live in `optional_host_permissions`, so Chrome injects nothing until the user turns LinkedIn on in options and accepts the site-access prompt. Carries medium-high CWS rejection risk.
+- **LinkedIn** — shipped, off by default. Bundled by `build.js` and registered at runtime, never declared in `content_scripts`; its hosts live in `optional_host_permissions`, so nothing is injected until the user turns LinkedIn on in options and accepts the site-access prompt. Carries medium-high CWS rejection risk.
 
 The flow, which any further opt-in platform should copy:
-1. `OPTIONAL_PLATFORMS` in `src/background.js` names the origins to request and the page patterns the menu may appear on. The CDN origin is requested but never becomes a menu pattern.
-2. `menuUrlPatterns()` adds a platform only when **every** one of its origins is granted; a partial grant resolves and then fails the `ALLOWED_DOMAINS` check, so it is treated as off.
-3. `chrome.permissions.onAdded` / `onRemoved` rebuild the menu, so a grant or a revoke made from `chrome://extensions` takes effect without a reinstall.
-4. The options toggle requests or removes the origins and writes `platform_<name>` only after Chrome answers, and it restores its checked state from `chrome.permissions.contains` rather than storage.
+1. `OPTIONAL_PLATFORMS` in `src/background.js` names the origins to request, the page patterns the menu may appear on, and the script to inject. The CDN origin is requested but never becomes a menu pattern or an injection target.
+2. `menuUrlPatterns()` and `contentScriptRegistrations()` add a platform only when **every** one of its origins is granted; a partial grant resolves and then fails the `ALLOWED_DOMAINS` check, so it is treated as off.
+3. **Keep it out of `content_scripts`.** A static entry's match pattern is an install-time host permission: Chrome warns on it at update, grants it, and injects without ever consulting the optional grant, which makes the opt-in cosmetic. `reconcileOptionalContentScripts()` registers it through `chrome.scripting` instead, diffing what is granted against `getRegisteredContentScripts()`. Registrations persist across sessions, so a plain register at startup would fail on a duplicate id.
+4. The registered `js` list names files as `dist` has them, one bundle per platform. `build.js` strips `platforms/common.js` from the static entries because esbuild inlines it; a runtime registration gets no such rewrite, so naming a source-only path fails the whole call.
+5. `chrome.permissions.onAdded` / `onRemoved` rebuild the menu and re-run that reconcile, so a grant or a revoke made from `chrome://extensions` takes effect without a reinstall.
+6. The options toggle requests or removes the origins and restores its checked state from `chrome.permissions.contains`. It keeps **no** mirrored `platform_<name>` flag: the grant is the state, read everywhere through `isPlatformEnabled()`. A stored copy goes stale the moment someone uses `chrome://extensions`, and the menu and the download gate then disagree.
 
 ### Platforms excluded
 - **YouTube** — fully removed. Google removes YT download extensions.
