@@ -21,7 +21,7 @@ src/
   platforms/twitter.js   — Twitter/X resolver (name=orig rewrite, profile pic upgrade, video via webRequest captures)
   platforms/facebook.js  — Facebook resolver (fbcdn upgrade, video extraction from scripts)
   platforms/bluesky.js   — Bluesky resolver (feed_fullsize upgrade, avatar upgrade, direct video URLs)
-  platforms/linkedin.js  — LinkedIn resolver (media.licdn.com /shrink_<w>_<h>/ upgrade, activity-id extraction); optional platform, off until the user grants site access in options
+  platforms/linkedin.js  — LinkedIn resolver (media.licdn.com host gate, chrome-rendition filter, activity-id extraction); optional platform, off until the user grants site access in options
   platforms/tiktok.js    — TikTok resolver — NOT in manifest, needs ESM conversion
   platforms/youtube.js   — YouTube resolver — NOT in manifest, fully excluded
   popup.html/js/css      — popup UI: dark theme, platform status grid, download history with SVG icons
@@ -214,5 +214,5 @@ This works without advanced mode (webRequest) enabled.
 - Upload social preview image in GitHub Settings > General > Social preview
 
 ### Future work
-- LinkedIn/TikTok ESM conversion and re-evaluation after CWS approval
+- TikTok as an optional platform, on the LinkedIn pattern, after CWS approval
 - Automated E2E tests with Playwright

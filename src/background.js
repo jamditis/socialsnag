@@ -53,7 +53,7 @@ const SUPPORTED_URL_PATTERNS = [
 // is needed to fetch media, never to show a menu or run a resolver).
 const OPTIONAL_PLATFORMS = {
   linkedin: {
-    origins: ['*://*.linkedin.com/*', '*://*.licdn.com/*'],
+    origins: ['*://*.linkedin.com/*', '*://*.media.licdn.com/*'],
     menu: ['*://*.linkedin.com/*'],
     matches: ['*://*.linkedin.com/*'],
     // Files as the PACKAGED extension has them, which is one bundle per
@@ -423,17 +423,28 @@ export function sanitizeDownloadPath(rawFilename, platform, ext, downloadPath) {
 // Register the context menu on install. removeAll first so re-registering on an
 // update never hits a duplicate-id error. The four actions nest under one
 // SocialSnag parent; children inherit the parent's contexts and URL patterns.
-async function buildContextMenu() {
+async function rebuildContextMenu() {
   const { origins } = await chrome.permissions.getAll();
   const documentUrlPatterns = menuUrlPatterns(origins);
-  chrome.contextMenus.removeAll(() => {
-    const shared = { contexts: MENU_CONTEXTS, documentUrlPatterns };
-    chrome.contextMenus.create({ id: MENU_PARENT, title: 'SocialSnag', ...shared });
-    chrome.contextMenus.create({ id: MENU_DOWNLOAD_SINGLE, parentId: MENU_PARENT, title: 'Download this (HD)', ...shared });
-    chrome.contextMenus.create({ id: MENU_DOWNLOAD_ALL, parentId: MENU_PARENT, title: 'Download all from post', ...shared });
-    chrome.contextMenus.create({ id: MENU_DOWNLOAD_ZIP, parentId: MENU_PARENT, title: 'Download all as .zip', ...shared });
-    chrome.contextMenus.create({ id: MENU_COPY_URL, parentId: MENU_PARENT, title: 'Copy media URL', ...shared });
-  });
+  await new Promise((resolve) => chrome.contextMenus.removeAll(resolve));
+  const shared = { contexts: MENU_CONTEXTS, documentUrlPatterns };
+  chrome.contextMenus.create({ id: MENU_PARENT, title: 'SocialSnag', ...shared });
+  chrome.contextMenus.create({ id: MENU_DOWNLOAD_SINGLE, parentId: MENU_PARENT, title: 'Download this (HD)', ...shared });
+  chrome.contextMenus.create({ id: MENU_DOWNLOAD_ALL, parentId: MENU_PARENT, title: 'Download all from post', ...shared });
+  chrome.contextMenus.create({ id: MENU_DOWNLOAD_ZIP, parentId: MENU_PARENT, title: 'Download all as .zip', ...shared });
+  chrome.contextMenus.create({ id: MENU_COPY_URL, parentId: MENU_PARENT, title: 'Copy media URL', ...shared });
+}
+
+// Serialise the rebuilds, for the reason syncOptionalContentScripts below is
+// serialised. A grant and a revoke land as two permissions events close together, and
+// removeAll is async: interleaved, both runs can clear and then both create, which
+// fails the second create on a duplicate id and leaves the menu half built. The await
+// on removeAll is what makes the chain hold -- the callback form returned before the
+// creates ran, so chaining it would have serialised nothing.
+let menuChain = Promise.resolve();
+function buildContextMenu() {
+  menuChain = menuChain.then(rebuildContextMenu, rebuildContextMenu);
+  return menuChain;
 }
 
 chrome.runtime.onInstalled.addListener(buildContextMenu);

@@ -55,7 +55,7 @@ describe('detectPlatform', () => {
 });
 
 describe('menuUrlPatterns', () => {
-  const LINKEDIN_ORIGINS = ['*://*.linkedin.com/*', '*://*.licdn.com/*'];
+  const LINKEDIN_ORIGINS = ['*://*.linkedin.com/*', '*://*.media.licdn.com/*'];
 
   it('lists the five core platform patterns with no optional grants', () => {
     const patterns = menuUrlPatterns([]);
@@ -83,7 +83,7 @@ describe('menuUrlPatterns', () => {
   });
 
   it('never advertises the CDN origin as a page the menu appears on', () => {
-    expect(menuUrlPatterns(LINKEDIN_ORIGINS)).not.toContain('*://*.licdn.com/*');
+    expect(menuUrlPatterns(LINKEDIN_ORIGINS)).not.toContain('*://*.media.licdn.com/*');
   });
 
   it('drops linkedin again when the grant is revoked', () => {
@@ -140,7 +140,7 @@ describe('isPlatformEnabled', () => {
     let asked = null;
     globalThis.chrome.permissions.contains = async (query) => { asked = query; return true; };
     await isPlatformEnabled('linkedin');
-    expect(asked).toEqual({ origins: ['*://*.linkedin.com/*', '*://*.licdn.com/*'] });
+    expect(asked).toEqual({ origins: ['*://*.linkedin.com/*', '*://*.media.licdn.com/*'] });
   });
 });
 
@@ -1108,7 +1108,7 @@ describe('context menu registration', () => {
     const origGetAll = globalThis.chrome.permissions.getAll;
     globalThis.chrome.permissions.getAll = async () => ({
       permissions: [],
-      origins: ['*://*.linkedin.com/*', '*://*.licdn.com/*'],
+      origins: ['*://*.linkedin.com/*', '*://*.media.licdn.com/*'],
     });
     try {
       const created = await fireOnInstalled();
@@ -1130,7 +1130,7 @@ describe('context menu registration', () => {
 });
 
 describe('optional content script registration', () => {
-  const LINKEDIN_ORIGINS = ['*://*.linkedin.com/*', '*://*.licdn.com/*'];
+  const LINKEDIN_ORIGINS = ['*://*.linkedin.com/*', '*://*.media.licdn.com/*'];
 
   const withGrant = async (origins, fn) => {
     const orig = globalThis.chrome.permissions.getAll;
@@ -1159,6 +1159,28 @@ describe('optional content script registration', () => {
     manifest.optional_host_permissions.forEach((origin) => {
       expect(statically).not.toContain(origin);
     });
+  });
+
+  it('asks for no CDN origin wider than the downloader will accept', () => {
+    // The grant is the only thing standing between the extension and a host. Asking
+    // for *.licdn.com bought nothing: validateDownloadUrl admits media.licdn.com
+    // alone, so every extra host in the request was permission the user was prompted
+    // for and the code would refuse to use. Pinned in all three places it is written,
+    // since the request, the options page, and the manifest have to agree or the
+    // grant check compares strings that never match.
+    const manifest = JSON.parse(readFileSync(new URL('../manifest.json', import.meta.url), 'utf8'));
+    const options = readFileSync(new URL('../src/options.js', import.meta.url), 'utf8');
+    const background = readFileSync(new URL('../src/background.js', import.meta.url), 'utf8');
+
+    expect(manifest.optional_host_permissions).toContain('*://*.media.licdn.com/*');
+    expect(manifest.optional_host_permissions).not.toContain('*://*.licdn.com/*');
+    expect(options).toContain("'*://*.media.licdn.com/*'");
+    expect(options).not.toContain("'*://*.licdn.com/*'");
+    expect(background).toContain("'*://*.media.licdn.com/*'");
+    expect(background).not.toContain("'*://*.licdn.com/*'");
+
+    expect(validateDownloadUrl('https://media.licdn.com/dms/image/a/feedshare-shrink_800/0/1?e=1').valid).toBe(true);
+    expect(validateDownloadUrl('https://static.licdn.com/tracker.gif').valid).toBe(false);
   });
 
   it('registers nothing when no optional origin is granted', () => {

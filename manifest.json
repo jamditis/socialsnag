@@ -31,7 +31,7 @@
   ],
   "optional_host_permissions": [
     "*://*.linkedin.com/*",
-    "*://*.licdn.com/*",
+    "*://*.media.licdn.com/*",
     "*://*.tiktok.com/*",
     "*://*.tiktokcdn.com/*",
     "*://*.tiktokcdn-us.com/*"

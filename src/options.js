@@ -9,7 +9,7 @@ if (typeof document !== 'undefined') {
   // the moment the user grants or revokes from chrome://extensions, which the
   // options page never sees.
   const OPTIONAL_PLATFORMS = {
-    linkedin: ['*://*.linkedin.com/*', '*://*.licdn.com/*'],
+    linkedin: ['*://*.linkedin.com/*', '*://*.media.licdn.com/*'],
   };
 
   const saveSettings = () => {

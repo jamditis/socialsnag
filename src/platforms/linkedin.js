@@ -9,10 +9,16 @@ import {
 
 // --- Pure functions (exported for testing) ---
 
+// The host gate for every LinkedIn image, and, on paper, a size upgrade. Read the
+// second half narrowly: every live URL sampled so far is shaped
+// media.licdn.com/dms/image/<id>/feedshare-shrink_2048_1536/0/<ts>?e=..&v=beta&t=<sig>,
+// where the rendition is hyphen-prefixed and the path is covered by a signature. The
+// bare /shrink_<w>_<h>/ segment this strips has not been observed on a real card, so
+// the replace is inert there, and rewriting the prefixed form would likely break `t`.
+// Kept as the host gate, which is load-bearing. socialsnag#67 tracks whether any
+// client-side upgrade exists; it needs a live card, so it belongs on a browser host.
 export function upgradeUrl(url) {
   if (!hostMatches(url, 'media.licdn.com')) return null;
-  // LinkedIn serves a downscaled copy under a /shrink_<w>_<h>/ path segment;
-  // dropping the segment returns the full-size original.
   return url.replace(/\/shrink_\d+_\d+\//, '/');
 }
 
@@ -48,10 +54,11 @@ export function isPostImage(url) {
  *
  * Three things get filtered out: the chrome renditions above, anything too small to
  * be worth saving (a reaction icon is served at the size it renders), and repeats.
- * That last one is why upgradeUrl matters here beyond the size upgrade. It strips
- * the /shrink_<w>_<h>/ segment, so two renditions of one photo normalize to the same
- * URL, and keeping both would number one image `_1` and `_2` and read as a two-image
- * post.
+ *
+ * The repeat check is exact-URL only. An earlier note here claimed upgradeUrl
+ * normalized two renditions of one photo onto one URL so they would not number `_1`
+ * and `_2`; see upgradeUrl for why that does not hold against live URLs. If LinkedIn
+ * does serve one photo at two sizes in a card, this will still emit both.
  *
  * @param {Array<{src: string, width?: number, naturalWidth?: number}>} images
  * @param {string|null} postId names the files when the page URL carries one
