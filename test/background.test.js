@@ -2586,3 +2586,20 @@ describe('submitted URL external bridge', () => {
     await expect(first).resolves.toEqual({ ok: true, code: 'ok', platform: 'twitter', count: 1 });
   });
 });
+
+describe('options page platform copy', () => {
+  it('does not advertise an available platform as coming soon', () => {
+    // LinkedIn has a working toggle in Platform support. A second row still
+    // calling it unavailable sends the user who just enabled it looking for a
+    // setting that is right above.
+    const html = readFileSync(new URL('../src/options.html', import.meta.url), 'utf8');
+    const comingSoon = html
+      .split('<div class="toggle-row disabled-row">')
+      .slice(1)
+      .filter((row) => row.includes('Coming soon'));
+    expect(comingSoon.length).toBeGreaterThan(0);
+    comingSoon.forEach((row) => expect(row).not.toContain('LinkedIn'));
+    // The toggle it would contradict.
+    expect(html).toContain('id="linkedin-toggle"');
+  });
+});
