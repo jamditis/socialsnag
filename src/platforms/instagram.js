@@ -118,31 +118,49 @@ export function buildImageItems(images, shortcode, startIndex = 1) {
  * ads, which is also why resolveAll only reaches for them when the DOM had nothing.
  *
  * Capture order is network arrival order rather than page order, so the last ones are
- * the likeliest to belong to the post just opened.
+ * the likeliest to belong to the post just opened. That is why the cap keeps the tail,
+ * and why a repeat has to move to the end rather than hold its first position: a photo
+ * requested again as this post opened belongs to this post, whatever a neighbour did
+ * with it earlier. The Map delete-then-set is facebook.js:buildCapturedItems' pattern.
+ *
+ * Both sides go through the same branch of upgradeImageUrl before they are compared.
+ * A DOM item that came from the srcset branch keeps its
+ * size segment, since that branch returns its winner untouched, while a capture of the
+ * same photo has been stripped. Comparing those raw would append the photo a second
+ * time. Passing null for the element runs both through the stripping branch, which
+ * leaves the per-media id intact, so two different photos still read as different.
+ * The asymmetry belongs to the normalizer and is filed as #70; this function only keeps
+ * it out of the comparison, and the URL it stores is still the one the DOM or capture gave.
  *
  * @param {Array<object>} items items already found in the DOM
  * @param {Array<{url: string, type: string}>} captured page-wide captures
  * @param {string|null} shortcode post shortcode, for the filename
  * @param {number} startIndex first filename suffix to use
  * @param {number} limit most captures to append
- * @returns {{items: Array<object>, index: number}} the merged list and next free index
+ * @returns {{items: Array<object>, index: number, dropped: number}} merged list, next
+ *   free index, and how many distinct captures the cap left out
  */
 export function mergeCapturedImages(items, captured, shortcode, startIndex = 1, limit = 10) {
-  const seen = new Set(items.map((i) => i.url));
-  const fresh = [];
+  const seen = new Set(items.map((i) => upgradeImageUrl(i.url, null)).filter(Boolean));
+  // A Map keeps insertion order, so deleting before setting moves a repeated capture to
+  // the end and leaves the keys in last-seen order.
+  const lastSeen = new Map();
 
   for (const c of captured) {
     if (c?.type !== 'image') continue;
     const url = upgradeImageUrl(c.url, null);
     if (!url) continue;
     if (seen.has(url)) continue;
-    seen.add(url);
-    fresh.push(url);
+    lastSeen.delete(url);
+    lastSeen.set(url, true);
   }
+
+  const distinct = [...lastSeen.keys()];
+  const kept = distinct.slice(-limit);
 
   let index = startIndex;
   const merged = [...items];
-  for (const url of fresh.slice(-limit)) {
+  for (const url of kept) {
     merged.push({
       url,
       type: 'image',
@@ -151,7 +169,7 @@ export function mergeCapturedImages(items, captured, shortcode, startIndex = 1, 
     index++;
   }
 
-  return { items: merged, index };
+  return { items: merged, index, dropped: distinct.length - kept.length };
 }
 
 export function extractShortcode(pathname) {
@@ -438,7 +456,15 @@ async function resolveAll(target, pathname) {
   let merged = items;
   if (domCount <= 1) {
     const captured = await getCapturedMedia();
-    ({ items: merged, index } = mergeCapturedImages(items, captured, shortcode, index));
+    let dropped = 0;
+    ({ items: merged, index, dropped } = mergeCapturedImages(items, captured, shortcode, index));
+    if (dropped > 0) {
+      // The user has no other way to tell page-wide capture noise from this post's media.
+      console.info(
+        `SocialSnag instagram: ${dropped} older captured image(s) not included; `
+        + 'captures are page-wide, so only the most recent are treated as this post.',
+      );
+    }
   }
 
   return {

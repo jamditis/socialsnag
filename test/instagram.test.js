@@ -415,6 +415,41 @@ describe('mergeCapturedImages', () => {
     expect(items.map((i) => i.url)).toEqual([`${CDN}/BBB_n.jpg`, `${CDN}/CCC_n.jpg`]);
   });
 
+  // The cap keeps the tail, so where a repeat sits decides whether it survives the cap.
+  // A photo a neighbouring post requested first and this post requested again belongs to
+  // this post. First-seen ordering would have left it at the neighbour's position, where
+  // the cap drops it.
+  it('moves a re-requested photo to the end so the cap keeps it', () => {
+    const captured = [
+      { url: `${CDN}/AAA_n.jpg`, type: 'image' },
+      { url: `${CDN}/BBB_n.jpg`, type: 'image' },
+      { url: `${CDN}/CCC_n.jpg`, type: 'image' },
+      { url: `${CDN}/s640x640/AAA_n.jpg`, type: 'image' },
+    ];
+
+    const { items } = mergeCapturedImages([], captured, 'CxYz1', 1, 2);
+
+    expect(items.map((i) => i.url)).toEqual([`${CDN}/CCC_n.jpg`, `${CDN}/AAA_n.jpg`]);
+  });
+
+  it('reports how many distinct captures the cap left out', () => {
+    const captured = ['AAA', 'BBB', 'CCC'].map((id) => ({ url: `${CDN}/${id}_n.jpg`, type: 'image' }));
+
+    expect(mergeCapturedImages([], captured, 'CxYz1', 1, 2).dropped).toBe(1);
+    expect(mergeCapturedImages([], captured, 'CxYz1', 1, 10).dropped).toBe(0);
+  });
+
+  // The srcset branch returns its winner untouched (#70), so a DOM item can carry a size
+  // segment that the same photo's capture does not. Comparing the two raw appends it twice.
+  it('does not re-add a photo whose DOM item kept a srcset size segment', () => {
+    const fromSrcset = { url: `${CDN}/s1080x1080/AAA_n.jpg`, type: 'image', filename: 'post_CxYz1_1' };
+    const captured = [{ url: `${CDN}/s640x640/AAA_n.jpg`, type: 'image' }];
+
+    const { items } = mergeCapturedImages([fromSrcset], captured, 'CxYz1', 2);
+
+    expect(items).toEqual([fromSrcset]);
+  });
+
   it('leaves the DOM items untouched when there is nothing to add', () => {
     const original = [domItem];
     const { items } = mergeCapturedImages(original, [], 'CxYz1', 2);
