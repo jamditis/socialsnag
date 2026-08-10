@@ -3,12 +3,22 @@
 if (typeof document !== 'undefined') {
   const PLATFORMS = ['instagram', 'twitter', 'facebook', 'bluesky'];
 
+  // Platforms that ship as optional_host_permissions. The grant is the only
+  // enable switch: without it Chrome never injects the content script, so no
+  // mirrored `platform_<name>` flag is written. A stored copy would go stale
+  // the moment the user grants or revokes from chrome://extensions, which the
+  // options page never sees.
+  const OPTIONAL_PLATFORMS = {
+    linkedin: ['*://*.linkedin.com/*', '*://*.licdn.com/*'],
+  };
+
   const saveSettings = () => {
     const settings = {};
 
     PLATFORMS.forEach((p) => {
       settings[`platform_${p}`] = document.getElementById(`${p}-toggle`).checked;
     });
+
 
     settings.showNotifications = document.getElementById('notifications-toggle').checked;
     settings.downloadPath = document.getElementById('download-path').value.trim() || 'SocialSnag/{platform}';
@@ -62,8 +72,37 @@ if (typeof document !== 'undefined') {
       PLATFORMS.forEach((p) => {
         document.getElementById(`${p}-toggle`).checked = items[`platform_${p}`];
       });
+      // Read the live permission rather than the stored flag: the user can
+      // revoke site access from chrome://extensions without this page knowing,
+      // and a toggle stuck "on" would promise a resolver Chrome is no longer
+      // injecting.
+      Object.entries(OPTIONAL_PLATFORMS).forEach(([p, origins]) => {
+        chrome.permissions.contains({ origins }, (granted) => {
+          document.getElementById(`${p}-toggle`).checked = !!granted;
+        });
+      });
       updatePathPreview();
     });
+  };
+
+  // Toggling an optional platform is a permission change first and a setting
+  // second. The checkbox is corrected to whatever Chrome actually decided, so a
+  // denied prompt leaves the UI honest instead of showing an enabled platform.
+  const toggleOptionalPlatform = (name) => {
+    const box = document.getElementById(`${name}-toggle`);
+    const origins = OPTIONAL_PLATFORMS[name];
+
+    if (box.checked) {
+      chrome.permissions.request({ origins }, (granted) => {
+        box.checked = !!granted;
+        saveSettings();
+      });
+    } else {
+      chrome.permissions.remove({ origins }, () => {
+        box.checked = false;
+        saveSettings();
+      });
+    }
   };
 
   function updatePathPreview() {
@@ -80,6 +119,9 @@ if (typeof document !== 'undefined') {
 
     PLATFORMS.forEach((p) => {
       document.getElementById(`${p}-toggle`).addEventListener('change', saveSettings);
+    });
+    Object.keys(OPTIONAL_PLATFORMS).forEach((p) => {
+      document.getElementById(`${p}-toggle`).addEventListener('change', () => toggleOptionalPlatform(p));
     });
     document.getElementById('advanced-toggle').addEventListener('change', saveSettings);
     document.getElementById('notifications-toggle').addEventListener('change', saveSettings);

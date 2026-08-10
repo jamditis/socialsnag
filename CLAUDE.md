@@ -21,7 +21,7 @@ src/
   platforms/twitter.js   — Twitter/X resolver (name=orig rewrite, profile pic upgrade, video via webRequest captures)
   platforms/facebook.js  — Facebook resolver (fbcdn upgrade, video extraction from scripts)
   platforms/bluesky.js   — Bluesky resolver (feed_fullsize upgrade, avatar upgrade, direct video URLs)
-  platforms/linkedin.js  — LinkedIn resolver — NOT in manifest, needs ESM conversion
+  platforms/linkedin.js  — LinkedIn resolver (media.licdn.com /shrink_<w>_<h>/ upgrade, activity-id extraction); optional platform, off until the user grants site access in options
   platforms/tiktok.js    — TikTok resolver — NOT in manifest, needs ESM conversion
   platforms/youtube.js   — YouTube resolver — NOT in manifest, fully excluded
   popup.html/js/css      — popup UI: dark theme, platform status grid, download history with SVG icons
@@ -96,12 +96,20 @@ The `typeof document` guard prevents ReferenceErrors when Vitest imports the mod
 ## Chrome Web Store compliance
 
 ### Platforms included in CWS submission
-Instagram, Twitter/X, Facebook, Bluesky.
+Instagram, Twitter/X, Facebook, Bluesky (upfront host permissions), plus LinkedIn behind an opt-in grant.
+
+### Opt-in platforms
+- **LinkedIn** — shipped, off by default. Bundled and declared in `content_scripts`, but its hosts live in `optional_host_permissions`, so Chrome injects nothing until the user turns LinkedIn on in options and accepts the site-access prompt. Carries medium-high CWS rejection risk.
+
+The flow, which any further opt-in platform should copy:
+1. `OPTIONAL_PLATFORMS` in `src/background.js` names the origins to request and the page patterns the menu may appear on. The CDN origin is requested but never becomes a menu pattern.
+2. `menuUrlPatterns()` adds a platform only when **every** one of its origins is granted; a partial grant resolves and then fails the `ALLOWED_DOMAINS` check, so it is treated as off.
+3. `chrome.permissions.onAdded` / `onRemoved` rebuild the menu, so a grant or a revoke made from `chrome://extensions` takes effect without a reinstall.
+4. The options toggle requests or removes the origins and writes `platform_<name>` only after Chrome answers, and it restores its checked state from `chrome.permissions.contains` rather than storage.
 
 ### Platforms excluded
 - **YouTube** — fully removed. Google removes YT download extensions.
-- **LinkedIn** — code in repo, `optional_host_permissions`. Needs ESM conversion. Medium-high rejection risk.
-- **TikTok** — code in repo, `optional_host_permissions`. Needs ESM conversion. Medium-high rejection risk.
+- **TikTok** — code in repo, `optional_host_permissions`. Still the legacy global pattern, needs ESM conversion plus the Referer-stripped fetch path. Medium-high rejection risk.
 
 ### Permission model
 - Core: `contextMenus`, `downloads`, `activeTab`, `storage`, `notifications`, `scripting`, `offscreen`

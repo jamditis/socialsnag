@@ -38,6 +38,19 @@ const SUPPORTED_URL_PATTERNS = [
   '*://*.bsky.app/*',
 ];
 
+// Platforms the user opts into, which ship as optional_host_permissions rather
+// than host_permissions. Chrome does not inject their content script until the
+// grant lands, so the grant is the real enable switch and the menu has to be
+// rebuilt when it changes. `origins` is what the options page requests; `menu`
+// is the page pattern the menu appears on (the CDN host is needed to fetch
+// media, never to show a menu).
+const OPTIONAL_PLATFORMS = {
+  linkedin: {
+    origins: ['*://*.linkedin.com/*', '*://*.licdn.com/*'],
+    menu: ['*://*.linkedin.com/*'],
+  },
+};
+
 // CDN patterns for core platforms only (webRequest monitoring)
 const CDN_PATTERNS = [
   '*://*.cdninstagram.com/*',
@@ -49,14 +62,46 @@ const CDN_PATTERNS = [
 
 // --- Pure functions (exported for testing) ---
 
-// Detect the platform from a tab URL (core platforms only)
+// Detect the platform from a tab URL. Optional platforms are recognised here
+// unconditionally; whether anything happens for them is decided by the host
+// permission, which gates both the content script and the menu.
 export function detectPlatform(url) {
   if (!url) return null;
   if (url.includes('instagram.com')) return 'instagram';
   if (url.includes('twitter.com') || url.includes('x.com')) return 'twitter';
   if (url.includes('facebook.com')) return 'facebook';
   if (url.includes('bsky.app')) return 'bluesky';
+  if (url.includes('linkedin.com')) return 'linkedin';
   return null;
+}
+
+// Is this platform switched on for the user?
+//
+// For an optional platform the host grant IS the switch, and no mirrored flag
+// is kept in storage. Storing one lets the two drift: a user who grants or
+// revokes LinkedIn from chrome://extensions never touches the options page, so
+// a stored flag would go stale and silently no-op every download while the
+// menu, driven by the same grant, says the platform is on.
+export async function isPlatformEnabled(platform) {
+  const optional = OPTIONAL_PLATFORMS[platform];
+  if (optional) return chrome.permissions.contains({ origins: optional.origins });
+
+  const key = `platform_${platform}`;
+  const settings = await chrome.storage.sync.get({ [key]: true });
+  return settings[key] !== false;
+}
+
+// URL patterns the context menu should appear on: the core platforms always,
+// plus each optional platform whose origins the user has actually granted.
+// Showing an optional platform's menu before the grant is the half-delivered
+// state issue #13 exists to avoid, because the resolver behind it is not there.
+export function menuUrlPatterns(grantedOrigins) {
+  const granted = new Set(grantedOrigins || []);
+  const patterns = [...SUPPORTED_URL_PATTERNS];
+  for (const platform of Object.values(OPTIONAL_PLATFORMS)) {
+    if (platform.origins.every((o) => granted.has(o))) patterns.push(...platform.menu);
+  }
+  return patterns;
 }
 
 // Guess file extension
@@ -342,16 +387,27 @@ export function sanitizeDownloadPath(rawFilename, platform, ext, downloadPath) {
 // Register the context menu on install. removeAll first so re-registering on an
 // update never hits a duplicate-id error. The four actions nest under one
 // SocialSnag parent; children inherit the parent's contexts and URL patterns.
-chrome.runtime.onInstalled.addListener(() => {
+async function buildContextMenu() {
+  const { origins } = await chrome.permissions.getAll();
+  const documentUrlPatterns = menuUrlPatterns(origins);
   chrome.contextMenus.removeAll(() => {
-    const shared = { contexts: MENU_CONTEXTS, documentUrlPatterns: SUPPORTED_URL_PATTERNS };
+    const shared = { contexts: MENU_CONTEXTS, documentUrlPatterns };
     chrome.contextMenus.create({ id: MENU_PARENT, title: 'SocialSnag', ...shared });
     chrome.contextMenus.create({ id: MENU_DOWNLOAD_SINGLE, parentId: MENU_PARENT, title: 'Download this (HD)', ...shared });
     chrome.contextMenus.create({ id: MENU_DOWNLOAD_ALL, parentId: MENU_PARENT, title: 'Download all from post', ...shared });
     chrome.contextMenus.create({ id: MENU_DOWNLOAD_ZIP, parentId: MENU_PARENT, title: 'Download all as .zip', ...shared });
     chrome.contextMenus.create({ id: MENU_COPY_URL, parentId: MENU_PARENT, title: 'Copy media URL', ...shared });
   });
-});
+}
+
+chrome.runtime.onInstalled.addListener(buildContextMenu);
+
+// An optional platform's menu has to follow its grant, in both directions: a
+// grant that arrives after install would otherwise never reach the menu, and a
+// revoked grant would leave the menu advertising a resolver Chrome no longer
+// injects.
+chrome.permissions.onAdded.addListener(buildContextMenu);
+chrome.permissions.onRemoved.addListener(buildContextMenu);
 
 // On startup, check if advanced mode is enabled and register webRequest if so
 chrome.runtime.onStartup.addListener(initAdvancedMode);
@@ -432,12 +488,12 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     }
   }
 
+  if (!await isPlatformEnabled(platform)) return;
+
   const platformSettings = await chrome.storage.sync.get({
-    [`platform_${platform}`]: true,
     showNotifications: true,
     zipMultiPosts: false,
   });
-  if (!platformSettings[`platform_${platform}`]) return;
 
   try {
     // Scoped to this click, so a concurrent click in another tab cannot
@@ -1384,9 +1440,7 @@ export async function orchestrateSubmittedDownload(rawUrl, options = {}) {
 
   let createdTabId = null;
   try {
-    const platformSetting = `platform_${platform}`;
-    const settings = await chrome.storage.sync.get({ [platformSetting]: true });
-    if (settings[platformSetting] === false) {
+    if (!await isPlatformEnabled(platform)) {
       return submittedDownloadResult(false, 'platform_disabled', platform);
     }
 

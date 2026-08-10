@@ -8,6 +8,9 @@ export const ALLOWED_DOMAINS = [
   'fbcdn.net',
   'cdn.bsky.app',
   'video.bsky.app',
+  // LinkedIn is an optional platform: the host permission gates whether its
+  // resolver ever runs, but a URL it produces still has to pass this allowlist.
+  'media.licdn.com',
 ];
 
 // True if url's hostname is exactly `host` or a subdomain of it. False for an

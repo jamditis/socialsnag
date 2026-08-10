@@ -87,6 +87,12 @@ globalThis.chrome = {
     contains: async () => false,
     // Granted by default in tests; a test can override to simulate a denial.
     request: async () => true,
+    remove: async () => true,
+    // No optional origins granted by default, which is the state a fresh
+    // install is in.
+    getAll: async () => ({ permissions: [], origins: [] }),
+    onAdded: createEventTarget(),
+    onRemoved: createEventTarget(),
   },
   webRequest: {
     onCompleted: createEventTarget(),
