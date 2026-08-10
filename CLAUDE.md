@@ -15,7 +15,7 @@ ESM modules in `src/`, bundled by esbuild to `dist/`. Chrome loads from `dist/`.
 ```
 src/
   background.js          - service worker for context menus, external landing-page requests, downloads, URL validation, download history, Instagram API resolution, zip and copy-URL routing, and optional webRequest
-  platforms/common.js    — shared exports: ALLOWED_DOMAINS, isAllowedDomain, isHttps, sanitizeFilename, findPostContainer, findNearestMedia, getCapturedMedia
+  platforms/common.js    — shared exports: ALLOWED_DOMAINS, isAllowedDomain, isHttps, sanitizeFilename, findPostContainer, findNearestMedia, getCapturedMedia, isContentSized
   platforms/instagram.js — Instagram DOM resolver (srcset upgrade, JSON extraction, video script extraction, carousel support) — the fallback when the API path fails
   platforms/instagram-api.js — Instagram private web API (pure module): shortcodeToMediaId, parsePostMedia (single + carousel), extractStoryRef, parseStoryTray, mapIgStatusToMessage
   platforms/twitter.js   — Twitter/X resolver (name=orig rewrite, profile pic upgrade, video via webRequest captures)
@@ -91,7 +91,9 @@ The `typeof document` guard prevents ReferenceErrors when Vitest imports the mod
 ### Domain allowlist (single source of truth)
 
 `ALLOWED_DOMAINS` is defined once in `src/platforms/common.js` and imported by `src/background.js`. The list:
-- `cdninstagram.com`, `pbs.twimg.com`, `video.twimg.com`, `fbcdn.net`, `cdn.bsky.app`, `video.bsky.app`
+- `cdninstagram.com`, `pbs.twimg.com`, `video.twimg.com`, `fbcdn.net`, `cdn.bsky.app`, `video.bsky.app`, `media.licdn.com`
+
+An opt-in platform's CDN belongs on this list like any other. The host permission decides whether the resolver ever runs; the allowlist decides whether a URL it hands back may be downloaded, and both have to say yes.
 
 ## Chrome Web Store compliance
 

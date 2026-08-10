@@ -226,6 +226,17 @@ export function findPostContainer(element, selectors) {
   return null;
 }
 
+// An <img> is content rather than chrome when it is big enough to be worth saving.
+// A post container holds more than the post's media: the author's avatar, a company
+// logo, and reaction icons all come from the same CDN, so a sweep that keys only on
+// the CDN host saves them alongside the photos.
+//
+// A zero or absent width means the element has not laid out yet, which is common for
+// images below the fold, so that case is kept rather than guessed away.
+export function isContentSized(img) {
+  return img.width > 50 || img.naturalWidth > 50 || !img.width;
+}
+
 export function collectMediaInContainer(container) {
   const items = [];
   if (!container) return items;

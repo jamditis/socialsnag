@@ -1,6 +1,11 @@
 // SocialSnag — LinkedIn content script
 
-import { findNearestMedia, findPostContainer, hostMatches } from './common.js';
+import {
+  findNearestMedia,
+  findPostContainer,
+  hostMatches,
+  isContentSized,
+} from './common.js';
 
 // --- Pure functions (exported for testing) ---
 
@@ -23,6 +28,53 @@ export function extractPostId(href) {
   if (urnMatch) return urnMatch[1];
 
   return null;
+}
+
+// A feed card serves the author's avatar and the company mark from the same CDN as
+// the post's photos, and LinkedIn names both renditions in the path. Matching the
+// name is what works here. Size does not: the avatar is served at 100x100 intrinsic
+// and rendered at 48, so it clears any threshold low enough to keep a real photo.
+//
+// A rendition this does not recognize is kept, which costs an extra file in the zip.
+// Erring the other way would drop a photo the user asked for.
+const CHROME_RENDITIONS = /\/(profile-displayphoto|company-logo)/;
+
+export function isPostImage(url) {
+  return !CHROME_RENDITIONS.test(url);
+}
+
+/**
+ * Turn a post's <img> elements into download items, in document order.
+ *
+ * Three things get filtered out: the chrome renditions above, anything too small to
+ * be worth saving (a reaction icon is served at the size it renders), and repeats.
+ * That last one is why upgradeUrl matters here beyond the size upgrade. It strips
+ * the /shrink_<w>_<h>/ segment, so two renditions of one photo normalize to the same
+ * URL, and keeping both would number one image `_1` and `_2` and read as a two-image
+ * post.
+ *
+ * @param {Array<{src: string, width?: number, naturalWidth?: number}>} images
+ * @param {string|null} postId names the files when the page URL carries one
+ * @returns {{items: Array<object>, index: number}} items and the next free index
+ */
+export function buildImageItems(images, postId = null) {
+  const items = [];
+  const seen = new Set();
+  let index = 1;
+
+  for (const img of images) {
+    const url = upgradeUrl(img.src);
+    if (!url) continue;
+    if (!isPostImage(url)) continue;
+    if (!isContentSized(img)) continue;
+    if (seen.has(url)) continue;
+    seen.add(url);
+
+    items.push({ url, type: 'image', filename: postId ? `post_${postId}_${index}` : null });
+    index++;
+  }
+
+  return { items, index };
 }
 
 // --- Browser wiring (not exported) ---
@@ -64,17 +116,14 @@ function resolveAll(target) {
   ]);
   if (!post) return resolveSingle(target?.src || '', target);
 
-  const items = [];
   const id = extractPostId(window.location.href);
-  let index = 1;
-
-  post.querySelectorAll('img[src*="media.licdn.com"]').forEach((img) => {
-    const url = upgradeUrl(img.src);
-    if (url) {
-      items.push({ url, type: 'image', filename: id ? `post_${id}_${index}` : null });
-      index++;
-    }
-  });
+  // querySelectorAll returns document order, which is the post's own image order.
+  const { items, index: nextIndex } = buildImageItems(
+    Array.from(post.querySelectorAll('img[src*="media.licdn.com"]')),
+    id,
+  );
+  // The video sweep below continues the image numbering.
+  let index = nextIndex;
 
   post.querySelectorAll('video').forEach((video) => {
     const src = video.src || video.querySelector('source')?.src;
