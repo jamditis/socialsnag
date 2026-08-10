@@ -5,6 +5,9 @@ import {
   parseMediaFromJson,
   extractVideoUrlFromScripts,
   shortcodeFromContainer,
+  buildImageItems,
+  mergeCapturedImages,
+  collectMediaFromContainer,
 } from '../src/platforms/instagram.js';
 
 describe('upgradeImageUrl', () => {
@@ -195,5 +198,266 @@ describe('shortcodeFromContainer', () => {
 
   it('returns null for an empty list', () => {
     expect(shortcodeFromContainer([])).toBeNull();
+  });
+});
+
+const CDN = 'https://scontent.cdninstagram.com/v/t51.2885-15';
+
+describe('buildImageItems', () => {
+  // The first task #46 names: find out whether upgradeImageUrl collapses Instagram's
+  // size variants the way Facebook's does, since that is what decides whether the
+  // missing dedupe permits duplicates or produces them. These two answer it, and the
+  // answer is that both branches collapse, so it produces them.
+  it('collapses the size variants of one slide when neither img has a srcset', () => {
+    const { items } = buildImageItems([
+      { src: `${CDN}/s150x150/AAA_n.jpg` },
+      { src: `${CDN}/s640x640/AAA_n.jpg` },
+    ], 'CxYz1');
+
+    expect(items).toEqual([
+      { url: `${CDN}/AAA_n.jpg`, type: 'image', filename: 'post_CxYz1_1' },
+    ]);
+  });
+
+  it('collapses two imgs for one slide that share a srcset', () => {
+    const srcset = `${CDN}/s320x320/AAA_n.jpg 320w, ${CDN}/s1080x1080/AAA_n.jpg 1080w`;
+    const { items } = buildImageItems([
+      { src: `${CDN}/s150x150/AAA_n.jpg`, srcset },
+      { src: `${CDN}/s640x640/AAA_n.jpg`, srcset },
+    ], 'CxYz1');
+
+    expect(items).toHaveLength(1);
+    expect(items[0].url).toBe(`${CDN}/s1080x1080/AAA_n.jpg`);
+  });
+
+  // The seam in that collapse, pinned so a later reader does not mistake it for a
+  // dedupe bug. The srcset branch returns its winner untouched and the fallback
+  // strips the size segment, so one photo rendered both ways upgrades to two URLs.
+  it('does NOT collapse a srcset img against a bare img for the same photo', () => {
+    const { items } = buildImageItems([
+      { src: `${CDN}/s640x640/AAA_n.jpg`, srcset: `${CDN}/s1080x1080/AAA_n.jpg 1080w` },
+      { src: `${CDN}/s640x640/AAA_n.jpg` },
+    ], 'CxYz1');
+
+    expect(items.map((i) => i.url)).toEqual([
+      `${CDN}/s1080x1080/AAA_n.jpg`,
+      `${CDN}/AAA_n.jpg`,
+    ]);
+  });
+
+  it('keeps distinct photos, in document order, numbered from 1', () => {
+    const { items, index } = buildImageItems([
+      { src: `${CDN}/s640x640/AAA_n.jpg` },
+      { src: `${CDN}/s640x640/BBB_n.jpg` },
+      { src: `${CDN}/s150x150/AAA_n.jpg` },
+      { src: `${CDN}/s640x640/CCC_n.jpg` },
+    ], 'CxYz1');
+
+    expect(items.map((i) => i.url)).toEqual([
+      `${CDN}/AAA_n.jpg`,
+      `${CDN}/BBB_n.jpg`,
+      `${CDN}/CCC_n.jpg`,
+    ]);
+    expect(items.map((i) => i.filename)).toEqual([
+      'post_CxYz1_1', 'post_CxYz1_2', 'post_CxYz1_3',
+    ]);
+    expect(index).toBe(4);
+  });
+
+  // The returned index is what the video loop numbers from, so a repeat must not
+  // burn a slot. Before the dedupe, four imgs for three photos left the first clip
+  // at _5 and the saved set looked like it was missing a file.
+  it('does not spend an index on a duplicate, so video numbering stays contiguous', () => {
+    const { index } = buildImageItems([
+      { src: `${CDN}/s640x640/AAA_n.jpg` },
+      { src: `${CDN}/s150x150/AAA_n.jpg` },
+    ], 'CxYz1', 1);
+
+    expect(index).toBe(2);
+  });
+
+  // Two media ids stay two items. Named for the ids rather than for the pictures,
+  // because that is what this can check: whether a repeated picture reaches the DOM as
+  // two ids is a claim about the CDN, and the buildImageItems comment says so.
+  it('keeps two images that differ only in their media id', () => {
+    const { items } = buildImageItems([
+      { src: `${CDN}/s640x640/17912345678901234_n.jpg` },
+      { src: `${CDN}/s640x640/17998765432109876_n.jpg` },
+    ], 'CxYz1');
+
+    expect(items.map((i) => i.filename)).toEqual(['post_CxYz1_1', 'post_CxYz1_2']);
+  });
+
+  it('honours startIndex', () => {
+    const { items, index } = buildImageItems([{ src: `${CDN}/s640x640/AAA_n.jpg` }], 'CxYz1', 4);
+    expect(items[0].filename).toBe('post_CxYz1_4');
+    expect(index).toBe(5);
+  });
+
+  it('drops anything upgradeImageUrl rejects, including a lookalike host', () => {
+    const { items } = buildImageItems([
+      { src: 'https://evilcdninstagram.com/AAA_n.jpg' },
+      { src: 'https://example.com/AAA_n.jpg' },
+      { src: null },
+      {},
+    ], 'CxYz1');
+
+    expect(items).toEqual([]);
+  });
+
+  it('leaves the filename null when the post has no shortcode', () => {
+    const { items } = buildImageItems([{ src: `${CDN}/s640x640/AAA_n.jpg` }], null);
+    expect(items[0].filename).toBeNull();
+  });
+
+  // resolveAll reads a small media count as a sparse DOM and falls back to the
+  // page-wide webRequest captures, which reach into neighbouring posts. So the count
+  // it reads has to survive the dedupe: an ordinary single-photo post rendered at two
+  // sizes is a full DOM, and reporting it as sparse would pull a stranger's photos
+  // into the download.
+  it('reports what the DOM offered, not what survived the dedupe', () => {
+    const { items, considered } = buildImageItems([
+      { src: `${CDN}/s150x150/AAA_n.jpg` },
+      { src: `${CDN}/s640x640/AAA_n.jpg` },
+    ], 'CxYz1');
+
+    expect(items).toHaveLength(1);
+    expect(considered).toBe(2);
+  });
+
+  it('does not count an image upgradeImageUrl rejected as offered', () => {
+    const { considered } = buildImageItems([
+      { src: `${CDN}/s640x640/AAA_n.jpg` },
+      { src: 'https://example.com/AAA_n.jpg' },
+    ], 'CxYz1');
+
+    expect(considered).toBe(1);
+  });
+
+  it('returns nothing for an empty list', () => {
+    expect(buildImageItems([], 'CxYz1')).toEqual({ items: [], index: 1, considered: 0 });
+  });
+});
+
+describe('mergeCapturedImages', () => {
+  const domItem = { url: `${CDN}/AAA_n.jpg`, type: 'image', filename: 'post_CxYz1_1' };
+
+  // The defect this replaced: the old guard compared a raw captured URL against the
+  // upgraded URLs already in `items`, so it never matched. One photo arrived as its DOM
+  // entry plus two captured renditions and saved three times, two of them at the
+  // thumbnail size the upgrade exists to get past.
+  it('does not re-add a photo already found in the DOM at another size', () => {
+    const { items, index } = mergeCapturedImages(
+      [domItem],
+      [
+        { url: `${CDN}/s150x150/AAA_n.jpg`, type: 'image' },
+        { url: `${CDN}/s640x640/AAA_n.jpg`, type: 'image' },
+      ],
+      'CxYz1',
+      2,
+    );
+
+    expect(items).toEqual([domItem]);
+    expect(index).toBe(2);
+  });
+
+  it('appends a genuinely different photo, upgraded rather than raw', () => {
+    const { items, index } = mergeCapturedImages(
+      [domItem],
+      [{ url: `${CDN}/s150x150/BBB_n.jpg`, type: 'image' }],
+      'CxYz1',
+      2,
+    );
+
+    expect(items).toHaveLength(2);
+    expect(items[1]).toEqual({
+      url: `${CDN}/BBB_n.jpg`,
+      type: 'image',
+      filename: 'post_CxYz1_2',
+    });
+    expect(index).toBe(3);
+  });
+
+  it('collapses two captured renditions of one photo into a single item', () => {
+    const { items } = mergeCapturedImages([], [
+      { url: `${CDN}/s150x150/BBB_n.jpg`, type: 'image' },
+      { url: `${CDN}/s640x640/BBB_n.jpg`, type: 'image' },
+    ], 'CxYz1');
+
+    expect(items.map((i) => i.url)).toEqual([`${CDN}/BBB_n.jpg`]);
+  });
+
+  // The host check rides on upgradeImageUrl, which is stricter than the substring test
+  // it replaced: `evilcdninstagram.com` contains `cdninstagram.com`.
+  it('drops a lookalike host, a foreign host, and a captured video', () => {
+    const { items } = mergeCapturedImages([], [
+      { url: 'https://evilcdninstagram.com/BBB_n.jpg', type: 'image' },
+      { url: 'https://example.com/BBB_n.jpg', type: 'image' },
+      { url: `${CDN}/CCC_n.mp4`, type: 'video' },
+    ], 'CxYz1');
+
+    expect(items).toEqual([]);
+  });
+
+  // Dedupe first, then cap, so the cap is spent on distinct photos rather than on
+  // repeats of one. Capture order is network arrival order, so the last are the
+  // likeliest to belong to the post just opened.
+  it('spends the cap on distinct photos and keeps the most recent', () => {
+    const captured = [
+      { url: `${CDN}/s150x150/AAA_n.jpg`, type: 'image' },
+      { url: `${CDN}/s640x640/AAA_n.jpg`, type: 'image' },
+      { url: `${CDN}/s640x640/BBB_n.jpg`, type: 'image' },
+      { url: `${CDN}/s640x640/CCC_n.jpg`, type: 'image' },
+    ];
+
+    const { items } = mergeCapturedImages([], captured, 'CxYz1', 1, 2);
+
+    expect(items.map((i) => i.url)).toEqual([`${CDN}/BBB_n.jpg`, `${CDN}/CCC_n.jpg`]);
+  });
+
+  it('leaves the DOM items untouched when there is nothing to add', () => {
+    const original = [domItem];
+    const { items } = mergeCapturedImages(original, [], 'CxYz1', 2);
+
+    expect(items).toEqual(original);
+    expect(items).not.toBe(original);
+  });
+});
+
+describe('collectMediaFromContainer', () => {
+  // The seam this change could regress silently. resolveAll reads domCount to decide
+  // whether the DOM looked sparse, and a sparse DOM sends it to the page-wide captures,
+  // which reach into neighbouring posts. So the two numbers have to diverge here: one
+  // photo rendered at two sizes is one item and a full DOM.
+  const container = (imgs) => ({
+    querySelectorAll: (sel) => (sel === 'video' ? [] : imgs),
+  });
+
+  it('reports one item and a domCount of two for one photo at two sizes', () => {
+    const { items, domCount } = collectMediaFromContainer(container([
+      { src: `${CDN}/s150x150/AAA_n.jpg` },
+      { src: `${CDN}/s640x640/AAA_n.jpg` },
+    ]), 'CxYz1');
+
+    expect(items).toHaveLength(1);
+    expect(domCount).toBe(2);
+  });
+
+  it('reports a domCount of one for a genuinely single-image post', () => {
+    const { domCount } = collectMediaFromContainer(
+      container([{ src: `${CDN}/s640x640/AAA_n.jpg` }]),
+      'CxYz1',
+    );
+
+    expect(domCount).toBe(1);
+  });
+
+  it('does not count an image upgradeImageUrl rejected', () => {
+    const { items, domCount } = collectMediaFromContainer(container([
+      { src: 'https://evilcdninstagram.com/AAA_n.jpg' },
+    ]), 'CxYz1');
+
+    expect(items).toEqual([]);
+    expect(domCount).toBe(0);
   });
 });
