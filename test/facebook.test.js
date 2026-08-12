@@ -63,14 +63,16 @@ describe('extractPhotoId', () => {
     expect(extractPhotoId('https://example.com/123456789')).toBeNull();
   });
 
-  it('reads only the slash-adjacent leading token, not a later number in the path', () => {
-    // The dedupe identity rides on this anchor. An fbcdn path can carry more than one
-    // long digit run: a version tag, then a filename like <9-digit>_<16-digit fbid>.
-    // Only the leading slash-adjacent token is the asset id, so a sub-10-digit leading
-    // token yields null (URL fallback) instead of latching onto the 16-digit fbid that
-    // sits mid-filename. Dropping the leading-slash anchor reddens this.
+  it('does not infer an ID from the later token in an incomplete two-number filename', () => {
+    // The common three-number filename has a known stable second token. This shorter
+    // two-number form does not, so it must use the URL fallback instead of guessing.
     const url = 'https://scontent.xx.fbcdn.net/v/t1/t39.30808-6/279440742_10158000000000000_n.jpg';
     expect(extractPhotoId(url)).toBeNull();
+  });
+
+  it('extracts the stable second token from a common three-number fbcdn filename', () => {
+    const url = `${CDN}/339409443_690803322735653_7226034513706708994_n.jpg`;
+    expect(extractPhotoId(url)).toBe('690803322735653');
   });
 
   it('returns null for null input', () => {
@@ -389,6 +391,26 @@ describe('buildCapturedItems', () => {
     ], 5);
     expect(items).toHaveLength(1);
     expect(items[0].url).toBe(`${CDN}/123456789012_n.jpg?oh=BBB&oe=222`);
+  });
+
+  it('keeps the sharpest captured query variant while refreshing its recency', () => {
+    const { items } = buildCapturedItems([
+      cap(`${CDN}/111111111111_n.jpg?stp=dst-jpg_p2048x2048_tt6`),
+      cap(`${CDN}/222222222222_n.jpg`),
+      cap(`${CDN}/111111111111_n.jpg?stp=dst-jpg_s320x320_tt6`),
+    ], 2);
+    expect(items.map((i) => i.url)).toEqual([
+      `${CDN}/222222222222_n.jpg`,
+      `${CDN}/111111111111_n.jpg?stp=dst-jpg_p2048x2048_tt6`,
+    ]);
+  });
+
+  it('collapses common three-number filename variants by the stable second token', () => {
+    const { items } = buildCapturedItems([
+      cap(`${CDN}/339409443_690803322735653_7226034513706708994_n.jpg?oh=AAA&oe=111`),
+      cap(`${CDN}/339409443_690803322735653_7226034513706708994_n.jpg?oh=BBB&oe=222`),
+    ], 5);
+    expect(items).toHaveLength(1);
   });
 
   it('keeps two id-less captures separate by their URL', () => {

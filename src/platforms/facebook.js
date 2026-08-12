@@ -19,6 +19,8 @@ export function upgradeUrl(url) {
 
 export function extractPhotoId(url) {
   if (!url) return null;
+  const threeNumberFilename = url.match(/\/\d+_(\d{10,})_\d{10,}_n(?:\.[^/?#]+)?(?:[?#]|$)/);
+  if (threeNumberFilename) return threeNumberFilename[1];
   const match = url.match(/\/(\d{10,})/);
   return match ? match[1] : null;
 }
@@ -258,8 +260,8 @@ export function buildImageItems(images, startIndex = 1) {
 export function buildCapturedItems(captured, limit = 5) {
   // A Map keeps insertion order, so deleting before setting moves a repeated photo
   // to the end and leaves it in last-seen order. Keyed by photoDedupeKey (the photo
-  // id, or the URL when it carries none); the value holds the latest URL variant seen
-  // for that photo, which is what gets downloaded.
+  // id, or the URL when it carries none); the value holds the sharpest URL variant
+  // seen for that photo and its area. Recency still follows the latest request.
   const lastSeen = new Map();
 
   for (const c of captured) {
@@ -268,11 +270,14 @@ export function buildCapturedItems(captured, limit = 5) {
     const url = upgradeUrl(c.url);
     if (!url) continue;
     const key = photoDedupeKey(url);
+    const area = variantArea(c.url);
+    const prior = lastSeen.get(key);
+    const variant = prior && prior.area > area ? prior : { url, area };
     lastSeen.delete(key);
-    lastSeen.set(key, url);
+    lastSeen.set(key, variant);
   }
 
-  const distinct = [...lastSeen.values()];
+  const distinct = [...lastSeen.values()].map(({ url }) => url);
   // Keep the most recent, which are the likeliest to belong to the post just opened.
   const kept = distinct.slice(-limit);
   let index = 1;
