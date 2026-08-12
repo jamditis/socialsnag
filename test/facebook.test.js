@@ -63,6 +63,16 @@ describe('extractPhotoId', () => {
     expect(extractPhotoId('https://example.com/123456789')).toBeNull();
   });
 
+  it('reads only the slash-adjacent leading token, not a later number in the path', () => {
+    // The dedupe identity rides on this anchor. An fbcdn path can carry more than one
+    // long digit run: a version tag, then a filename like <9-digit>_<16-digit fbid>.
+    // Only the leading slash-adjacent token is the asset id, so a sub-10-digit leading
+    // token yields null (URL fallback) instead of latching onto the 16-digit fbid that
+    // sits mid-filename. Dropping the leading-slash anchor reddens this.
+    const url = 'https://scontent.xx.fbcdn.net/v/t1/t39.30808-6/279440742_10158000000000000_n.jpg';
+    expect(extractPhotoId(url)).toBeNull();
+  });
+
   it('returns null for null input', () => {
     expect(extractPhotoId(null)).toBeNull();
   });
@@ -223,6 +233,30 @@ describe('buildImageItems', () => {
     const { items } = buildImageItems([img(`${CDN}/s320x320/111111111111_n.jpg`)], 4);
     expect(items[0].filename).toBe('photo_111111111111_4');
   });
+
+  it('collapses signature-param variants of one photo by its stable id', () => {
+    // Facebook re-renders one slide with fresh oh=/oe= tokens. upgradeUrl leaves the
+    // query alone, so a URL key would count these two as separate photos; the id does not.
+    const { items } = buildImageItems([
+      img(`${CDN}/s320x320/123456789012_n.jpg?oh=AAA&oe=111`, 320),
+      img(`${CDN}/s640x640/123456789012_n.jpg?oh=BBB&oe=222`, 640),
+    ]);
+    expect(items).toHaveLength(1);
+    expect(items[0].url).toBe(`${CDN}/123456789012_n.jpg?oh=AAA&oe=111`);
+    expect(items[0].filename).toBe('photo_123456789012_1');
+  });
+
+  it('keeps two id-less photos separate by their normalized URL', () => {
+    // With no id to key on, distinct URLs must not collapse into one.
+    const { items } = buildImageItems([
+      img(`${CDN}/s320x320/left_n.jpg`),
+      img(`${CDN}/s320x320/right_n.jpg`),
+    ]);
+    expect(items.map((i) => i.url)).toEqual([
+      `${CDN}/left_n.jpg`,
+      `${CDN}/right_n.jpg`,
+    ]);
+  });
 });
 
 describe('buildCapturedItems', () => {
@@ -314,6 +348,22 @@ describe('buildCapturedItems', () => {
   it('numbers from one, since it only runs when the DOM walk found nothing', () => {
     const { items } = buildCapturedItems([cap(`${CDN}/a_n.jpg`), cap(`${CDN}/b_n.jpg`)], 5);
     expect(items.map((i) => i.filename)).toEqual(['photo_1', 'photo_2']);
+  });
+
+  it('collapses signature-param variants by id and downloads the latest', () => {
+    // Two captures of one photo with fresh oh=/oe= tokens. The size strip leaves the
+    // query, so only the photo id collapses them; the latest sighting is what counts.
+    const { items } = buildCapturedItems([
+      cap(`${CDN}/s320x320/123456789012_n.jpg?oh=AAA&oe=111`),
+      cap(`${CDN}/p720x720/123456789012_n.jpg?oh=BBB&oe=222`),
+    ], 5);
+    expect(items).toHaveLength(1);
+    expect(items[0].url).toBe(`${CDN}/123456789012_n.jpg?oh=BBB&oe=222`);
+  });
+
+  it('keeps two id-less captures separate by their URL', () => {
+    const { items } = buildCapturedItems([cap(`${CDN}/left_n.jpg`), cap(`${CDN}/right_n.jpg`)], 5);
+    expect(items.map((i) => i.url)).toEqual([`${CDN}/left_n.jpg`, `${CDN}/right_n.jpg`]);
   });
 });
 
