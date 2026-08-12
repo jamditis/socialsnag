@@ -235,15 +235,45 @@ describe('buildImageItems', () => {
   });
 
   it('collapses signature-param variants of one photo by its stable id', () => {
-    // Facebook re-renders one slide with fresh oh=/oe= tokens. upgradeUrl leaves the
-    // query alone, so a URL key would count these two as separate photos; the id does not.
+    // Facebook re-renders one slide with fresh oh=/oe= tokens at the same size.
+    // upgradeUrl leaves the query alone, so a URL key would count these two as
+    // separate photos; the id does not. Same resolution, so first-seen wins the tie.
     const { items } = buildImageItems([
       img(`${CDN}/s320x320/123456789012_n.jpg?oh=AAA&oe=111`, 320),
-      img(`${CDN}/s640x640/123456789012_n.jpg?oh=BBB&oe=222`, 640),
+      img(`${CDN}/s320x320/123456789012_n.jpg?oh=BBB&oe=222`, 320),
     ]);
     expect(items).toHaveLength(1);
     expect(items[0].url).toBe(`${CDN}/123456789012_n.jpg?oh=AAA&oe=111`);
     expect(items[0].filename).toBe('photo_123456789012_1');
+  });
+
+  it('keeps the full-size variant when a photo repeats larger in the stp query', () => {
+    // Facebook encodes size in the stp query token for an opened photo: the grid
+    // thumbnail ?stp=..._s320x320_... then the full render ?stp=..._p2048x2048_...
+    // upgradeUrl strips only path sizes, so these keep distinct query strings under one
+    // id, and first-seen would hand back the thumbnail. The sharper render must win.
+    const { items } = buildImageItems([
+      img(`${CDN}/123456789012_n.jpg?stp=dst-jpg_s320x320_tt6`, 320),
+      img(`${CDN}/123456789012_n.jpg?stp=dst-jpg_p2048x2048_tt6`, 2048),
+    ]);
+    expect(items).toHaveLength(1);
+    expect(items[0].url).toBe(`${CDN}/123456789012_n.jpg?stp=dst-jpg_p2048x2048_tt6`);
+  });
+
+  it('upgrades a repeated photo to its sharper query variant without moving it', () => {
+    // The full render arrives after a later slide, so the upgrade must land at the
+    // first slide's position, not the tail. Pins that resolution preference does not
+    // disturb document order or spend an extra index on the repeat.
+    const { items, index } = buildImageItems([
+      img(`${CDN}/111111111111_n.jpg?stp=dst-jpg_s320x320_tt6`, 320),
+      img(`${CDN}/222222222222_n.jpg`, 500),
+      img(`${CDN}/111111111111_n.jpg?stp=dst-jpg_p2048x2048_tt6`, 2048),
+    ]);
+    expect(items.map((i) => i.url)).toEqual([
+      `${CDN}/111111111111_n.jpg?stp=dst-jpg_p2048x2048_tt6`,
+      `${CDN}/222222222222_n.jpg`,
+    ]);
+    expect(index).toBe(3);
   });
 
   it('keeps two id-less photos separate by their normalized URL', () => {

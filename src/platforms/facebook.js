@@ -34,6 +34,24 @@ function photoDedupeKey(upgradedUrl) {
   return id ? `id:${id}` : `url:${upgradedUrl}`;
 }
 
+// Pixel area an fbcdn URL encodes, used to pick the sharpest render of one photo.
+// Size lives either in a /sWxH/ or /pWxH/ path segment or in an stp query token such
+// as dst-jpg_s320x320 / _p2048x2048. Score the raw src, since upgradeUrl strips the
+// path size before this sees it. A URL with no size token is the unconstrained
+// original, so it outranks every sized variant.
+function variantArea(url) {
+  if (!url) return 0;
+  const re = new RegExp('[/_][sp](\\d+)x(\\d+)', 'g');
+  let best = 0;
+  let sized = false;
+  let m;
+  while ((m = re.exec(url)) !== null) {
+    sized = true;
+    best = Math.max(best, Number(m[1]) * Number(m[2]));
+  }
+  return sized ? best : Infinity;
+}
+
 export function extractVideoUrlFromScripts(scriptTexts) {
   for (const text of scriptTexts) {
     if (text.includes('playable_url_quality_hd')) {
@@ -158,9 +176,13 @@ export function extractSubmittedVideoUrl(scriptTexts, videoIds) {
  * falls back to the normalized URL. Without this the `_${index}` suffix hides the
  * repeats: one photo saved twice reads as a two-photo album.
  *
- * The first variant seen wins, which keeps document order intact. Document order is
- * what makes album ordering stable, since querySelectorAll returns it and it matches
- * how the slides read on the page.
+ * The first variant seen holds its position, which keeps document order intact.
+ * Document order is what makes album ordering stable, since querySelectorAll returns
+ * it and it matches how the slides read on the page. But size can also live in the stp
+ * query token, which upgradeUrl does not strip, so a grid thumbnail
+ * (?stp=..._s320x320_...) and the opened full view (?stp=..._p2048x2048_...) keep
+ * distinct URLs under one id. First-seen alone would hand back the thumbnail, so a
+ * sharper later render replaces the URL at the position its first sighting won.
  *
  * @param {Array<{src: string, width?: number, naturalWidth?: number}>} images
  * @param {number} startIndex first filename suffix to use
@@ -168,7 +190,9 @@ export function extractSubmittedVideoUrl(scriptTexts, videoIds) {
  */
 export function buildImageItems(images, startIndex = 1) {
   const items = [];
-  const seen = new Set();
+  // key -> { itemIndex, area }: the position a photo's first sighting won, and the
+  // sharpest variant placed so far, so a repeat can upgrade the URL without moving it.
+  const placed = new Map();
   let index = startIndex;
 
   for (const img of images) {
@@ -176,10 +200,19 @@ export function buildImageItems(images, startIndex = 1) {
     if (!url) continue;
     if (!isContentSized(img)) continue;
     const key = photoDedupeKey(url);
-    if (seen.has(key)) continue;
-    seen.add(key);
+    const area = variantArea(img.src);
+
+    const prior = placed.get(key);
+    if (prior) {
+      if (area > prior.area) {
+        items[prior.itemIndex].url = url;
+        prior.area = area;
+      }
+      continue;
+    }
 
     const id = extractPhotoId(url);
+    placed.set(key, { itemIndex: items.length, area });
     items.push({ url, type: 'image', filename: id ? `photo_${id}_${index}` : null });
     index++;
   }
