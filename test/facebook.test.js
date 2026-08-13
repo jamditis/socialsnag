@@ -63,6 +63,23 @@ describe('extractPhotoId', () => {
     expect(extractPhotoId('https://example.com/123456789')).toBeNull();
   });
 
+  it('does not infer an ID from the later token in an incomplete two-number filename', () => {
+    // The common three-number filename has a known stable second token. This shorter
+    // two-number form does not, so it must use the URL fallback instead of guessing.
+    const url = 'https://scontent.xx.fbcdn.net/v/t1/t39.30808-6/279440742_10158000000000000_n.jpg';
+    expect(extractPhotoId(url)).toBeNull();
+  });
+
+  it('extracts the stable second token from a common three-number fbcdn filename', () => {
+    const url = `${CDN}/339409443_690803322735653_7226034513706708994_n.jpg`;
+    expect(extractPhotoId(url)).toBe('690803322735653');
+  });
+
+  it('extracts the stable second token when the trailing fbcdn hash is short', () => {
+    const url = `${CDN}/309_60979110450_4203_n.jpg?oh=AAA&oe=111`;
+    expect(extractPhotoId(url)).toBe('60979110450');
+  });
+
   it('returns null for null input', () => {
     expect(extractPhotoId(null)).toBeNull();
   });
@@ -223,6 +240,60 @@ describe('buildImageItems', () => {
     const { items } = buildImageItems([img(`${CDN}/s320x320/111111111111_n.jpg`)], 4);
     expect(items[0].filename).toBe('photo_111111111111_4');
   });
+
+  it('collapses signature-param variants of one photo by its stable id', () => {
+    // Facebook re-renders one slide with fresh oh=/oe= tokens at the same size.
+    // upgradeUrl leaves the query alone, so a URL key would count these two as
+    // separate photos; the id does not. Same resolution, so first-seen wins the tie.
+    const { items } = buildImageItems([
+      img(`${CDN}/s320x320/123456789012_n.jpg?oh=AAA&oe=111`, 320),
+      img(`${CDN}/s320x320/123456789012_n.jpg?oh=BBB&oe=222`, 320),
+    ]);
+    expect(items).toHaveLength(1);
+    expect(items[0].url).toBe(`${CDN}/123456789012_n.jpg?oh=AAA&oe=111`);
+    expect(items[0].filename).toBe('photo_123456789012_1');
+  });
+
+  it('keeps the full-size variant when a photo repeats larger in the stp query', () => {
+    // Facebook encodes size in the stp query token for an opened photo: the grid
+    // thumbnail ?stp=..._s320x320_... then the full render ?stp=..._p2048x2048_...
+    // upgradeUrl strips only path sizes, so these keep distinct query strings under one
+    // id, and first-seen would hand back the thumbnail. The sharper render must win.
+    const { items } = buildImageItems([
+      img(`${CDN}/123456789012_n.jpg?stp=dst-jpg_s320x320_tt6`, 320),
+      img(`${CDN}/123456789012_n.jpg?stp=dst-jpg_p2048x2048_tt6`, 2048),
+    ]);
+    expect(items).toHaveLength(1);
+    expect(items[0].url).toBe(`${CDN}/123456789012_n.jpg?stp=dst-jpg_p2048x2048_tt6`);
+  });
+
+  it('upgrades a repeated photo to its sharper query variant without moving it', () => {
+    // The full render arrives after a later slide, so the upgrade must land at the
+    // first slide's position, not the tail. Pins that resolution preference does not
+    // disturb document order or spend an extra index on the repeat.
+    const { items, index } = buildImageItems([
+      img(`${CDN}/111111111111_n.jpg?stp=dst-jpg_s320x320_tt6`, 320),
+      img(`${CDN}/222222222222_n.jpg`, 500),
+      img(`${CDN}/111111111111_n.jpg?stp=dst-jpg_p2048x2048_tt6`, 2048),
+    ]);
+    expect(items.map((i) => i.url)).toEqual([
+      `${CDN}/111111111111_n.jpg?stp=dst-jpg_p2048x2048_tt6`,
+      `${CDN}/222222222222_n.jpg`,
+    ]);
+    expect(index).toBe(3);
+  });
+
+  it('keeps two id-less photos separate by their normalized URL', () => {
+    // With no id to key on, distinct URLs must not collapse into one.
+    const { items } = buildImageItems([
+      img(`${CDN}/s320x320/left_n.jpg`),
+      img(`${CDN}/s320x320/right_n.jpg`),
+    ]);
+    expect(items.map((i) => i.url)).toEqual([
+      `${CDN}/left_n.jpg`,
+      `${CDN}/right_n.jpg`,
+    ]);
+  });
 });
 
 describe('buildCapturedItems', () => {
@@ -314,6 +385,42 @@ describe('buildCapturedItems', () => {
   it('numbers from one, since it only runs when the DOM walk found nothing', () => {
     const { items } = buildCapturedItems([cap(`${CDN}/a_n.jpg`), cap(`${CDN}/b_n.jpg`)], 5);
     expect(items.map((i) => i.filename)).toEqual(['photo_1', 'photo_2']);
+  });
+
+  it('collapses signature-param variants by id and downloads the latest', () => {
+    // Two captures of one photo with fresh oh=/oe= tokens. The size strip leaves the
+    // query, so only the photo id collapses them; the latest sighting is what counts.
+    const { items } = buildCapturedItems([
+      cap(`${CDN}/s320x320/123456789012_n.jpg?oh=AAA&oe=111`),
+      cap(`${CDN}/p720x720/123456789012_n.jpg?oh=BBB&oe=222`),
+    ], 5);
+    expect(items).toHaveLength(1);
+    expect(items[0].url).toBe(`${CDN}/123456789012_n.jpg?oh=BBB&oe=222`);
+  });
+
+  it('keeps the sharpest captured query variant while refreshing its recency', () => {
+    const { items } = buildCapturedItems([
+      cap(`${CDN}/111111111111_n.jpg?stp=dst-jpg_p2048x2048_tt6`),
+      cap(`${CDN}/222222222222_n.jpg`),
+      cap(`${CDN}/111111111111_n.jpg?stp=dst-jpg_s320x320_tt6`),
+    ], 2);
+    expect(items.map((i) => i.url)).toEqual([
+      `${CDN}/222222222222_n.jpg`,
+      `${CDN}/111111111111_n.jpg?stp=dst-jpg_p2048x2048_tt6`,
+    ]);
+  });
+
+  it('collapses common three-number filename variants by the stable second token', () => {
+    const { items } = buildCapturedItems([
+      cap(`${CDN}/339409443_690803322735653_7226034513706708994_n.jpg?oh=AAA&oe=111`),
+      cap(`${CDN}/339409443_690803322735653_7226034513706708994_n.jpg?oh=BBB&oe=222`),
+    ], 5);
+    expect(items).toHaveLength(1);
+  });
+
+  it('keeps two id-less captures separate by their URL', () => {
+    const { items } = buildCapturedItems([cap(`${CDN}/left_n.jpg`), cap(`${CDN}/right_n.jpg`)], 5);
+    expect(items.map((i) => i.url)).toEqual([`${CDN}/left_n.jpg`, `${CDN}/right_n.jpg`]);
   });
 });
 

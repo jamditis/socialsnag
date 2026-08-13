@@ -19,8 +19,39 @@ export function upgradeUrl(url) {
 
 export function extractPhotoId(url) {
   if (!url) return null;
+  const threeNumberFilename = url.match(/\/\d+_(\d{10,})_\d+_n(?:\.[^/?#]+)?(?:[?#]|$)/);
+  if (threeNumberFilename) return threeNumberFilename[1];
   const match = url.match(/\/(\d{10,})/);
   return match ? match[1] : null;
+}
+
+// Dedupe identity for an already-upgraded fbcdn URL. The photo id is fbcdn's own
+// asset number, so it is the stable attribute two renders of one photo share even
+// when their size segment and their oh=/oe= signature params differ. Key on it when
+// the URL carries one, and fall back to the normalized URL when it does not, so an
+// id-less URL still dedupes against an exact repeat. Keys are namespaced so an id
+// can never collide with a URL that happens to equal it.
+function photoDedupeKey(upgradedUrl) {
+  const id = extractPhotoId(upgradedUrl);
+  return id ? `id:${id}` : `url:${upgradedUrl}`;
+}
+
+// Pixel area an fbcdn URL encodes, used to pick the sharpest render of one photo.
+// Size lives either in a /sWxH/ or /pWxH/ path segment or in an stp query token such
+// as dst-jpg_s320x320 / _p2048x2048. Score the raw src, since upgradeUrl strips the
+// path size before this sees it. A URL with no size token is the unconstrained
+// original, so it outranks every sized variant.
+function variantArea(url) {
+  if (!url) return 0;
+  const re = new RegExp('[/_][sp](\\d+)x(\\d+)', 'g');
+  let best = 0;
+  let sized = false;
+  let m;
+  while ((m = re.exec(url)) !== null) {
+    sized = true;
+    best = Math.max(best, Number(m[1]) * Number(m[2]));
+  }
+  return sized ? best : Infinity;
 }
 
 export function extractVideoUrlFromScripts(scriptTexts) {
@@ -137,16 +168,23 @@ export function extractSubmittedVideoUrl(scriptTexts, videoIds) {
 /**
  * Turn a post's <img> elements into download items, in document order.
  *
- * Deduping is the point. upgradeUrl strips the size segment from an fbcdn path, so
- * it is a normalizer: the grid thumbnail `/s320x320/123_n.jpg` and the full view
- * `/p720x720/123_n.jpg` are different `src` values that name the same photo and
- * upgrade to one identical URL. Facebook renders both for a single album slide, so
- * without a dedupe the normalizer manufactures duplicates, and the `_${index}`
- * suffix hides them: one photo saved twice reads as a two-photo album.
+ * Deduping is the point, and it keys on the stable fbcdn photo id, not on the URL.
+ * upgradeUrl strips the size segment, so the grid thumbnail `/s320x320/123_n.jpg`
+ * and the full view `/p720x720/123_n.jpg` already collapse to one URL. But Facebook
+ * also re-renders one slide with fresh `oh=`/`oe=` signature params, which the size
+ * strip leaves in place, so a URL key would count those two as separate photos. photoDedupeKey
+ * uses extractPhotoId (fbcdn's own asset number), so every render of one slide
+ * collapses to a single item regardless of size or signature; a URL with no id
+ * falls back to the normalized URL. Without this the `_${index}` suffix hides the
+ * repeats: one photo saved twice reads as a two-photo album.
  *
- * The first variant seen wins, which keeps document order intact. Document order is
- * what makes album ordering stable, since querySelectorAll returns it and it matches
- * how the slides read on the page.
+ * The first variant seen holds its position, which keeps document order intact.
+ * Document order is what makes album ordering stable, since querySelectorAll returns
+ * it and it matches how the slides read on the page. But size can also live in the stp
+ * query token, which upgradeUrl does not strip, so a grid thumbnail
+ * (?stp=..._s320x320_...) and the opened full view (?stp=..._p2048x2048_...) keep
+ * distinct URLs under one id. First-seen alone would hand back the thumbnail, so a
+ * sharper later render replaces the URL at the position its first sighting won.
  *
  * @param {Array<{src: string, width?: number, naturalWidth?: number}>} images
  * @param {number} startIndex first filename suffix to use
@@ -154,17 +192,29 @@ export function extractSubmittedVideoUrl(scriptTexts, videoIds) {
  */
 export function buildImageItems(images, startIndex = 1) {
   const items = [];
-  const seen = new Set();
+  // key -> { itemIndex, area }: the position a photo's first sighting won, and the
+  // sharpest variant placed so far, so a repeat can upgrade the URL without moving it.
+  const placed = new Map();
   let index = startIndex;
 
   for (const img of images) {
     const url = upgradeUrl(img.src);
     if (!url) continue;
     if (!isContentSized(img)) continue;
-    if (seen.has(url)) continue;
-    seen.add(url);
+    const key = photoDedupeKey(url);
+    const area = variantArea(img.src);
+
+    const prior = placed.get(key);
+    if (prior) {
+      if (area > prior.area) {
+        items[prior.itemIndex].url = url;
+        prior.area = area;
+      }
+      continue;
+    }
 
     const id = extractPhotoId(url);
+    placed.set(key, { itemIndex: items.length, area });
     items.push({ url, type: 'image', filename: id ? `photo_${id}_${index}` : null });
     index++;
   }
@@ -181,11 +231,11 @@ export function buildImageItems(images, startIndex = 1) {
  * thumbnail and then full size is captured twice, and keying on the raw URL would
  * treat those as two photos while handing back the thumbnail to download.
  *
- * That normalization is partial, and the limit is worth stating rather than implying.
- * upgradeUrl strips the size segment from the path and nothing else, so two captures
- * of one photo that also differ in their `oh=` / `oe=` signature parameters survive
- * as separate entries. This collapses the size-variant case, which is the common one,
- * and does not claim to collapse every duplicate.
+ * Identity is the stable fbcdn photo id via photoDedupeKey, the same key the DOM
+ * path uses, so two captures of one photo collapse whether they differ in size or in
+ * their `oh=` / `oe=` signature parameters. A capture whose URL carries no id falls
+ * back to its normalized URL, so an id-less repeat still collapses while two distinct
+ * id-less photos stay separate.
  *
  * Capture order is network arrival order, not page order, so this cannot recover
  * album ordering the way the DOM path does. What it can do is be deterministic:
@@ -209,7 +259,9 @@ export function buildImageItems(images, startIndex = 1) {
  */
 export function buildCapturedItems(captured, limit = 5) {
   // A Map keeps insertion order, so deleting before setting moves a repeated photo
-  // to the end and leaves the keys in last-seen order.
+  // to the end and leaves it in last-seen order. Keyed by photoDedupeKey (the photo
+  // id, or the URL when it carries none); the value holds the sharpest URL variant
+  // seen for that photo and its area. Recency still follows the latest request.
   const lastSeen = new Map();
 
   for (const c of captured) {
@@ -217,11 +269,15 @@ export function buildCapturedItems(captured, limit = 5) {
     // upgradeUrl carries the host check, so a lookalike host returns null here.
     const url = upgradeUrl(c.url);
     if (!url) continue;
-    lastSeen.delete(url);
-    lastSeen.set(url, true);
+    const key = photoDedupeKey(url);
+    const area = variantArea(c.url);
+    const prior = lastSeen.get(key);
+    const variant = prior && prior.area > area ? prior : { url, area };
+    lastSeen.delete(key);
+    lastSeen.set(key, variant);
   }
 
-  const distinct = [...lastSeen.keys()];
+  const distinct = [...lastSeen.values()].map(({ url }) => url);
   // Keep the most recent, which are the likeliest to belong to the post just opened.
   const kept = distinct.slice(-limit);
   let index = 1;
