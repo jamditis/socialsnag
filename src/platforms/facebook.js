@@ -19,7 +19,7 @@ export function upgradeUrl(url) {
 
 export function extractPhotoId(url) {
   if (!url) return null;
-  const threeNumberFilename = url.match(/\/\d+_(\d{10,})_\d{10,}_n(?:\.[^/?#]+)?(?:[?#]|$)/);
+  const threeNumberFilename = url.match(/\/\d+_(\d{10,})_\d+_n(?:\.[^/?#]+)?(?:[?#]|$)/);
   if (threeNumberFilename) return threeNumberFilename[1];
   const match = url.match(/\/(\d{10,})/);
   return match ? match[1] : null;

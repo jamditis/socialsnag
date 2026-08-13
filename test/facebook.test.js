@@ -75,6 +75,11 @@ describe('extractPhotoId', () => {
     expect(extractPhotoId(url)).toBe('690803322735653');
   });
 
+  it('extracts the stable second token when the trailing fbcdn hash is short', () => {
+    const url = `${CDN}/309_60979110450_4203_n.jpg?oh=AAA&oe=111`;
+    expect(extractPhotoId(url)).toBe('60979110450');
+  });
+
   it('returns null for null input', () => {
     expect(extractPhotoId(null)).toBeNull();
   });
