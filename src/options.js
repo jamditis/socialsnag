@@ -1,4 +1,4 @@
-'use strict';
+import { FOLDER_TOKENS, renderTemplate, templateFieldError } from './platforms/common.js';
 
 if (typeof document !== 'undefined') {
   const PLATFORMS = ['instagram', 'twitter', 'facebook', 'bluesky'];
@@ -12,6 +12,44 @@ if (typeof document !== 'undefined') {
     linkedin: ['*://*.linkedin.com/*', '*://*.media.licdn.com/*'],
   };
 
+  // One sample post, the same field bag resolveBaseFilename builds for a real
+  // download, so the live previews show exactly what a template would produce.
+  // formatLocalDate lives in the background bundle, which the options page does
+  // not import; today's date in the user's own timezone is the two lines below.
+  const pad = (n) => String(n).padStart(2, '0');
+  const now = new Date();
+  const SAMPLE_FIELDS = {
+    platform: 'twitter',
+    // 'image' or 'video' are the only types a resolver emits; 'photo' would render a
+    // {type} the download never produces, so the preview would promise the wrong name.
+    type: 'image',
+    postId: '1234567890',
+    username: 'janedoe',
+    index: 1,
+    date: `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`,
+  };
+
+  const showFieldError = (id, reason) => {
+    const el = document.getElementById(id);
+    el.textContent = reason || '';
+    el.hidden = !reason;
+  };
+
+  // Validate both template fields on every input and show the reason inline.
+  // Returns the two errors so the save path can decide what is safe to persist.
+  const refreshFieldErrors = () => {
+    const filenameErr = templateFieldError(
+      document.getElementById('filename-template').value.trim(),
+    );
+    const pathErr = templateFieldError(
+      document.getElementById('download-path').value.trim(),
+      { allowSlash: true, allowedTokens: FOLDER_TOKENS },
+    );
+    showFieldError('filename-template-error', filenameErr);
+    showFieldError('download-path-error', pathErr);
+    return { filenameErr, pathErr };
+  };
+
   const saveSettings = () => {
     const settings = {};
 
@@ -21,9 +59,19 @@ if (typeof document !== 'undefined') {
 
 
     settings.showNotifications = document.getElementById('notifications-toggle').checked;
-    settings.downloadPath = document.getElementById('download-path').value.trim() || 'SocialSnag/{platform}';
     settings.zipMultiPosts = document.getElementById('zip-toggle').checked;
     settings.resolverDebug = document.getElementById('resolver-debug-toggle').checked;
+
+    // Refuse to persist an invalid template: keep the last good value stored so a
+    // typo mid-edit does not overwrite a working setting. chrome.storage.sync.set
+    // writes only the keys it is given, so omitting one leaves its stored value.
+    const { filenameErr, pathErr } = refreshFieldErrors();
+    if (filenameErr === null) {
+      settings.filenameTemplate = document.getElementById('filename-template').value.trim();
+    }
+    if (pathErr === null) {
+      settings.downloadPath = document.getElementById('download-path').value.trim() || 'SocialSnag/{platform}';
+    }
 
     const advancedCheckbox = document.getElementById('advanced-toggle');
 
@@ -58,6 +106,7 @@ if (typeof document !== 'undefined') {
       showNotifications: true,
       advancedMode: false,
       downloadPath: 'SocialSnag/{platform}',
+      filenameTemplate: '',
       zipMultiPosts: false,
       resolverDebug: false,
     };
@@ -69,6 +118,7 @@ if (typeof document !== 'undefined') {
       document.getElementById('zip-toggle').checked = items.zipMultiPosts;
       document.getElementById('resolver-debug-toggle').checked = items.resolverDebug;
       document.getElementById('download-path').value = items.downloadPath;
+      document.getElementById('filename-template').value = items.filenameTemplate;
       PLATFORMS.forEach((p) => {
         document.getElementById(`${p}-toggle`).checked = items[`platform_${p}`];
       });
@@ -82,6 +132,8 @@ if (typeof document !== 'undefined') {
         });
       });
       updatePathPreview();
+      updateFilenamePreview();
+      refreshFieldErrors();
     });
   };
 
@@ -106,14 +158,49 @@ if (typeof document !== 'undefined') {
   };
 
   function updatePathPreview() {
-    const pathInput = document.getElementById('download-path');
     const preview = document.getElementById('path-preview');
-    const val = pathInput.value.trim() || 'SocialSnag/{platform}';
+    const val = document.getElementById('download-path').value.trim() || 'SocialSnag/{platform}';
+    // An invalid folder has no honest preview; the inline error carries the reason.
+    if (templateFieldError(val, { allowSlash: true, allowedTokens: FOLDER_TOKENS }) !== null) {
+      preview.hidden = true;
+      return;
+    }
+    preview.hidden = false;
+    // The folder substitutes {platform} only; sanitizeDownloadPath leaves every other
+    // token literal, and moving the folder onto the full template is tracked separately.
+    // Preview what a download actually writes: an other token stays unrendered here
+    // exactly as it would in the saved path, rather than promising a value it drops.
     const example = val.replace(/\{platform\}/g, 'twitter');
     preview.textContent = `Downloads / ${example.replace(/[/\\]/g, ' / ')} / photo.jpg`;
   }
 
-  let pathDebounce = null;
+  function updateFilenamePreview() {
+    const preview = document.getElementById('filename-preview');
+    const value = document.getElementById('filename-template').value.trim();
+    // Empty keeps each platform's own name; show the resolver's real shape for the
+    // sample post (Twitter names a photo tweet_<id>), not the platform_index string
+    // that is only the last-resort fallback when a resolver returns no name at all.
+    if (value === '') {
+      preview.hidden = false;
+      preview.textContent = `tweet_${SAMPLE_FIELDS.postId}.jpg`;
+      return;
+    }
+    if (templateFieldError(value) !== null) {
+      preview.hidden = true;
+      return;
+    }
+    preview.hidden = false;
+    preview.textContent = `${renderTemplate(value, SAMPLE_FIELDS)}.jpg`;
+  }
+
+  let saveDebounce = null;
+  const onTemplateInput = (updatePreview) => {
+    updatePreview();
+    refreshFieldErrors();
+    clearTimeout(saveDebounce);
+    saveDebounce = setTimeout(saveSettings, 500);
+  };
+
   document.addEventListener('DOMContentLoaded', () => {
     restoreOptions();
 
@@ -127,11 +214,8 @@ if (typeof document !== 'undefined') {
     document.getElementById('notifications-toggle').addEventListener('change', saveSettings);
     document.getElementById('zip-toggle').addEventListener('change', saveSettings);
     document.getElementById('resolver-debug-toggle').addEventListener('change', saveSettings);
-    document.getElementById('download-path').addEventListener('input', () => {
-      updatePathPreview();
-      clearTimeout(pathDebounce);
-      pathDebounce = setTimeout(saveSettings, 500);
-    });
+    document.getElementById('download-path').addEventListener('input', () => onTemplateInput(updatePathPreview));
+    document.getElementById('filename-template').addEventListener('input', () => onTemplateInput(updateFilenamePreview));
     document.getElementById('open-downloads').addEventListener('click', () => {
       chrome.downloads.showDefaultFolder();
     });

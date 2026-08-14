@@ -69,6 +69,13 @@ export const TEMPLATE_TOKENS = [
 // id the resolver could not find, a platform with no username in the DOM.
 export const ALWAYS_PRESENT_TOKENS = ['platform', 'type', 'index', 'date'];
 
+// The tokens the folder actually renders. sanitizeDownloadPath still substitutes
+// {platform} only, so the folder field is validated against this subset rather than
+// the whole vocabulary: a folder naming {date} or {username} would otherwise save
+// clean and then write a literal `{date}` folder to disk. Widen to TEMPLATE_TOKENS
+// when the folder moves onto renderTemplate (tracked separately, see above).
+export const FOLDER_TOKENS = ['platform'];
+
 /**
  * Render a template against a field bag.
  *
@@ -142,10 +149,16 @@ export function renderTemplate(template, fields) {
  * invisible until they look at their downloads folder.
  *
  * @param {string} template
- * @param {{allowSlash?: boolean}} [options] folder templates may nest, filenames may not
+ * @param {{allowSlash?: boolean, allowedTokens?: string[]}} [options] folder templates
+ *   may nest (allowSlash) but render a smaller vocabulary (allowedTokens); filenames
+ *   take the whole set and reject slashes. allowedTokens defaults to every token.
  * @returns {{valid: true} | {valid: false, reason: string}}
  */
 export function validateTemplate(template, options = {}) {
+  // The filename accepts the whole vocabulary; the folder is passed FOLDER_TOKENS
+  // because sanitizeDownloadPath renders only those, so a token it would leave literal
+  // is rejected here before it is saved rather than surface as a `{date}` folder.
+  const allowedTokens = options.allowedTokens || TEMPLATE_TOKENS;
   if (typeof template !== 'string' || template.trim() === '') {
     return { valid: false, reason: 'Template is empty.' };
   }
@@ -165,12 +178,12 @@ export function validateTemplate(template, options = {}) {
     ...new Set(
       Array.from(template.matchAll(/\{([^}]*)\}/g))
         .map((m) => m[1])
-        .filter((name) => !TEMPLATE_TOKENS.includes(name)),
+        .filter((name) => !allowedTokens.includes(name)),
     ),
   ];
   if (unknown.length > 0) {
     const wrote = unknown.map((u) => `{${u}}`).join(', ');
-    const available = TEMPLATE_TOKENS.map((t) => `{${t}}`).join(', ');
+    const available = allowedTokens.map((t) => `{${t}}`).join(', ');
     return {
       valid: false,
       reason: `Unknown token ${wrote}. Available: ${available}. Tokens are case-sensitive.`,
@@ -207,6 +220,26 @@ export function validateTemplate(template, options = {}) {
   }
 
   return { valid: true };
+}
+
+/**
+ * Decide whether a user-supplied template field is acceptable to save.
+ *
+ * An empty field is acceptable: it selects the field's default. The filename
+ * default keeps each platform's own name, the folder default is
+ * `SocialSnag/{platform}`, and both download paths already honor an empty value.
+ * validateTemplate rejects an empty string on purpose -- a template that must
+ * render a name cannot be blank -- so the two opt-in options fields ask this
+ * instead, then run the shared validator once there is something to check.
+ *
+ * @param {string} value the raw field value
+ * @param {{allowSlash?: boolean}} [options] forwarded to validateTemplate
+ * @returns {string|null} the reason to show inline, or null when the value is fine
+ */
+export function templateFieldError(value, options = {}) {
+  if (typeof value !== 'string' || value.trim() === '') return null;
+  const result = validateTemplate(value, options);
+  return result.valid ? null : result.reason;
 }
 
 export function extractId(url, pattern) {

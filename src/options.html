@@ -70,9 +70,17 @@
               <span class="toggle-label">Download folder</span>
               <button id="open-downloads" class="small-btn" title="Open Downloads folder">Open folder</button>
             </div>
-            <p class="toggle-description">Subfolder inside your browser's Downloads directory. Use <code>{platform}</code> to auto-sort by platform.</p>
+            <p class="toggle-description">Subfolder inside your browser's Downloads directory. Use <code>{platform}</code> to sort by platform, and <code>/</code> to nest. Leave blank for <code>SocialSnag/{platform}</code>.</p>
             <input type="text" id="download-path" class="text-input" value="SocialSnag/{platform}" spellcheck="false">
+            <p class="field-error" id="download-path-error" hidden></p>
             <p class="path-preview" id="path-preview">Downloads / SocialSnag / twitter / photo.jpg</p>
+          </div>
+          <div class="toggle-row" style="flex-direction: column; align-items: stretch;">
+            <span class="toggle-label">Filename template</span>
+            <p class="toggle-description">Name each downloaded file from these tokens: <code>{platform}</code>, <code>{type}</code>, <code>{postId}</code>, <code>{username}</code>, <code>{index}</code>, <code>{date}</code>. Tokens are case-sensitive, and a filename cannot contain <code>/</code> (use the folder above to nest). Leave blank to keep each platform's own filename.</p>
+            <input type="text" id="filename-template" class="text-input" placeholder="{platform}_{postId}_{index}" spellcheck="false">
+            <p class="field-error" id="filename-template-error" hidden></p>
+            <p class="path-preview" id="filename-preview">tweet_1234567890.jpg</p>
           </div>
           <div class="toggle-row">
             <div>
