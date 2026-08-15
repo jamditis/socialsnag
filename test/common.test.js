@@ -8,8 +8,10 @@ import {
   extractId,
   TEMPLATE_TOKENS,
   ALWAYS_PRESENT_TOKENS,
+  FOLDER_TOKENS,
   renderTemplate,
   validateTemplate,
+  templateFieldError,
   findNearestMedia,
   platformLabel,
   classifyFailure,
@@ -363,6 +365,60 @@ describe('validateTemplate', () => {
     for (const token of ALWAYS_PRESENT_TOKENS) {
       expect(TEMPLATE_TOKENS).toContain(token);
     }
+  });
+
+  // The folder renders {platform} only; validating it against the full vocabulary
+  // would accept {date} or {username} and then write a literal `{date}` folder to
+  // disk. allowedTokens restricts the folder to the tokens it can actually expand.
+  it('restricts a template to allowedTokens when given', () => {
+    const opts = { allowSlash: true, allowedTokens: FOLDER_TOKENS };
+    expect(validateTemplate('SocialSnag/{platform}', opts).valid).toBe(true);
+    const rejected = validateTemplate('shots/{date}', opts);
+    expect(rejected.valid).toBe(false);
+    expect(rejected.reason).toContain('{date}');
+    // A token outside the subset is named "unknown" against the subset, so the
+    // reason lists {platform} as what is available here, not the whole vocabulary.
+    expect(rejected.reason).toContain('{platform}');
+    expect(rejected.reason).not.toContain('{username}');
+  });
+
+  // FOLDER_TOKENS is a subset of the vocabulary. If the folder is later widened to
+  // the full set, this stays true; a token invented for the folder alone would not.
+  it('keeps FOLDER_TOKENS inside the vocabulary', () => {
+    for (const token of FOLDER_TOKENS) {
+      expect(TEMPLATE_TOKENS).toContain(token);
+    }
+  });
+});
+
+describe('templateFieldError', () => {
+  // Empty is the opt-out for both option fields: the filename keeps each
+  // platform's own name, the folder falls back to its default. validateTemplate
+  // rejects empty on purpose, so this is the gate the options page asks instead.
+  it('treats an empty or blank value as acceptable', () => {
+    expect(templateFieldError('')).toBe(null);
+    expect(templateFieldError('   ')).toBe(null);
+    expect(templateFieldError(undefined)).toBe(null);
+  });
+
+  it('accepts a valid template, forwarding the folder allowSlash option', () => {
+    expect(templateFieldError('{platform}_{postId}_{index}')).toBe(null);
+    expect(templateFieldError('shots/{platform}', { allowSlash: true })).toBe(null);
+  });
+
+  it('returns the validator reason for an invalid template', () => {
+    expect(templateFieldError('{postid}')).toContain('Unknown token');
+    // A slash is a filename error but a valid folder, so the option decides.
+    expect(templateFieldError('{platform}/{postId}')).toContain('cannot contain');
+    expect(templateFieldError('{platform}/{postId}', { allowSlash: true })).toBe(null);
+  });
+
+  // The options page passes the folder's allowedTokens through this wrapper, so the
+  // subset restriction has to survive the forwarding, not just the direct call.
+  it('forwards allowedTokens so the folder rejects a token it cannot render', () => {
+    const opts = { allowSlash: true, allowedTokens: FOLDER_TOKENS };
+    expect(templateFieldError('SocialSnag/{platform}', opts)).toBe(null);
+    expect(templateFieldError('{username}/{platform}', opts)).toContain('{username}');
   });
 });
 
