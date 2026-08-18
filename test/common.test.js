@@ -5,6 +5,7 @@ import {
   hostMatches,
   isHttps,
   sanitizeFilename,
+  withItemMeta,
   extractId,
   TEMPLATE_TOKENS,
   ALWAYS_PRESENT_TOKENS,
@@ -16,6 +17,23 @@ import {
   platformLabel,
   classifyFailure,
 } from '../src/platforms/common.js';
+
+describe('withItemMeta', () => {
+  it('adds only present values as strings and preserves the item fields', () => {
+    const item = { url: 'https://example.test/media.jpg', filename: 'original_name' };
+
+    expect(withItemMeta(item, { postId: 123, username: 'someone' })).toEqual({
+      ...item,
+      meta: { postId: '123', username: 'someone' },
+    });
+  });
+
+  it('omits meta when no verified value is available', () => {
+    const item = { filename: null };
+    expect(withItemMeta(item, { postId: '', username: null })).toBe(item);
+    expect(withItemMeta(item, null)).toBe(item);
+  });
+});
 
 describe('ALLOWED_DOMAINS', () => {
   it('contains 7 expected CDN domains', () => {

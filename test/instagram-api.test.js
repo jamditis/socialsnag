@@ -118,12 +118,36 @@ describe('parsePostMedia', () => {
   it('parses a single image post', () => {
     const json = { items: [imgSlide('https://cdn.cdninstagram.com/one.jpg')] };
     const out = parsePostMedia(json, 'ABC');
-    expect(out).toEqual([{ url: 'https://cdn.cdninstagram.com/one.jpg', type: 'image', filename: 'post_ABC', index: 1 }]);
+    expect(out).toEqual([{
+      url: 'https://cdn.cdninstagram.com/one.jpg',
+      type: 'image',
+      filename: 'post_ABC',
+      index: 1,
+      meta: { postId: 'ABC' },
+    }]);
   });
   it('parses a single video post', () => {
     const json = { items: [vidSlide('https://cdn.cdninstagram.com/v.mp4')] };
     const out = parsePostMedia(json, 'ABC');
-    expect(out).toEqual([{ url: 'https://cdn.cdninstagram.com/v.mp4', type: 'video', filename: 'reel_ABC', index: 1 }]);
+    expect(out).toEqual([{
+      url: 'https://cdn.cdninstagram.com/v.mp4',
+      type: 'video',
+      filename: 'reel_ABC',
+      index: 1,
+      meta: { postId: 'ABC' },
+    }]);
+  });
+  it('uses the API author only when the post response supplies it', () => {
+    const json = {
+      items: [{
+        ...imgSlide('https://cdn.cdninstagram.com/one.jpg'),
+        user: { username: 'reliable_user' },
+      }],
+    };
+    expect(parsePostMedia(json, 'ABC')[0].meta).toEqual({
+      postId: 'ABC',
+      username: 'reliable_user',
+    });
   });
   it('parses a mixed carousel in order', () => {
     const json = { items: [{ carousel_media: [imgSlide('i1'), vidSlide('v2'), imgSlide('i3')] }] };
@@ -167,9 +191,13 @@ describe('parseStoryTray', () => {
     { pk: '222', video_versions: [{ url: 'b', width: 720 }] },
   ] }] };
   it('returns all active stories when no storyId', () => {
-    const out = parseStoryTray(tray, {});
+    const out = parseStoryTray(tray, { username: 'natgeo' });
     expect(out.map((o) => o.url)).toEqual(['a', 'b']);
     expect(out.map((o) => o.type)).toEqual(['image', 'video']);
+    expect(out.map((o) => o.meta)).toEqual([
+      { postId: '111', username: 'natgeo' },
+      { postId: '222', username: 'natgeo' },
+    ]);
   });
   it('returns only the matching story when storyId given', () => {
     const out = parseStoryTray(tray, { storyId: '222' });

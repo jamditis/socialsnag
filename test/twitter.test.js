@@ -5,6 +5,7 @@ import {
   isTwitterStatusHref,
   insideQuotedTweet,
   findTweetScope,
+  statusMetaInScope,
   statusIdInScope,
   scopeHasVideo,
   imageInScope,
@@ -424,6 +425,21 @@ describe('statusIdInScope', () => {
     expect(found.scope).toBe(article);
     expect(statusIdInScope(found)).toBe('111');
   });
+
+  it('does not guess a username from an /i/web/status/ permalink', () => {
+    const status = makeNode({ tag: 'A', href: '/i/web/status/111' });
+    const image = makeNode({ tag: 'IMG', src: 'https://pbs.twimg.com/media/MAIN.jpg' });
+    const article = makeNode({
+      tag: 'ARTICLE',
+      is: ['article[data-testid="tweet"]', 'article[role="article"]'],
+      children: [status, image],
+    });
+
+    expect(statusMetaInScope(findTweetScope(image))).toEqual({
+      postId: '111',
+      username: null,
+    });
+  });
 });
 
 describe('imageInScope', () => {
@@ -484,6 +500,7 @@ describe('resolveAll', () => {
     const items = resolveAll(t.article);
     expect(items).toHaveLength(1);
     expect(items[0].url).toContain('MAIN.jpg');
+    expect(items[0].meta).toEqual({ postId: '111', username: 'main' });
     expect(items.some((i) => i.url.includes('QUOTE.jpg'))).toBe(false);
   });
 
@@ -531,6 +548,7 @@ describe('resolvePage', () => {
       filename: 'tweet_111',
       tweetId: '111',
       needsVideoLookup: true,
+      meta: { postId: '111', username: 'main' },
     });
   });
 
@@ -567,6 +585,7 @@ describe('resolvePage', () => {
       filename: 'tweet_333',
       tweetId: '333',
       needsVideoLookup: true,
+      meta: { postId: '333', username: 'user' },
     }]);
     expect(items.filter((item) => item.type === 'image')).toHaveLength(19);
   });
@@ -641,6 +660,7 @@ describe('resolvePage', () => {
         filename: 'tweet_444',
         tweetId: '444',
         needsVideoLookup: true,
+        meta: { postId: '444', username: 'user' },
       }]);
     } finally {
       chrome.runtime.sendMessage = originalSendMessage;

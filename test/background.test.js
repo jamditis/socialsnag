@@ -397,6 +397,7 @@ describe('resolveInstagramStories', () => {
 
     const { items } = await resolveInstagramStories({ username: 'x', storyId: null });
     expect(items.map((i) => i.url)).toEqual(['https://cdn.cdninstagram.com/s.jpg']);
+    expect(items[0].meta).toEqual({ postId: '1', username: 'x' });
   });
 
   it('returns only the viewed story when storyId matches', async () => {
@@ -1697,7 +1698,27 @@ describe('resolveViaApi miss classification', () => {
 
     const result = await resolveViaApi('twitter', 'https://x.com/a/status/123');
     expect(result.item?.url).toBe('https://video.twimg.com/x.mp4');
+    expect(result.item?.meta).toEqual({ postId: '123', username: 'a' });
     expect(dispatchLine()).toBe('socialsnag[twitter] api-dispatch: ok (1 item)');
+  });
+
+  it('keeps Instagram API metadata on the resolved video item', async () => {
+    globalThis.installFetch(() => ({
+      status: 200,
+      json: {
+        items: [{
+          user: { username: 'reliable_user' },
+          video_versions: [{
+            url: 'https://cdn.cdninstagram.com/video.mp4',
+            width: 1080,
+          }],
+        }],
+      },
+    }));
+
+    const result = await resolveViaApi('instagram', 'https://www.instagram.com/reel/ABC/');
+
+    expect(result.item?.meta).toEqual({ postId: 'ABC', username: 'reliable_user' });
   });
 
   it('stays silent when the user has not enabled debug', async () => {

@@ -105,6 +105,7 @@ describe('buildImageItems', () => {
       url: `${CDN}/photo.jpg`,
       type: 'image',
       filename: 'post_7012345678901234567_1',
+      meta: { postId: '7012345678901234567' },
     }]);
   });
 
@@ -133,6 +134,7 @@ describe('buildImageItems', () => {
       url: `${CDN}/photo.jpg`,
       type: 'image',
       filename: 'post_7012345678901234567_1',
+      meta: { postId: '7012345678901234567' },
     }]);
   });
 
@@ -152,6 +154,17 @@ describe('buildImageItems', () => {
   it('leaves the filename null when the page URL has no post id', () => {
     const { items } = buildImageItems([img(`${CDN}/a.jpg`, 500)]);
     expect(items[0].filename).toBeNull();
+    expect(items[0].meta).toBeUndefined();
+  });
+
+  it('adds a verified card id without changing the existing filename', () => {
+    const { items } = buildImageItems(
+      [img(`${CDN}/a.jpg`, 500)],
+      null,
+      '7099999999999999999',
+    );
+    expect(items[0].filename).toBeNull();
+    expect(items[0].meta).toEqual({ postId: '7099999999999999999' });
   });
 
   it('ignores images from outside the LinkedIn CDN', () => {

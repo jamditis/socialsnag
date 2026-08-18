@@ -114,6 +114,7 @@ describe('resolvePage', () => {
     expect(items[0]).toMatchObject({
       url: 'https://cdn.bsky.app/img/feed_fullsize/plain/did:plc:abc/3labc123xyz@jpeg',
       filename: 'post_3labc123xyz_1',
+      meta: { postId: '3labc123xyz', username: 'alice.bsky.social' },
     });
   });
 
@@ -132,6 +133,24 @@ describe('resolvePage', () => {
 
     expect(items).toHaveLength(1);
     expect(items[0].filename).toBe('post_3labc123xyz_1');
+  });
+
+  it('uses the selected reply identity without changing its existing page-based filename', async () => {
+    const reply = makePost('3lreply', 'did:plc:reply', 'reply.bsky.social');
+
+    const items = await resolveContentMessage(
+      { action: 'resolve', type: 'all' },
+      reply,
+      { querySelectorAll: () => [] },
+      '/profile/root.bsky.social/post/3lroot',
+    );
+
+    expect(items).toHaveLength(1);
+    expect(items[0].filename).toBe('post_3lroot_1');
+    expect(items[0].meta).toEqual({
+      postId: '3lreply',
+      username: 'reply.bsky.social',
+    });
   });
 
   it('does not select an unrelated feed item on a direct post page', async () => {
@@ -182,6 +201,10 @@ describe('resolvePage', () => {
     expect(items).toHaveLength(1);
     expect(items[0].url).toContain('did:plc:requested');
     expect(items[0].url).not.toContain('did:plc:other');
+    expect(items[0].meta).toEqual({
+      postId: '3lshared',
+      username: 'alice.bsky.social',
+    });
   });
 
   it('keeps handle submissions anchored to both account and post id', async () => {

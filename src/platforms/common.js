@@ -44,6 +44,23 @@ export function sanitizeFilename(name) {
     .replace(/[<>:"/\\|?*\x00-\x1f]/g, '_');
 }
 
+/**
+ * Add resolver metadata without changing the resolver's existing item fields.
+ * Empty values stay absent so optional filename tokens render as empty instead
+ * of receiving an unverified identifier.
+ */
+export function withItemMeta(item, identity = {}) {
+  const { postId = null, username = null } = identity || {};
+  const meta = {};
+  if (postId !== null && postId !== undefined && postId !== '') {
+    meta.postId = String(postId);
+  }
+  if (username !== null && username !== undefined && username !== '') {
+    meta.username = String(username);
+  }
+  return Object.keys(meta).length > 0 ? { ...item, meta } : item;
+}
+
 // --- Filename and folder templates ---
 
 // The token vocabulary. Used by the filename template today; the folder template

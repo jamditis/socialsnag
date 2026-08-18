@@ -162,11 +162,16 @@ describe('buildImageItems', () => {
       img(`${CDN}/s320x320/111111111111_n.jpg`),
       img(`${CDN}/s320x320/222222222222_n.jpg`),
       img(`${CDN}/s320x320/333333333333_n.jpg`),
-    ]);
+    ], 1, '9876543210');
     expect(items.map((i) => i.filename)).toEqual([
       'photo_111111111111_1',
       'photo_222222222222_2',
       'photo_333333333333_3',
+    ]);
+    expect(items.map((i) => i.meta)).toEqual([
+      { postId: '9876543210' },
+      { postId: '9876543210' },
+      { postId: '9876543210' },
     ]);
   });
 
@@ -385,6 +390,7 @@ describe('buildCapturedItems', () => {
   it('numbers from one, since it only runs when the DOM walk found nothing', () => {
     const { items } = buildCapturedItems([cap(`${CDN}/a_n.jpg`), cap(`${CDN}/b_n.jpg`)], 5);
     expect(items.map((i) => i.filename)).toEqual(['photo_1', 'photo_2']);
+    expect(items.every((item) => item.meta === undefined)).toBe(true);
   });
 
   it('collapses signature-param variants by id and downloads the latest', () => {
@@ -448,6 +454,7 @@ describe('resolvePage', () => {
 
     expect(items).toHaveLength(1);
     expect(items[0].url).toBe(`${CDN}/123456789012_n.jpg`);
+    expect(items[0].meta).toEqual({ postId: '1234567890' });
   });
 
   it('handles a resolvePage message without a stored right-click target', async () => {
@@ -486,6 +493,7 @@ describe('resolvePage', () => {
       url: `${CDN}/123456789012_n.jpg`,
       type: 'image',
       filename: 'photo_123456789012',
+      meta: { postId: '123456789012' },
     }]);
   });
 
@@ -602,6 +610,7 @@ describe('resolvePage', () => {
       url: 'https://video.xx.fbcdn.net/requested.mp4',
       type: 'video',
       filename: 'video_1234567890',
+      meta: { postId: '1234567890' },
     }]);
   });
 
@@ -723,6 +732,7 @@ describe('resolvePage', () => {
       url: 'https://video.xx.fbcdn.net/requested-hd.mp4',
       type: 'video',
       filename: 'video_1234567890',
+      meta: { postId: '1234567890' },
     }]);
   });
 

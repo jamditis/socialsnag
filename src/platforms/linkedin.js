@@ -5,6 +5,7 @@ import {
   findPostContainer,
   hostMatches,
   isContentSized,
+  withItemMeta,
 } from './common.js';
 
 // --- Pure functions (exported for testing) ---
@@ -62,9 +63,10 @@ export function isPostImage(url) {
  *
  * @param {Array<{src: string, width?: number, naturalWidth?: number}>} images
  * @param {string|null} postId names the files when the page URL carries one
+ * @param {string|null} metadataPostId verified owner for opt-in filename templates
  * @returns {{items: Array<object>, index: number}} items and the next free index
  */
-export function buildImageItems(images, postId = null) {
+export function buildImageItems(images, postId = null, metadataPostId = postId) {
   const items = [];
   const seen = new Set();
   let index = 1;
@@ -77,7 +79,10 @@ export function buildImageItems(images, postId = null) {
     if (seen.has(url)) continue;
     seen.add(url);
 
-    items.push({ url, type: 'image', filename: postId ? `post_${postId}_${index}` : null });
+    items.push(withItemMeta(
+      { url, type: 'image', filename: postId ? `post_${postId}_${index}` : null },
+      { postId: metadataPostId },
+    ));
     index++;
   }
 
@@ -87,10 +92,14 @@ export function buildImageItems(images, postId = null) {
 // --- Browser wiring (not exported) ---
 
 function resolveSingle(srcUrl, target) {
+  const postId = linkedinPostIdForTarget(target);
   const url = upgradeUrl(srcUrl);
   if (url) {
     const id = extractPostId(window.location.href);
-    return [{ url, type: 'image', filename: id ? `post_${id}` : null }];
+    return [withItemMeta(
+      { url, type: 'image', filename: id ? `post_${id}` : null },
+      { postId: postId || id },
+    )];
   }
 
   // If the click landed on an overlay, find the nearest media element.
@@ -99,7 +108,10 @@ function resolveSingle(srcUrl, target) {
     const upgraded = upgradeUrl(nearest.src);
     if (upgraded) {
       const id = extractPostId(window.location.href);
-      return [{ url: upgraded, type: 'image', filename: id ? `post_${id}` : null }];
+      return [withItemMeta(
+        { url: upgraded, type: 'image', filename: id ? `post_${id}` : null },
+        { postId: postId || id },
+      )];
     }
   }
 
@@ -108,7 +120,11 @@ function resolveSingle(srcUrl, target) {
   if (video) {
     const src = video.src || video.querySelector('source')?.src;
     if (src && !src.startsWith('blob:')) {
-      return [{ url: src, type: 'video', filename: null }];
+      const id = extractPostId(window.location.href);
+      return [withItemMeta(
+        { url: src, type: 'video', filename: null },
+        { postId: postId || id },
+      )];
     }
   }
 
@@ -124,10 +140,12 @@ function resolveAll(target) {
   if (!post) return resolveSingle(target?.src || '', target);
 
   const id = extractPostId(window.location.href);
+  const metadataPostId = linkedinPostIdFromContainer(post) || id;
   // querySelectorAll returns document order, which is the post's own image order.
   const { items, index: nextIndex } = buildImageItems(
     Array.from(post.querySelectorAll('img[src*="media.licdn.com"]')),
     id,
+    metadataPostId,
   );
   // The video sweep below continues the image numbering.
   let index = nextIndex;
@@ -135,12 +153,37 @@ function resolveAll(target) {
   post.querySelectorAll('video').forEach((video) => {
     const src = video.src || video.querySelector('source')?.src;
     if (src && !src.startsWith('blob:')) {
-      items.push({ url: src, type: 'video', filename: id ? `post_${id}_${index}` : null });
+      items.push(withItemMeta(
+        { url: src, type: 'video', filename: id ? `post_${id}_${index}` : null },
+        { postId: metadataPostId },
+      ));
       index++;
     }
   });
 
   return items.length > 0 ? items : resolveSingle(target?.src || '', target);
+}
+
+function linkedinPostIdFromContainer(container) {
+  const candidates = [
+    container?.dataset?.urn,
+    container?.getAttribute?.('data-urn'),
+    ...Array.from(container?.querySelectorAll?.('a[href]') || [], (link) => link.href),
+  ];
+  for (const candidate of candidates) {
+    const postId = extractPostId(candidate);
+    if (postId) return postId;
+  }
+  return null;
+}
+
+function linkedinPostIdForTarget(target) {
+  const container = findPostContainer(target, [
+    '.feed-shared-update-v2',
+    '[data-urn]',
+    '.social-details-social-activity',
+  ]);
+  return linkedinPostIdFromContainer(container);
 }
 
 function initContentScript() {

@@ -1,6 +1,12 @@
 // SocialSnag — Instagram content script
 
-import { findNearestMedia, findPostContainer, getCapturedMedia, hostMatches } from './common.js';
+import {
+  findNearestMedia,
+  findPostContainer,
+  getCapturedMedia,
+  hostMatches,
+  withItemMeta,
+} from './common.js';
 
 // --- Pure functions (exported for testing) ---
 
@@ -86,11 +92,11 @@ export function buildImageItems(images, shortcode, startIndex = 1) {
     if (seen.has(url)) continue;
     seen.add(url);
 
-    items.push({
+    items.push(withItemMeta({
       url,
       type: 'image',
       filename: shortcode ? `post_${shortcode}_${index}` : null,
-    });
+    }, { postId: shortcode }));
     index++;
   }
 
@@ -249,18 +255,21 @@ function extractFromPageJson(pathname) {
   const parsed = parseMediaFromJson(jsonStrings);
   const shortcode = extractShortcode(pathname);
 
-  return parsed.map((item) => ({
+  return parsed.map((item) => withItemMeta({
     url: item.url,
     type: item.type,
     filename: shortcode ? `post_${shortcode}_${item.index}` : null,
-  }));
+  }, { postId: shortcode }));
 }
 
 function resolveSingle(srcUrl, target, pathname) {
   const url = upgradeImageUrl(srcUrl, target);
   if (url) {
     const shortcode = extractShortcode(pathname);
-    return [{ url, type: 'image', filename: shortcode ? `post_${shortcode}` : null }];
+    return [withItemMeta(
+      { url, type: 'image', filename: shortcode ? `post_${shortcode}` : null },
+      { postId: shortcode },
+    )];
   }
 
   // If click landed on overlay, find nearest media
@@ -269,7 +278,10 @@ function resolveSingle(srcUrl, target, pathname) {
     const upgraded = upgradeImageUrl(nearest.src, nearest);
     if (upgraded) {
       const shortcode = extractShortcode(pathname);
-      return [{ url: upgraded, type: 'image', filename: shortcode ? `post_${shortcode}` : null }];
+      return [withItemMeta(
+        { url: upgraded, type: 'image', filename: shortcode ? `post_${shortcode}` : null },
+        { postId: shortcode },
+      )];
     }
   }
 
@@ -279,7 +291,10 @@ function resolveSingle(srcUrl, target, pathname) {
     const src = video.src;
     if (src && !src.startsWith('blob:')) {
       const shortcode = extractShortcode(pathname);
-      return [{ url: src, type: 'video', filename: shortcode ? `reel_${shortcode}` : null }];
+      return [withItemMeta(
+        { url: src, type: 'video', filename: shortcode ? `reel_${shortcode}` : null },
+        { postId: shortcode },
+      )];
     }
 
     // blob: URL — try to extract the real CDN URL from page scripts
@@ -288,13 +303,21 @@ function resolveSingle(srcUrl, target, pathname) {
     const cdnUrl = extractVideoUrlFromScripts(scriptTexts);
     if (cdnUrl) {
       const shortcode = extractShortcode(pathname);
-      return [{ url: cdnUrl, type: 'video', filename: shortcode ? `reel_${shortcode}` : null }];
+      return [withItemMeta(
+        { url: cdnUrl, type: 'video', filename: shortcode ? `reel_${shortcode}` : null },
+        { postId: shortcode },
+      )];
     }
 
     // Fall back to API lookup via background script
     const shortcode = extractShortcode(pathname);
     if (shortcode) {
-      return [{ type: 'video', filename: shortcode ? `reel_${shortcode}` : null, shortcode, needsVideoLookup: true }];
+      return [withItemMeta({
+        type: 'video',
+        filename: shortcode ? `reel_${shortcode}` : null,
+        shortcode,
+        needsVideoLookup: true,
+      }, { postId: shortcode })];
     }
   }
 
@@ -331,11 +354,11 @@ export function collectMediaFromContainer(container, shortcode) {
     if (src && !src.startsWith('blob:')) {
       if (!usedVideoUrls.has(src)) {
         usedVideoUrls.add(src);
-        items.push({
+        items.push(withItemMeta({
           url: src,
           type: 'video',
           filename: shortcode ? `post_${shortcode}_${index}` : null,
-        });
+        }, { postId: shortcode }));
         index++;
       }
     } else if (src && src.startsWith('blob:')) {
@@ -343,21 +366,21 @@ export function collectMediaFromContainer(container, shortcode) {
       const cdnUrl = extractVideoUrlFromScripts(getScriptTexts());
       if (cdnUrl && !usedVideoUrls.has(cdnUrl)) {
         usedVideoUrls.add(cdnUrl);
-        items.push({
+        items.push(withItemMeta({
           url: cdnUrl,
           type: 'video',
           filename: shortcode ? `post_${shortcode}_${index}` : null,
-        });
+        }, { postId: shortcode }));
         index++;
       } else if (shortcode && !usedVideoUrls.has('api:' + shortcode)) {
         // Fall back to API lookup
         usedVideoUrls.add('api:' + shortcode);
-        items.push({
+        items.push(withItemMeta({
           type: 'video',
           filename: shortcode ? `reel_${shortcode}` : null,
           shortcode,
           needsVideoLookup: true,
-        });
+        }, { postId: shortcode }));
         index++;
       }
     }

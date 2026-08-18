@@ -214,9 +214,12 @@ describe('buildImageItems', () => {
       { src: `${CDN}/s640x640/AAA_n.jpg` },
     ], 'CxYz1');
 
-    expect(items).toEqual([
-      { url: `${CDN}/AAA_n.jpg`, type: 'image', filename: 'post_CxYz1_1' },
-    ]);
+    expect(items).toEqual([{
+      url: `${CDN}/AAA_n.jpg`,
+      type: 'image',
+      filename: 'post_CxYz1_1',
+      meta: { postId: 'CxYz1' },
+    }]);
   });
 
   it('collapses two imgs for one slide that share a srcset', () => {
@@ -308,6 +311,7 @@ describe('buildImageItems', () => {
   it('leaves the filename null when the post has no shortcode', () => {
     const { items } = buildImageItems([{ src: `${CDN}/s640x640/AAA_n.jpg` }], null);
     expect(items[0].filename).toBeNull();
+    expect(items[0].meta).toBeUndefined();
   });
 
   // resolveAll reads a small media count as a sparse DOM and falls back to the

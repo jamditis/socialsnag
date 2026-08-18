@@ -1,6 +1,12 @@
 // SocialSnag — Twitter/X content script
 
-import { findNearestMedia, findPostContainer, getCapturedMedia, hostMatches } from './common.js';
+import {
+  findNearestMedia,
+  findPostContainer,
+  getCapturedMedia,
+  hostMatches,
+  withItemMeta,
+} from './common.js';
 
 // A tweet's outer boundary. All three of the old id/video/media lookups kept
 // their own copy of this list and had drifted apart, so the same click could
@@ -132,16 +138,27 @@ export function findTweetScope(target) {
 // still contains the quoted tweet's permalink, so quoted-tweet status links are
 // skipped; the first remaining one is the main tweet's. When the scope already
 // is the quoted block, its own permalink is the first and only candidate.
-export function statusIdInScope({ scope, article, isQuoted }) {
+export function statusMetaInScope({ scope, article, isQuoted }) {
   const links = scope.querySelectorAll?.('a[href*="/status/"]') || [];
   for (const link of links) {
     // A link-preview card's external /status/<digits> URL is not a tweet id.
     if (!isTwitterStatusHref(link.href)) continue;
     if (!isQuoted && insideQuotedTweet(link, article)) continue;
     const match = link.href?.match(/\/status\/(\d+)/);
-    if (match) return match[1];
+    if (match) {
+      let username = null;
+      try {
+        const path = new URL(link.href, 'https://x.com').pathname;
+        username = path.match(/^\/([A-Za-z0-9_]+)\/status\/\d+/)?.[1] || null;
+      } catch { /* isTwitterStatusHref already rejected malformed links */ }
+      return { postId: match[1], username };
+    }
   }
   return null;
+}
+
+export function statusIdInScope(found) {
+  return statusMetaInScope(found)?.postId || null;
 }
 
 // True if `scope` contains a playable video. On the main article, a video that
@@ -176,11 +193,9 @@ export function imageInScope(img, { article, isQuoted }) {
 // exported so tests can prove their mutual recursion has a base case (see the
 // allowFallback note below) from both entry points, without standing up a full DOM.
 
-// The tweet id owning the click, scoped to the quoted tweet when the click is
-// inside one. Null off any tweet.
-function tweetIdFor(target) {
+function tweetMetaFor(target) {
   const found = findTweetScope(target);
-  return found ? statusIdInScope(found) : null;
+  return found ? statusMetaInScope(found) : null;
 }
 
 // Whether the clicked tweet — the quoted one, if that is what was clicked — has
@@ -217,8 +232,11 @@ export function resolveSingle(
   // Try the srcUrl from context menu first (works when right-clicking directly on img)
   const url = upgradeImageUrl(srcUrl);
   if (url) {
-    const id = tweetIdFor(target);
-    return [{ url, type: 'image', filename: id ? `tweet_${id}` : null }];
+    const meta = tweetMetaFor(target);
+    return [withItemMeta(
+      { url, type: 'image', filename: meta?.postId ? `tweet_${meta.postId}` : null },
+      meta || {},
+    )];
   }
 
   // If click landed on an overlay div, find the nearest media element
@@ -238,8 +256,15 @@ export function resolveSingle(
         const upgraded = upgradeImageUrl(nearestMedia.src);
         // Don't return a profile pic if the tweet has a video
         if (upgraded && (!targetHasVideo(target) || !upgraded.includes('/profile_images/'))) {
-          const id = tweetIdFor(target);
-          return [{ url: upgraded, type: 'image', filename: id ? `tweet_${id}` : null }];
+          const meta = tweetMetaFor(target);
+          return [withItemMeta(
+            {
+              url: upgraded,
+              type: 'image',
+              filename: meta?.postId ? `tweet_${meta.postId}` : null,
+            },
+            meta || {},
+          )];
         }
       }
       if (nearestMedia.tagName === 'VIDEO' || nearestMedia.closest?.('[data-testid="videoComponent"]')) {
@@ -270,18 +295,19 @@ export function resolveAll(target, { allowCapturedVideos = true } = {}) {
   }
 
   const items = [];
-  const id = statusIdInScope(found);
+  const meta = statusMetaInScope(found);
+  const id = meta?.postId || null;
   let index = 1;
 
   found.scope.querySelectorAll('img[src*="pbs.twimg.com/media/"]').forEach((img) => {
     if (!imageInScope(img, found)) return;
     const url = upgradeImageUrl(img.src);
     if (url) {
-      items.push({
+      items.push(withItemMeta({
         url,
         type: 'image',
         filename: id ? `tweet_${id}_${index}` : null,
-      });
+      }, meta || {}));
       index++;
     }
   });
@@ -331,12 +357,12 @@ export async function resolvePage(
 
       return [
         ...items.slice(0, submittedItemLimit - 1),
-        {
+        withItemMeta({
           type: 'video',
           filename: `tweet_${requestedId}`,
           tweetId: requestedId,
           needsVideoLookup: true,
-        },
+        }, statusMetaInScope(found) || { postId: requestedId }),
       ];
     }
   }
@@ -363,10 +389,14 @@ async function resolveVideo(target, { allowCaptured = true } = {}) {
   }
 
   // Fall back to API lookup via background script
-  const tweetId = tweetIdFor(target)
+  const meta = tweetMetaFor(target);
+  const tweetId = meta?.postId
     || globalThis.window?.location?.pathname.match(/\/status\/(\d+)/)?.[1];
   if (tweetId) {
-    return [{ type: 'video', filename: `tweet_${tweetId}`, tweetId, needsVideoLookup: true }];
+    return [withItemMeta(
+      { type: 'video', filename: `tweet_${tweetId}`, tweetId, needsVideoLookup: true },
+      meta || { postId: tweetId },
+    )];
   }
 
   return [];
