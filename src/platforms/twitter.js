@@ -378,18 +378,22 @@ export async function resolveContentMessage(message, lastTarget, root = document
 }
 
 async function resolveVideo(target, { allowCaptured = true } = {}) {
+  const meta = tweetMetaFor(target);
+
   // First try webRequest captures (advanced mode)
   if (allowCaptured) {
     const captured = await getCapturedMedia();
     const mp4s = filterCapturedVideos(captured);
 
     if (mp4s.length > 0) {
-      return [{ url: mp4s[0].url, type: 'video', filename: null }];
+      return [withItemMeta(
+        { url: mp4s[0].url, type: 'video', filename: null },
+        meta || {},
+      )];
     }
   }
 
   // Fall back to API lookup via background script
-  const meta = tweetMetaFor(target);
   const tweetId = meta?.postId
     || globalThis.window?.location?.pathname.match(/\/status\/(\d+)/)?.[1];
   if (tweetId) {

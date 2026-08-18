@@ -318,3 +318,44 @@ describe('resolvePage', () => {
     ]);
   });
 });
+
+describe('resolveContentMessage', () => {
+  it('uses the permalink that owns quoted media for item metadata', async () => {
+    const outerPermalink = { href: '/profile/outer.bsky.social/post/3louter' };
+    const quotedPermalink = {
+      tagName: 'A',
+      href: '/profile/quoted.bsky.social/post/3lquoted',
+      matches: () => false,
+      parentElement: null,
+    };
+    const post = {
+      matches: (selector) => selector === '[data-testid^="feedItem-by-"]',
+      parentElement: null,
+      querySelectorAll: (selector) => (
+        selector === 'a[href*="/post/"]' ? [outerPermalink, quotedPermalink] : []
+      ),
+    };
+    quotedPermalink.parentElement = post;
+    const target = {
+      tagName: 'IMG',
+      src: 'https://cdn.bsky.app/img/feed_thumbnail/plain/did:plc:quoted/quoted@jpeg',
+      matches: () => false,
+      parentElement: quotedPermalink,
+      closest: (selector) => selector === 'a[href*="/post/"]' ? quotedPermalink : null,
+    };
+
+    const items = await resolveContentMessage(
+      { action: 'resolve', type: 'single', srcUrl: target.src },
+      target,
+      { querySelectorAll: () => [] },
+      '/profile/outer.bsky.social/post/3louter',
+    );
+
+    expect(items).toHaveLength(1);
+    expect(items[0].filename).toBe('post_3louter');
+    expect(items[0].meta).toEqual({
+      postId: '3lquoted',
+      username: 'quoted.bsky.social',
+    });
+  });
+});

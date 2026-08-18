@@ -8,6 +8,7 @@ import {
   buildImageItems,
   mergeCapturedImages,
   collectMediaFromContainer,
+  resolveSingle,
 } from '../src/platforms/instagram.js';
 
 describe('upgradeImageUrl', () => {
@@ -198,6 +199,29 @@ describe('shortcodeFromContainer', () => {
 
   it('returns null for an empty list', () => {
     expect(shortcodeFromContainer([])).toBeNull();
+  });
+});
+
+describe('resolveSingle', () => {
+  it('uses the clicked profile-grid permalink for item metadata', () => {
+    const permalink = {
+      tagName: 'A',
+      getAttribute: () => '/p/CxGrid42/',
+      parentElement: null,
+    };
+    const target = {
+      tagName: 'IMG',
+      src: `${CDN}/s640x640/GRID_n.jpg`,
+      srcset: '',
+      parentElement: permalink,
+    };
+
+    expect(resolveSingle(target.src, target, '/alice/')).toEqual([{
+      url: `${CDN}/GRID_n.jpg`,
+      type: 'image',
+      filename: null,
+      meta: { postId: 'CxGrid42' },
+    }]);
   });
 });
 

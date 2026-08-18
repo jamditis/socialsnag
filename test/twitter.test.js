@@ -669,6 +669,29 @@ describe('resolvePage', () => {
 });
 
 describe('resolveSingle', () => {
+  it('keeps tweet metadata on an advanced-mode captured video', async () => {
+    const t = quotedTweetTree({ mainVideo: true });
+    const originalSendMessage = chrome.runtime.sendMessage;
+    chrome.runtime.sendMessage = (_message, callback) => callback({
+      urls: [{
+        url: 'https://video.twimg.com/ext_tw_video/111/main.mp4',
+        type: 'video',
+        timestamp: 100,
+      }],
+    });
+
+    try {
+      expect(await resolveSingle('', t.mainStatus)).toEqual([{
+        url: 'https://video.twimg.com/ext_tw_video/111/main.mp4',
+        type: 'video',
+        filename: null,
+        meta: { postId: '111', username: 'main' },
+      }]);
+    } finally {
+      chrome.runtime.sendMessage = originalSendMessage;
+    }
+  });
+
   it('terminates on a right-click over a text-only quoting tweet, without overflowing', () => {
     // The production `single` path: a right-click resolves through resolveSingle
     // first (allowFallback default on). It bounces once into resolveAll, whose

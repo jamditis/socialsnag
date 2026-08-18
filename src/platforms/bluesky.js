@@ -41,7 +41,7 @@ function resolveSingle(srcUrl, target, pathname) {
     '[data-testid^="postThreadItem"]',
     '[data-testid^="feedItem"]',
   ]);
-  const identity = blueskyItemIdentityFromContainer(post) || blueskyItemIdentity(pathname);
+  const identity = blueskyItemIdentityForTarget(target, post) || blueskyItemIdentity(pathname);
   const url = upgradeImageUrl(srcUrl);
   if (url) {
     const rkey = extractPostId(pathname);
@@ -115,7 +115,7 @@ function resolveAll(target, pathname, { submittedPost = null, identity = null } 
   const items = [];
   const rkey = extractPostId(pathname);
   const itemIdentity = identity
-    || blueskyItemIdentityFromContainer(post)
+    || blueskyItemIdentityForTarget(target, post)
     || blueskyItemIdentity(pathname);
   let index = 1;
 
@@ -184,6 +184,11 @@ function blueskyItemIdentityFromContainer(container) {
     if (identity) return identity;
   }
   return null;
+}
+
+function blueskyItemIdentityForTarget(target, container) {
+  const owner = target?.closest?.('a[href*="/post/"]');
+  return blueskyItemIdentity(owner?.href) || blueskyItemIdentityFromContainer(container);
 }
 
 function matchesBlueskySubmission(requested, candidate) {

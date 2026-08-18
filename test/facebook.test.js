@@ -430,6 +430,36 @@ describe('buildCapturedItems', () => {
   });
 });
 
+describe('resolveContentMessage', () => {
+  it('uses the selected feed post permalink for item metadata', async () => {
+    const permalink = { href: 'https://www.facebook.com/example/posts/9876543210/' };
+    const post = {
+      matches: (selector) => selector === '[role="article"]',
+      parentElement: null,
+      querySelectorAll: (selector) => selector === 'a[href]' ? [permalink] : [],
+    };
+    const target = {
+      tagName: 'IMG',
+      src: `${CDN}/s720x720/123456789012_n.jpg`,
+      matches: () => false,
+      parentElement: post,
+    };
+
+    const items = await resolveContentMessage({
+      action: 'resolve',
+      type: 'single',
+      srcUrl: target.src,
+    }, target, {});
+
+    expect(items).toEqual([{
+      url: `${CDN}/123456789012_n.jpg`,
+      type: 'image',
+      filename: 'photo_123456789012',
+      meta: { postId: '9876543210' },
+    }]);
+  });
+});
+
 describe('resolvePage', () => {
   const makePost = (pageUrl, src) => {
     const media = img(src);

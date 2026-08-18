@@ -440,9 +440,16 @@ function facebookPostIdFromContainer(
   pageUrl = globalThis.window?.location?.href || '',
 ) {
   const requestedKey = facebookSubmittedKey(pageUrl);
-  return requestedKey && hasFacebookPermalink(container, requestedKey)
-    ? facebookPostId(requestedKey)
-    : null;
+  if (requestedKey && hasFacebookPermalink(container, requestedKey)) {
+    return facebookPostId(requestedKey);
+  }
+
+  const links = container?.querySelectorAll?.('a[href]') || [];
+  for (const link of links) {
+    const postId = facebookPostId(facebookSubmittedKey(link.href));
+    if (postId) return postId;
+  }
+  return null;
 }
 
 function facebookPostIdFromTarget(target) {
