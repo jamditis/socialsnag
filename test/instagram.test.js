@@ -223,6 +223,27 @@ describe('resolveSingle', () => {
       meta: { postId: 'CxGrid42' },
     }]);
   });
+
+  it('prefers the clicked permalink over a different post in the page URL', () => {
+    const permalink = {
+      tagName: 'A',
+      getAttribute: () => '/p/CxClicked/',
+      parentElement: null,
+    };
+    const target = {
+      tagName: 'IMG',
+      src: `${CDN}/s640x640/RELATED_n.jpg`,
+      srcset: '',
+      parentElement: permalink,
+    };
+
+    expect(resolveSingle(target.src, target, '/p/CxPage/')).toEqual([{
+      url: `${CDN}/RELATED_n.jpg`,
+      type: 'image',
+      filename: 'post_CxPage',
+      meta: { postId: 'CxClicked' },
+    }]);
+  });
 });
 
 const CDN = 'https://scontent.cdninstagram.com/v/t51.2885-15';

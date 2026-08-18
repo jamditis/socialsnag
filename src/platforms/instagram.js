@@ -446,9 +446,9 @@ function descendantHrefs(container) {
 }
 
 function shortcodeForTarget(target, pathname) {
-  return extractShortcode(pathname)
-    || shortcodeFromContainer(ancestorHrefs(target))
-    || shortcodeFromContainer(descendantHrefs(target?.closest?.('article')));
+  return shortcodeFromContainer(ancestorHrefs(target))
+    || shortcodeFromContainer(descendantHrefs(target?.closest?.('article')))
+    || extractShortcode(pathname);
 }
 
 async function resolveAll(target, pathname) {

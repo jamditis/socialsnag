@@ -124,11 +124,12 @@ function resolveAll(target, pathname, { submittedPost = null, identity = null } 
     if (submittedPost && !belongsToSubmittedPost(img, submittedPost)) return;
     const url = upgradeImageUrl(img.src);
     if (url) {
+      const mediaIdentity = blueskyItemIdentityForTarget(img, post) || itemIdentity;
       items.push(withItemMeta({
         url,
         type: 'image',
         filename: rkey ? `post_${rkey}_${index}` : null,
-      }, itemIdentity));
+      }, mediaIdentity));
       index++;
     }
   });
@@ -138,11 +139,12 @@ function resolveAll(target, pathname, { submittedPost = null, identity = null } 
     if (submittedPost && !belongsToSubmittedPost(video, submittedPost)) return;
     const src = video.src;
     if (src && !src.startsWith('blob:')) {
+      const mediaIdentity = blueskyItemIdentityForTarget(video, post) || itemIdentity;
       items.push(withItemMeta({
         url: src,
         type: 'video',
         filename: rkey ? `post_${rkey}_${index}` : null,
-      }, itemIdentity));
+      }, mediaIdentity));
       index++;
     }
   });

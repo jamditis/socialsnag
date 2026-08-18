@@ -385,11 +385,12 @@ async function resolveVideo(target, { allowCaptured = true } = {}) {
     const captured = await getCapturedMedia();
     const mp4s = filterCapturedVideos(captured);
 
-    if (mp4s.length > 0) {
-      return [withItemMeta(
-        { url: mp4s[0].url, type: 'video', filename: null },
-        meta || {},
-      )];
+    if (mp4s.length > 0 && !meta) {
+      // Captures are page-wide and cannot be correlated to the clicked tweet.
+      // Use one only when no tweet identity is available, and leave it untagged.
+      // A known tweet falls through to its API lookup placeholder below instead
+      // of falsely attributing another autoplaying tweet's latest video.
+      return [{ url: mp4s[0].url, type: 'video', filename: null }];
     }
   }
 

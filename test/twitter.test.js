@@ -669,7 +669,7 @@ describe('resolvePage', () => {
 });
 
 describe('resolveSingle', () => {
-  it('keeps tweet metadata on an advanced-mode captured video', async () => {
+  it('uses tweet lookup instead of attributing a page-wide capture', async () => {
     const t = quotedTweetTree({ mainVideo: true });
     const originalSendMessage = chrome.runtime.sendMessage;
     chrome.runtime.sendMessage = (_message, callback) => callback({
@@ -682,10 +682,33 @@ describe('resolveSingle', () => {
 
     try {
       expect(await resolveSingle('', t.mainStatus)).toEqual([{
-        url: 'https://video.twimg.com/ext_tw_video/111/main.mp4',
+        type: 'video',
+        filename: 'tweet_111',
+        tweetId: '111',
+        needsVideoLookup: true,
+        meta: { postId: '111', username: 'main' },
+      }]);
+    } finally {
+      chrome.runtime.sendMessage = originalSendMessage;
+    }
+  });
+
+  it('leaves a page-wide capture untagged when no tweet identity exists', async () => {
+    const video = makeNode({ tag: 'VIDEO' });
+    const originalSendMessage = chrome.runtime.sendMessage;
+    chrome.runtime.sendMessage = (_message, callback) => callback({
+      urls: [{
+        url: 'https://video.twimg.com/ext_tw_video/999/anonymous.mp4',
+        type: 'video',
+        timestamp: 100,
+      }],
+    });
+
+    try {
+      expect(await resolveSingle('', video)).toEqual([{
+        url: 'https://video.twimg.com/ext_tw_video/999/anonymous.mp4',
         type: 'video',
         filename: null,
-        meta: { postId: '111', username: 'main' },
       }]);
     } finally {
       chrome.runtime.sendMessage = originalSendMessage;
