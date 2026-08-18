@@ -440,6 +440,7 @@ function facebookPostIdFromContainer(
   pageUrl = globalThis.window?.location?.href || '',
 ) {
   const requestedKey = facebookSubmittedKey(pageUrl);
+  if (!container) return facebookPostId(requestedKey);
   if (requestedKey && hasFacebookPermalink(container, requestedKey)) {
     return facebookPostId(requestedKey);
   }
