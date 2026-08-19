@@ -669,7 +669,7 @@ describe('resolvePage', () => {
 });
 
 describe('resolveSingle', () => {
-  it('uses tweet lookup instead of attributing a page-wide capture', async () => {
+  it('keeps a page-wide capture untagged when tweet identity exists', async () => {
     const t = quotedTweetTree({ mainVideo: true });
     const originalSendMessage = chrome.runtime.sendMessage;
     chrome.runtime.sendMessage = (_message, callback) => callback({
@@ -682,11 +682,9 @@ describe('resolveSingle', () => {
 
     try {
       expect(await resolveSingle('', t.mainStatus)).toEqual([{
+        url: 'https://video.twimg.com/ext_tw_video/111/main.mp4',
         type: 'video',
-        filename: 'tweet_111',
-        tweetId: '111',
-        needsVideoLookup: true,
-        meta: { postId: '111', username: 'main' },
+        filename: null,
       }]);
     } finally {
       chrome.runtime.sendMessage = originalSendMessage;
