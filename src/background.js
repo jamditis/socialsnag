@@ -1267,8 +1267,9 @@ chrome.downloads.onErased.addListener(async (downloadId) => {
 // Resolve a lookup-placeholder item — a Twitter/X or Instagram video the content
 // script could only identify by id, needing a background API call — to a concrete
 // URL. Items that already carry a url pass straight through. Returns null if a
-// placeholder cannot be resolved. Shared by the download and copy-URL paths so
-// both handle these items identically.
+// placeholder cannot be resolved. An Instagram lookup also copies the API item
+// meta onto the placeholder so `{username}` is available for the download name.
+// Shared by the download and copy-URL paths so both handle these items identically.
 export async function resolveItemUrl(item, options = {}) {
   if (!item.needsVideoLookup) return item.url;
   if (item.tweetId) return resolveTwitterVideo(item.tweetId, options);
@@ -1276,7 +1277,13 @@ export async function resolveItemUrl(item, options = {}) {
   // notification branch, so a lookup that fails at this point (logged out,
   // rate-limited) reaches the user as the generic copy-failure message rather
   // than the Instagram-specific one a download would have shown.
-  if (item.shortcode) return (await resolveInstagramVideo(item.shortcode)).url ?? null;
+  if (item.shortcode) {
+    const video = await resolveInstagramVideo(item.shortcode);
+    if (video.url && video.meta) {
+      item.meta = { ...item.meta, ...video.meta };
+    }
+    return video.url ?? null;
+  }
   return null;
 }
 

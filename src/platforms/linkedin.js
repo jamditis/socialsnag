@@ -91,14 +91,14 @@ export function buildImageItems(images, postId = null, metadataPostId = postId) 
 
 // --- Browser wiring (not exported) ---
 
-function resolveSingle(srcUrl, target) {
+export function resolveSingle(srcUrl, target) {
   const postId = linkedinPostIdForTarget(target);
   const url = upgradeUrl(srcUrl);
   if (url) {
     const id = extractPostId(window.location.href);
     return [withItemMeta(
       { url, type: 'image', filename: id ? `post_${id}` : null },
-      { postId: postId || id },
+      isPostImage(url) ? { postId: postId || id } : null,
     )];
   }
 
@@ -110,7 +110,7 @@ function resolveSingle(srcUrl, target) {
       const id = extractPostId(window.location.href);
       return [withItemMeta(
         { url: upgraded, type: 'image', filename: id ? `post_${id}` : null },
-        { postId: postId || id },
+        isPostImage(upgraded) ? { postId: postId || id } : null,
       )];
     }
   }
