@@ -1089,8 +1089,8 @@ export async function resolveInstagramStories(
 // single-video click reports "log in" rather than the generic miss message.
 // No resolve-cache wrapper here on purpose: it inherits the cache through
 // resolveInstagramPost, and caching again would store the same media twice.
-async function resolveInstagramVideo(shortcode) {
-  const post = await resolveInstagramPost(shortcode);
+async function resolveInstagramVideo(shortcode, options = {}) {
+  const post = await resolveInstagramPost(shortcode, options);
   if (!post.items) return { error: post.error, code: post.code };
   const video = post.items.find((it) => it.type === 'video');
   // A post that resolved fine but holds no video is a miss, not a failure: the
@@ -1265,26 +1265,35 @@ chrome.downloads.onErased.addListener(async (downloadId) => {
 
 // Validate and download a single media item
 // Resolve a lookup-placeholder item — a Twitter/X or Instagram video the content
-// script could only identify by id, needing a background API call — to a concrete
-// URL. Items that already carry a url pass straight through. Returns null if a
-// placeholder cannot be resolved. An Instagram lookup also copies the API item
-// meta onto the placeholder so `{username}` is available for the download name.
-// Shared by the download and copy-URL paths so both handle these items identically.
-export async function resolveItemUrl(item, options = {}) {
-  if (!item.needsVideoLookup) return item.url;
-  if (item.tweetId) return resolveTwitterVideo(item.tweetId, options);
+// script could only identify by id — to a concrete download item. The Instagram
+// lookup can add a verified author, so the whole item has to cross this boundary;
+// reducing it to its URL here would discard metadata before filename templates run.
+async function resolveItem(item, options = {}) {
+  if (!item.needsVideoLookup) return item;
+
+  let resolved;
+  if (item.tweetId) {
+    resolved = { url: await resolveTwitterVideo(item.tweetId, options) };
+  }
   // The reason is dropped here, not reported. This runs after the handler's
   // notification branch, so a lookup that fails at this point (logged out,
   // rate-limited) reaches the user as the generic copy-failure message rather
   // than the Instagram-specific one a download would have shown.
-  if (item.shortcode) {
-    const video = await resolveInstagramVideo(item.shortcode);
-    if (video.url && video.meta) {
-      item.meta = { ...item.meta, ...video.meta };
-    }
-    return video.url ?? null;
+  if (!resolved && item.shortcode) {
+    resolved = await resolveInstagramVideo(item.shortcode, options);
   }
-  return null;
+  if (!resolved?.url) return null;
+
+  return withItemMeta(
+    { ...item, url: resolved.url, needsVideoLookup: false },
+    { ...(item.meta || {}), ...(resolved.meta || {}) },
+  );
+}
+
+// Copy needs only the URL, while both download paths use resolveItem so verified
+// lookup metadata survives into filename rendering.
+export async function resolveItemUrl(item, options = {}) {
+  return (await resolveItem(item, options))?.url ?? null;
 }
 
 // How long to wait for Chrome to report the name it chose. Assignment is normally
@@ -1367,12 +1376,12 @@ async function savedBasename(downloadId, requestedPath) {
 async function downloadMedia(item, platform, index = 1) {
   // Resolve API-based video lookups to a concrete URL before downloading.
   if (item.needsVideoLookup) {
-    const resolvedUrl = await resolveItemUrl(item);
-    if (!resolvedUrl) {
+    const resolvedItem = await resolveItem(item);
+    if (!resolvedItem) {
       console.warn('SocialSnag: video API lookup returned no URL');
       return null;
     }
-    item = { ...item, url: resolvedUrl, needsVideoLookup: false };
+    item = resolvedItem;
   }
 
   const validation = validateDownloadUrl(item.url);
@@ -1670,21 +1679,21 @@ export async function orchestrateSubmittedDownload(rawUrl, options = {}) {
     for (const [position, item] of items.entries()) {
       let downloadItem = item;
       if (item.needsVideoLookup) {
-        const resolvedUrl = await runSubmittedWithDeadline(
-          (signal) => resolveItemUrl(item, { fetchImpl: submittedFetch, signal }),
+        const resolvedItem = await runSubmittedWithDeadline(
+          (signal) => resolveItem(item, { fetchImpl: submittedFetch, signal }),
           operationTimeoutMs,
           { abort: true },
         );
-        if (resolvedUrl === SUBMITTED_OPERATION_TIMEOUT) {
+        if (resolvedItem === SUBMITTED_OPERATION_TIMEOUT) {
           hadDownloadFailure = true;
           hadResolutionTimeout = true;
           continue;
         }
-        if (!resolvedUrl) {
+        if (!resolvedItem) {
           hadDownloadFailure = true;
           continue;
         }
-        downloadItem = { ...item, url: resolvedUrl, needsVideoLookup: false };
+        downloadItem = resolvedItem;
       }
 
       let saved = null;

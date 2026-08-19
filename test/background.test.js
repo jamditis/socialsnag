@@ -530,7 +530,7 @@ describe('resolveItemUrl', () => {
     expect(await resolveItemUrl({ needsVideoLookup: true })).toBeNull();
   });
 
-  it('attaches Instagram API author metadata to the lookup item', async () => {
+  it('resolves an Instagram URL without mutating the lookup placeholder', async () => {
     installFetch((url) => {
       if (!url.includes('i.instagram.com')) return null;
       return {
@@ -552,7 +552,7 @@ describe('resolveItemUrl', () => {
     const url = await resolveItemUrl(item);
 
     expect(url).toBe('https://cdn.cdninstagram.com/reel.mp4');
-    expect(item.meta).toEqual({ postId: 'CxClicked', username: 'alice' });
+    expect(item.meta).toEqual({ postId: 'CxClicked' });
   });
 });
 

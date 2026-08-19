@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { upgradeUrl, extractPostId, buildImageItems, resolveSingle } from '../src/platforms/linkedin.js';
+import {
+  upgradeUrl,
+  extractPostId,
+  buildImageItems,
+  resolveSingle,
+} from '../src/platforms/linkedin.js';
 
 describe('upgradeUrl', () => {
   it('returns null for null input', () => {
