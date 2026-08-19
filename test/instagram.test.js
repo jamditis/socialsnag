@@ -203,6 +203,39 @@ describe('shortcodeFromContainer', () => {
 });
 
 describe('resolveSingle', () => {
+  it('keeps a feed profile avatar untagged from the article post', () => {
+    const postPermalink = {
+      tagName: 'A',
+      getAttribute: () => '/p/CxArticle/',
+      parentElement: null,
+    };
+    const profileLink = {
+      tagName: 'A',
+      getAttribute: () => '/alice/',
+      parentElement: null,
+    };
+    const article = {
+      tagName: 'ARTICLE',
+      parentElement: null,
+      querySelectorAll: (selector) => selector === 'a[href]' ? [postPermalink] : [],
+    };
+    const target = {
+      tagName: 'IMG',
+      src: `${CDN}/s150x150/AVATAR_n.jpg`,
+      srcset: '',
+      parentElement: profileLink,
+      closest: (selector) => selector === 'article' ? article : null,
+    };
+    postPermalink.parentElement = article;
+    profileLink.parentElement = article;
+
+    expect(resolveSingle(target.src, target, '/alice/')).toEqual([{
+      url: `${CDN}/AVATAR_n.jpg`,
+      type: 'image',
+      filename: null,
+    }]);
+  });
+
   it('does not tag a page-wide script video with the clicked shortcode', () => {
     const originalDocument = globalThis.document;
     const permalink = {

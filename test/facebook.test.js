@@ -431,6 +431,53 @@ describe('buildCapturedItems', () => {
 });
 
 describe('resolveContentMessage', () => {
+  it('keeps an article avatar untagged from the containing post', async () => {
+    const postPermalink = {
+      tagName: 'A',
+      href: 'https://www.facebook.com/example/posts/9876543210/',
+      matches: () => false,
+      parentElement: null,
+    };
+    const profileLink = {
+      tagName: 'A',
+      href: 'https://www.facebook.com/example/',
+      matches: () => false,
+      parentElement: null,
+    };
+    const post = {
+      matches: (selector) => selector === '[role="article"]',
+      parentElement: null,
+      querySelectorAll: (selector) => selector === 'a[href]'
+        ? [postPermalink, profileLink]
+        : [],
+    };
+    const target = {
+      tagName: 'IMG',
+      src: `${CDN}/s720x720/123456789012_n.jpg`,
+      matches: () => false,
+      parentElement: profileLink,
+      closest: (selector) => {
+        if (selector === 'a[href]') return profileLink;
+        if (selector === '[role="article"]') return post;
+        return null;
+      },
+    };
+    postPermalink.parentElement = post;
+    profileLink.parentElement = post;
+
+    const items = await resolveContentMessage({
+      action: 'resolve',
+      type: 'single',
+      srcUrl: target.src,
+    }, target, {});
+
+    expect(items).toEqual([{
+      url: `${CDN}/123456789012_n.jpg`,
+      type: 'image',
+      filename: 'photo_123456789012',
+    }]);
+  });
+
   it('does not tag a document-wide script video with the selected post id', async () => {
     const originalDocument = globalThis.document;
     const permalink = { href: 'https://www.facebook.com/example/posts/9876543210/' };
