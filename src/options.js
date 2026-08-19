@@ -1,4 +1,4 @@
-import { FOLDER_TOKENS, renderTemplate, templateFieldError } from './platforms/common.js';
+import { renderTemplate, templateFieldError } from './platforms/common.js';
 
 if (typeof document !== 'undefined') {
   const PLATFORMS = ['instagram', 'twitter', 'facebook', 'bluesky'];
@@ -43,7 +43,7 @@ if (typeof document !== 'undefined') {
     );
     const pathErr = templateFieldError(
       document.getElementById('download-path').value.trim(),
-      { allowSlash: true, allowedTokens: FOLDER_TOKENS },
+      { allowSlash: true },
     );
     showFieldError('filename-template-error', filenameErr);
     showFieldError('download-path-error', pathErr);
@@ -161,16 +161,15 @@ if (typeof document !== 'undefined') {
     const preview = document.getElementById('path-preview');
     const val = document.getElementById('download-path').value.trim() || 'SocialSnag/{platform}';
     // An invalid folder has no honest preview; the inline error carries the reason.
-    if (templateFieldError(val, { allowSlash: true, allowedTokens: FOLDER_TOKENS }) !== null) {
+    if (templateFieldError(val, { allowSlash: true }) !== null) {
       preview.hidden = true;
       return;
     }
     preview.hidden = false;
-    // The folder substitutes {platform} only; sanitizeDownloadPath leaves every other
-    // token literal, and moving the folder onto the full template is tracked separately.
-    // Preview what a download actually writes: an other token stays unrendered here
-    // exactly as it would in the saved path, rather than promising a value it drops.
-    const example = val.replace(/\{platform\}/g, 'twitter');
+    // Render the folder through the same token set as the saved path, so the preview
+    // shows the resolved {date}/{username}/... a download actually writes, not a
+    // literal token.
+    const example = renderTemplate(val, SAMPLE_FIELDS);
     preview.textContent = `Downloads / ${example.replace(/[/\\]/g, ' / ')} / photo.jpg`;
   }
 

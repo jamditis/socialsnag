@@ -63,9 +63,9 @@ export function withItemMeta(item, identity = {}) {
 
 // --- Filename and folder templates ---
 
-// The token vocabulary. Used by the filename template today; the folder template
-// still does its own single-token substitution in sanitizeDownloadPath, and moving
-// it onto this list is tracked separately.
+// The token vocabulary, shared by the filename and folder templates. Both render
+// through renderTemplate, so a folder like `shots/{date}` resolves the same tokens a
+// filename does.
 //
 // Most tokens are optional at render time: a post with no id, a platform that does
 // not expose a username. A template naming one has to survive it being absent rather
@@ -86,13 +86,6 @@ export const TEMPLATE_TOKENS = [
 // id the resolver could not find, a platform with no username in the DOM.
 export const ALWAYS_PRESENT_TOKENS = ['platform', 'type', 'index', 'date'];
 
-// The tokens the folder actually renders. sanitizeDownloadPath still substitutes
-// {platform} only, so the folder field is validated against this subset rather than
-// the whole vocabulary: a folder naming {date} or {username} would otherwise save
-// clean and then write a literal `{date}` folder to disk. Widen to TEMPLATE_TOKENS
-// when the folder moves onto renderTemplate (tracked separately, see above).
-export const FOLDER_TOKENS = ['platform'];
-
 /**
  * Render a template against a field bag.
  *
@@ -103,7 +96,7 @@ export const FOLDER_TOKENS = ['platform'];
  *
  * Path separators are left in place. Whether they are legal is the caller's call,
  * and that belongs with the caller's validation rather than duplicated here. A
- * filename rejects them; a folder template, once it uses this, would not.
+ * filename rejects them; a folder template keeps them to nest.
  *
  * @param {string} template
  * @param {Record<string, string|number|null|undefined>} fields
@@ -167,14 +160,14 @@ export function renderTemplate(template, fields) {
  *
  * @param {string} template
  * @param {{allowSlash?: boolean, allowedTokens?: string[]}} [options] folder templates
- *   may nest (allowSlash) but render a smaller vocabulary (allowedTokens); filenames
- *   take the whole set and reject slashes. allowedTokens defaults to every token.
+ *   may nest (allowSlash); filenames reject slashes. Both render the whole token set,
+ *   so allowedTokens is left to its default of every token unless a caller narrows it.
  * @returns {{valid: true} | {valid: false, reason: string}}
  */
 export function validateTemplate(template, options = {}) {
-  // The filename accepts the whole vocabulary; the folder is passed FOLDER_TOKENS
-  // because sanitizeDownloadPath renders only those, so a token it would leave literal
-  // is rejected here before it is saved rather than surface as a `{date}` folder.
+  // Both fields render the whole vocabulary through renderTemplate, so allowedTokens
+  // defaults to the full set. It stays an option for a caller that wants a narrower
+  // vocabulary, but the folder no longer passes one.
   const allowedTokens = options.allowedTokens || TEMPLATE_TOKENS;
   if (typeof template !== 'string' || template.trim() === '') {
     return { valid: false, reason: 'Template is empty.' };

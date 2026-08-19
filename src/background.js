@@ -364,34 +364,49 @@ export function formatLocalDate(date) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
 
-// Resolve the base filename for an item.
-//
-// An unset template keeps the name the platform resolver built. The template is
-// opt-in because changing what every existing user's files are called is not a
-// thing to do on their behalf during an update.
+// The token field bag for one item, shared by the filename and folder renderers so
+// both read the same values instead of building the bag twice and drifting.
 //
 // {postId} and {username} come from the resolver via item.meta. A resolver that does
-// not supply them yet renders those tokens as nothing, which the renderer absorbs
-// along with their separators rather than leaving gaps -- so a template written for
-// a platform that has the data degrades to a shorter name elsewhere instead of a
-// broken one.
+// not supply them yet leaves those fields absent, which the renderer drops along with
+// their separators rather than writing "undefined" -- so a template written for a
+// platform that has the data degrades to a shorter name elsewhere instead of a broken
+// one.
 // index defaults to 1 so {index} is genuinely always renderable, which is what lets
 // validateTemplate accept `{index}` on its own. Both download paths pass a real
 // position; the default is here so the promise holds even if one later forgets to.
-export function resolveBaseFilename(item, platform, template, index = 1) {
-  const fallback = item.filename || `${platform}_${index}`;
-  if (!template) return fallback;
-  const rendered = renderTemplate(template, {
+// date is injectable so one download computes it once and every path part shares it:
+// build the bag per operation, not per render, or a download that crosses local
+// midnight files the folder under one day and the filename under the next.
+export function buildTemplateFields(item, platform, index = 1, date = formatLocalDate(new Date())) {
+  return {
     platform,
     type: item.type || 'file',
     postId: item.meta?.postId,
     username: item.meta?.username,
     index,
     // Local date, not toISOString(): that is UTC, so an evening download west of
-    // UTC would be filed under tomorrow. The date a user wants in a filename is
-    // the one their calendar showed when they saved it.
-    date: formatLocalDate(new Date()),
-  });
+    // UTC would be filed under tomorrow. The date a user wants in a name is the one
+    // their calendar showed when they saved it.
+    date,
+  };
+}
+
+// Resolve the base filename for an item.
+//
+// An unset template keeps the name the platform resolver built. The template is
+// opt-in because changing what every existing user's files are called is not a
+// thing to do on their behalf during an update.
+//
+// fields defaults to a fresh bag, but a caller that also renders the folder for this
+// item passes the bag it already built, so the filename and folder read one set of
+// token values (one {date} in particular) instead of two.
+export function resolveBaseFilename(
+  item, platform, template, index = 1, fields = buildTemplateFields(item, platform, index),
+) {
+  const fallback = item.filename || `${platform}_${index}`;
+  if (!template) return fallback;
+  const rendered = renderTemplate(template, fields);
   // A template can render empty for an item carrying none of its tokens, which is
   // normal, and a file called nothing but its extension is not an acceptable result.
   // Say so rather than silently handing back the old name: "why is this one still
@@ -406,20 +421,41 @@ export function resolveBaseFilename(item, platform, template, index = 1) {
   return rendered;
 }
 
-// Build sanitized download path
-export function sanitizeDownloadPath(rawFilename, platform, ext, downloadPath) {
+// Build sanitized download path. `fields` is the item's token bag (buildTemplateFields);
+// the folder template renders the full set from it, the same tokens the filename uses.
+export function sanitizeDownloadPath(rawFilename, platform, ext, downloadPath, fields = {}) {
   const filename = rawFilename
     .replace(/^[A-Za-z]:/, '')
     .replace(/\.\.[/\\]/g, '')
     .replace(/(^|[/\\])\.\.[/\\]?/g, '$1')
     .replace(/[<>:"/\\|?*\x00-\x1f]/g, '_');
-  const folder = (downloadPath || 'SocialSnag/{platform}')
-    .replace(/\{platform\}/g, platform)
+  // Render the folder first, then sanitize. Order matters: a {username} or {postId}
+  // scraped from the DOM could carry ../, a leading slash, or a drive prefix, and the
+  // passes below run on the rendered result. Character pass first: strip a drive prefix,
+  // map the reserved characters to '_'. Slashes survive it, so a token holding one still
+  // nests. platform wins over fields.platform so the {platform} default resolves even
+  // when a legacy caller passes no fields.
+  const template = downloadPath || 'SocialSnag/{platform}';
+  const rendered = renderTemplate(template, { ...fields, platform })
     .replace(/^[A-Za-z]:/, '')
-    .replace(/\.\.[/\\]/g, '')
-    .replace(/(^|[/\\])\.\.[/\\]?/g, '$1')
     .replace(/[<>:"|?*\x00-\x1f]/g, '_');
-  const normalizedFolder = folder.replace(/^[\\/]+/, '').replace(/[\\/]+$/, '');
+  // Structural pass: split on any run of separators, then drop empty and dot segments.
+  // Filtering whole segments blocks parent traversal outright -- no regex ordering to
+  // reason about, so a value like `a/....//../b` cannot regenerate a `../` a strip pass
+  // skipped. A segment is judged by its Windows form (trailing dots and spaces stripped,
+  // as Win32 does at open time), so `.. ` and `...` -- which normalize back to `..` and
+  // would traverse on Windows -- are dropped too, not just a bare `..`. This also closes
+  // the empty segment a dropped middle token leaves (`posts/{username}/media` with no
+  // username gives `posts//media`) and strips leading and trailing separators. Fall back
+  // to the platform folder if nothing survives (a template that slipped past
+  // validateTemplate) rather than return a leading-slash path chrome rejects.
+  const normalizedFolder = rendered
+    .split(/[/\\]+/)
+    .filter((seg) => {
+      const winForm = seg.replace(/[ .]+$/, '');
+      return winForm !== '' && winForm !== '.' && winForm !== '..';
+    })
+    .join('/') || platform;
   return normalizedFolder + '/' + filename + ext;
 }
 
@@ -1112,6 +1148,10 @@ export async function downloadItemsAsZip(items, platform) {
     filenameTemplate: '',
   });
 
+  // One date for the whole archive: the entry names and the folder are built at
+  // different points around an await, so a shared date keeps them on the same day
+  // even if zipping crosses local midnight.
+  const opDate = formatLocalDate(new Date());
   const files = [];
   const seen = new Set();
   for (const item of items) {
@@ -1121,8 +1161,12 @@ export async function downloadItemsAsZip(items, platform) {
       continue;
     }
     const ext = guessExtension(item.url, item.type);
+    const index = files.length + 1;
     const base = sanitizeFilename(
-      resolveBaseFilename(item, platform, filenameTemplate, files.length + 1),
+      resolveBaseFilename(
+        item, platform, filenameTemplate, index,
+        buildTemplateFields(item, platform, index, opDate),
+      ),
     );
     // Sanitize the whole entry name: guessExtension can echo a ?format= value
     // containing / or .., and client-zip writes entry names verbatim.
@@ -1139,7 +1183,12 @@ export async function downloadItemsAsZip(items, platform) {
 
   const stamp = Date.now();
   const zipBase = `${platform}_${stamp}`;
-  const zipPath = sanitizeDownloadPath(zipBase, platform, '.zip', downloadPath);
+  // One archive for the whole post, so the folder tokens ({username}, {postId})
+  // describe the post: the first item carries that shared meta, index 1. Same opDate
+  // as the entry names above.
+  const zipPath = sanitizeDownloadPath(
+    zipBase, platform, '.zip', downloadPath, buildTemplateFields(items[0], platform, 1, opDate),
+  );
   let downloadId = null;
   try {
     downloadId = await chrome.downloads.download({
@@ -1388,8 +1437,11 @@ async function downloadMedia(item, platform, index = 1) {
   const ext = guessExtension(item.url, item.type);
   // resolveBaseFilename always returns something: it falls back to the resolver's
   // name, then to platform and index.
-  const rawFilename = resolveBaseFilename(item, platform, filenameTemplate, index);
-  const path = sanitizeDownloadPath(rawFilename, platform, ext, downloadPath);
+  // One bag for this file, shared by the filename and the folder so both read the
+  // same token values (one {date}).
+  const fields = buildTemplateFields(item, platform, index);
+  const rawFilename = resolveBaseFilename(item, platform, filenameTemplate, index, fields);
+  const path = sanitizeDownloadPath(rawFilename, platform, ext, downloadPath, fields);
 
   const downloadUrl = item.url;
 
