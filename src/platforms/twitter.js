@@ -233,9 +233,10 @@ export function resolveSingle(
   const url = upgradeImageUrl(srcUrl);
   if (url) {
     const meta = tweetMetaFor(target);
+    const itemMeta = srcUrl?.includes('/profile_images/') ? null : meta;
     return [withItemMeta(
       { url, type: 'image', filename: meta?.postId ? `tweet_${meta.postId}` : null },
-      meta || {},
+      itemMeta,
     )];
   }
 
@@ -257,13 +258,14 @@ export function resolveSingle(
         // Don't return a profile pic if the tweet has a video
         if (upgraded && (!targetHasVideo(target) || !upgraded.includes('/profile_images/'))) {
           const meta = tweetMetaFor(target);
+          const itemMeta = nearestMedia.src?.includes('/profile_images/') ? null : meta;
           return [withItemMeta(
             {
               url: upgraded,
               type: 'image',
               filename: meta?.postId ? `tweet_${meta.postId}` : null,
             },
-            meta || {},
+            itemMeta,
           )];
         }
       }

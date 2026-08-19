@@ -443,8 +443,11 @@ function descendantHrefs(container) {
 }
 
 function shortcodeForTarget(target, pathname) {
-  return shortcodeFromContainer(ancestorHrefs(target))
-    || shortcodeFromContainer(descendantHrefs(target?.closest?.('article')))
+  const ownerHrefs = ancestorHrefs(target);
+  // An enclosing link owns the selected media. A profile avatar's /username/
+  // link is not a post permalink, so do not fall through to the article's post.
+  if (ownerHrefs.length > 0) return shortcodeFromContainer(ownerHrefs);
+  return shortcodeFromContainer(descendantHrefs(target?.closest?.('article')))
     || extractShortcode(pathname);
 }
 

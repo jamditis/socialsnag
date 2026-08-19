@@ -323,7 +323,7 @@ function resolveSingle(
     const id = extractPhotoId(srcUrl);
     return [withItemMeta(
       { url, type: 'image', filename: id ? `photo_${id}` : null },
-      { postId },
+      isFacebookProfileImage(target) ? null : { postId },
     )];
   }
 
@@ -335,7 +335,9 @@ function resolveSingle(
       const id = extractPhotoId(nearest.src);
       return [withItemMeta(
         { url: upgraded, type: 'image', filename: id ? `photo_${id}` : null },
-        { postId },
+        isFacebookProfileImage(nearest) || isFacebookProfileImage(target)
+          ? null
+          : { postId },
       )];
     }
   }
@@ -437,6 +439,23 @@ function hasFacebookPermalink(container, requestedKey) {
 
 function facebookPostId(requestedKey) {
   return requestedKey?.match(/^(?:post|photo|video):(.+)$/)?.[1] || null;
+}
+
+function isFacebookProfileImage(target) {
+  const label = `${target?.alt || ''} ${target?.getAttribute?.('aria-label') || ''}`;
+  if (/\bprofile (?:picture|photo)\b/i.test(label)) return true;
+
+  const owner = target?.closest?.('a[href]');
+  if (!owner?.href || facebookSubmittedKey(owner.href)) return false;
+  try {
+    const url = new URL(owner.href, 'https://www.facebook.com');
+    const host = url.hostname.toLowerCase();
+    if (host !== 'facebook.com' && !host.endsWith('.facebook.com')) return false;
+    return url.pathname === '/profile.php'
+      || /^\/[A-Za-z0-9._-]+\/?$/.test(url.pathname);
+  } catch {
+    return false;
+  }
 }
 
 function facebookPostIdFromContainer(

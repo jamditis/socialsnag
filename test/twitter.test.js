@@ -669,6 +669,25 @@ describe('resolvePage', () => {
 });
 
 describe('resolveSingle', () => {
+  it('keeps a tweet avatar untagged from the tweet identity', () => {
+    const status = makeNode({ tag: 'A', href: '/main/status/111' });
+    const avatar = makeNode({
+      tag: 'IMG',
+      src: 'https://pbs.twimg.com/profile_images/123/avatar_normal.jpg',
+    });
+    makeNode({
+      tag: 'ARTICLE',
+      is: ['article[data-testid="tweet"]', 'article[role="article"]'],
+      children: [status, avatar],
+    });
+
+    expect(resolveSingle(avatar.src, avatar)).toEqual([{
+      url: 'https://pbs.twimg.com/profile_images/123/avatar.jpg',
+      type: 'image',
+      filename: 'tweet_111',
+    }]);
+  });
+
   it('keeps a page-wide capture untagged when tweet identity exists', async () => {
     const t = quotedTweetTree({ mainVideo: true });
     const originalSendMessage = chrome.runtime.sendMessage;
