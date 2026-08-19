@@ -203,6 +203,36 @@ describe('shortcodeFromContainer', () => {
 });
 
 describe('resolveSingle', () => {
+  it('does not tag a page-wide script video with the clicked shortcode', () => {
+    const originalDocument = globalThis.document;
+    const permalink = {
+      tagName: 'A',
+      getAttribute: () => '/p/CxClicked/',
+      parentElement: null,
+    };
+    const target = {
+      tagName: 'VIDEO',
+      src: 'blob:https://www.instagram.com/video',
+      parentElement: permalink,
+      closest: () => null,
+    };
+    globalThis.document = {
+      querySelectorAll: (selector) => selector === 'script'
+        ? [{ textContent: '{"video_url":"https://scontent.cdninstagram.com/page-wide.mp4"}' }]
+        : [],
+    };
+
+    try {
+      expect(resolveSingle('', target, '/p/CxPage/')).toEqual([{
+        url: 'https://scontent.cdninstagram.com/page-wide.mp4',
+        type: 'video',
+        filename: 'reel_CxPage',
+      }]);
+    } finally {
+      globalThis.document = originalDocument;
+    }
+  });
+
   it('uses the clicked profile-grid permalink for item metadata', () => {
     const permalink = {
       tagName: 'A',
@@ -509,6 +539,33 @@ describe('mergeCapturedImages', () => {
 });
 
 describe('collectMediaFromContainer', () => {
+  it('does not tag a page-wide script video with the container shortcode', () => {
+    const originalDocument = globalThis.document;
+    const video = { src: 'blob:https://www.instagram.com/video' };
+    const post = {
+      querySelectorAll: (selector) => {
+        if (selector === 'video') return [video];
+        return [];
+      },
+    };
+    globalThis.document = {
+      querySelectorAll: (selector) => selector === 'script'
+        ? [{ textContent: '{"video_url":"https://scontent.cdninstagram.com/page-wide.mp4"}' }]
+        : [],
+    };
+
+    try {
+      const { items } = collectMediaFromContainer(post, 'CxContainer');
+      expect(items).toEqual([{
+        url: 'https://scontent.cdninstagram.com/page-wide.mp4',
+        type: 'video',
+        filename: 'post_CxContainer_1',
+      }]);
+    } finally {
+      globalThis.document = originalDocument;
+    }
+  });
+
   // The seam this change could regress silently. resolveAll reads domCount to decide
   // whether the DOM looked sparse, and a sparse DOM sends it to the page-wide captures,
   // which reach into neighbouring posts. So the two numbers have to diverge here: one

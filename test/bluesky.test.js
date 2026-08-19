@@ -320,6 +320,53 @@ describe('resolvePage', () => {
 });
 
 describe('resolveContentMessage', () => {
+  it('does not attribute an avatar to its containing post', async () => {
+    const permalink = {
+      href: '/profile/alice.bsky.social/post/3louter',
+      parentElement: null,
+    };
+    const avatarOwner = { matches: () => false, parentElement: null };
+    let post;
+    const avatar = {
+      tagName: 'IMG',
+      src: 'https://cdn.bsky.app/img/avatar_thumbnail/plain/did:plc:alice/avatar@jpeg',
+      matches: () => false,
+      parentElement: avatarOwner,
+      closest: (selector) => {
+        if (selector === '[data-testid="userAvatarImage"]') return avatarOwner;
+        if (selector.includes('postThreadItem') || selector.includes('feedItem')) return post;
+        return null;
+      },
+    };
+    post = {
+      matches: (selector) => selector === '[data-testid^="feedItem-by-"]',
+      parentElement: null,
+      querySelectorAll: (selector) => {
+        if (selector === 'a[href*="/post/"]') return [permalink];
+        if (selector === 'img[src*="cdn.bsky.app"]') return [avatar];
+        return [];
+      },
+    };
+    permalink.parentElement = post;
+    avatarOwner.parentElement = post;
+
+    const single = await resolveContentMessage(
+      { action: 'resolve', type: 'single', srcUrl: avatar.src },
+      avatar,
+      {},
+      '/profile/alice.bsky.social/post/3louter',
+    );
+    const all = await resolveContentMessage(
+      { action: 'resolve', type: 'all' },
+      avatar,
+      {},
+      '/profile/alice.bsky.social/post/3louter',
+    );
+
+    expect(single[0].meta).toBeUndefined();
+    expect(all[0].meta).toBeUndefined();
+  });
+
   it('derives item metadata per collected media owner', async () => {
     let post;
     const outerPermalink = {

@@ -41,7 +41,11 @@ function resolveSingle(srcUrl, target, pathname) {
     '[data-testid^="postThreadItem"]',
     '[data-testid^="feedItem"]',
   ]);
-  const identity = blueskyItemIdentityForTarget(target, post) || blueskyItemIdentity(pathname);
+  const identity = blueskyMediaIdentity(
+    target,
+    post,
+    blueskyItemIdentity(pathname),
+  );
   const url = upgradeImageUrl(srcUrl);
   if (url) {
     const rkey = extractPostId(pathname);
@@ -59,7 +63,7 @@ function resolveSingle(srcUrl, target, pathname) {
       const rkey = extractPostId(pathname);
       return [withItemMeta(
         { url: upgraded, type: 'image', filename: rkey ? `post_${rkey}` : null },
-        identity,
+        blueskyMediaIdentity(nearest, post, identity),
       )];
     }
   }
@@ -90,6 +94,11 @@ const BLUESKY_POST_BOUNDARY_SELECTOR = [
 ].join(', ');
 const BLUESKY_AVATAR_OWNER_SELECTOR = '[data-testid="userAvatarImage"]';
 const BLUESKY_LINK_OWNER_SELECTOR = 'a[href]';
+
+function blueskyMediaIdentity(media, post, fallbackIdentity) {
+  if (media?.closest?.(BLUESKY_AVATAR_OWNER_SELECTOR)) return null;
+  return blueskyItemIdentityForTarget(media, post) || fallbackIdentity;
+}
 
 function belongsToSubmittedPost(media, post) {
   const nearestPost = media.closest?.(BLUESKY_POST_BOUNDARY_SELECTOR);
@@ -124,7 +133,7 @@ function resolveAll(target, pathname, { submittedPost = null, identity = null } 
     if (submittedPost && !belongsToSubmittedPost(img, submittedPost)) return;
     const url = upgradeImageUrl(img.src);
     if (url) {
-      const mediaIdentity = blueskyItemIdentityForTarget(img, post) || itemIdentity;
+      const mediaIdentity = blueskyMediaIdentity(img, post, itemIdentity);
       items.push(withItemMeta({
         url,
         type: 'image',

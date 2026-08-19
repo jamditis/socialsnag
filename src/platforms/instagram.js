@@ -313,14 +313,11 @@ export function resolveSingle(srcUrl, target, pathname) {
     const scriptTexts = Array.from(scripts).map((s) => s.textContent);
     const cdnUrl = extractVideoUrlFromScripts(scriptTexts);
     if (cdnUrl) {
-      return [withItemMeta(
-        {
-          url: cdnUrl,
-          type: 'video',
-          filename: filenameShortcode ? `reel_${filenameShortcode}` : null,
-        },
-        { postId: shortcode },
-      )];
+      return [{
+        url: cdnUrl,
+        type: 'video',
+        filename: filenameShortcode ? `reel_${filenameShortcode}` : null,
+      }];
     }
 
     // Fall back to API lookup via background script
@@ -379,11 +376,11 @@ export function collectMediaFromContainer(container, shortcode) {
       const cdnUrl = extractVideoUrlFromScripts(getScriptTexts());
       if (cdnUrl && !usedVideoUrls.has(cdnUrl)) {
         usedVideoUrls.add(cdnUrl);
-        items.push(withItemMeta({
+        items.push({
           url: cdnUrl,
           type: 'video',
           filename: shortcode ? `post_${shortcode}_${index}` : null,
-        }, { postId: shortcode }));
+        });
         index++;
       } else if (shortcode && !usedVideoUrls.has('api:' + shortcode)) {
         // Fall back to API lookup

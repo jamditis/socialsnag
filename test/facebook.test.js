@@ -431,6 +431,46 @@ describe('buildCapturedItems', () => {
 });
 
 describe('resolveContentMessage', () => {
+  it('does not tag a document-wide script video with the selected post id', async () => {
+    const originalDocument = globalThis.document;
+    const permalink = { href: 'https://www.facebook.com/example/posts/9876543210/' };
+    const video = {
+      tagName: 'VIDEO',
+      src: 'blob:https://www.facebook.com/video',
+      matches: () => false,
+      parentElement: null,
+    };
+    const post = {
+      matches: (selector) => selector === '[role="article"]',
+      parentElement: null,
+      querySelector: (selector) => selector === 'video' ? video : null,
+      querySelectorAll: (selector) => selector === 'a[href]' ? [permalink] : [],
+    };
+    video.parentElement = post;
+    globalThis.document = {
+      body: null,
+      querySelectorAll: (selector) => selector === 'script'
+        ? [{ textContent: '{"playable_url":"https://video.xx.fbcdn.net/page-wide.mp4"}' }]
+        : [],
+    };
+
+    try {
+      const items = await resolveContentMessage({
+        action: 'resolve',
+        type: 'single',
+        srcUrl: '',
+      }, video, {});
+
+      expect(items).toEqual([{
+        url: 'https://video.xx.fbcdn.net/page-wide.mp4',
+        type: 'video',
+        filename: null,
+      }]);
+    } finally {
+      globalThis.document = originalDocument;
+    }
+  });
+
   it('uses the direct photo URL when the media has no post container', async () => {
     const originalWindow = globalThis.window;
     globalThis.window = {

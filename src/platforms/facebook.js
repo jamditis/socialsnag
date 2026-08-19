@@ -300,7 +300,7 @@ function findVideoUrl(target, { allowDocumentScripts = true } = {}) {
   const video = container.querySelector('video');
   if (video) {
     const src = video.src || video.querySelector('source')?.src;
-    if (src && !src.startsWith('blob:')) return src;
+    if (src && !src.startsWith('blob:')) return { url: src, correlated: true };
   }
 
   if (!allowDocumentScripts) return null;
@@ -308,7 +308,8 @@ function findVideoUrl(target, { allowDocumentScripts = true } = {}) {
   // Try to find playable_url in page scripts
   const scripts = document.querySelectorAll('script');
   const scriptTexts = Array.from(scripts).map((s) => s.textContent);
-  return extractVideoUrlFromScripts(scriptTexts);
+  const url = extractVideoUrlFromScripts(scriptTexts);
+  return url ? { url, correlated: false } : null;
 }
 
 function resolveSingle(
@@ -339,9 +340,12 @@ function resolveSingle(
     }
   }
 
-  const videoUrl = findVideoUrl(target, { allowDocumentScripts });
-  if (videoUrl) {
-    return [withItemMeta({ url: videoUrl, type: 'video', filename: null }, { postId })];
+  const video = findVideoUrl(target, { allowDocumentScripts });
+  if (video) {
+    return [withItemMeta(
+      { url: video.url, type: 'video', filename: null },
+      video.correlated ? { postId } : null,
+    )];
   }
 
   return [];
