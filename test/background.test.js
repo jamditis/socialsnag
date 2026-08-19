@@ -9,6 +9,7 @@ import {
   validateDownloadUrl,
   sanitizeDownloadPath,
   resolveBaseFilename,
+  buildTemplateFields,
   formatLocalDate,
   resolveInstagramPost,
   resolveInstagramStories,
@@ -315,6 +316,86 @@ describe('sanitizeDownloadPath', () => {
   it('replaces special characters in filename', () => {
     const path = sanitizeDownloadPath('file<>name', 'instagram', '.jpg');
     expect(path).toBe('SocialSnag/instagram/file__name.jpg');
+  });
+
+  it('renders the full token set in the folder (issue #76)', () => {
+    const fields = { platform: 'instagram', username: 'janedoe', date: '2026-08-19' };
+    const path = sanitizeDownloadPath('pic', 'instagram', '.jpg', '{platform}/{username}/{date}', fields);
+    expect(path).toBe('instagram/janedoe/2026-08-19/pic.jpg');
+  });
+
+  // A dropped middle token used to leave an empty path segment (`posts//media`).
+  it('collapses the empty segment a missing folder token leaves', () => {
+    const path = sanitizeDownloadPath('pic', 'twitter', '.jpg', 'posts/{username}/media', { platform: 'twitter' });
+    expect(path).toBe('posts/media/pic.jpg');
+  });
+
+  // The headline of #76: DOM-scraped values ({username}, {postId}) now flow into a
+  // slash-preserving path. Render-then-sanitize keeps the traversal defense on them.
+  it('strips traversal that arrives through a folder token value', () => {
+    const path = sanitizeDownloadPath('pic', 'twitter', '.jpg', 'shots/{username}', { username: '../../etc' });
+    expect(path).not.toContain('..');
+    expect(path).toBe('shots/etc/pic.jpg');
+  });
+
+  it('lets a folder token value nest, since a slash is a legal folder separator', () => {
+    const path = sanitizeDownloadPath('pic', 'twitter', '.jpg', 'shots/{username}', { username: 'a/b' });
+    expect(path).toBe('shots/a/b/pic.jpg');
+  });
+
+  // A single strip pass can leave a `../` behind when one removal regenerates another
+  // (`....//` -> `../`). The segment filter drops any dot-only segment outright, so no
+  // regeneration-style value leaves a traversal.
+  it('never leaves a traversal segment, even from a regeneration-style token value', () => {
+    const path = sanitizeDownloadPath('pic', 'twitter', '.jpg', 'shots/{username}', { username: 'x/....//../y' });
+    expect(path).not.toMatch(/(^|\/)\.+ *(\/|$)/);
+    expect(path).toBe('shots/x/y/pic.jpg');
+  });
+
+  // Windows strips trailing dots and spaces from each path component, so `.. ` and
+  // `...` normalize back to `..` at open time. The filter judges each segment by that
+  // Windows form, so those traverse-on-Windows values are dropped too.
+  it('drops segments that Windows would normalize to a traversal', () => {
+    for (const u of ['.. ', '.. .', '...', '   ']) {
+      const path = sanitizeDownloadPath('pic', 'twitter', '.jpg', 'shots/{username}/end', { username: u });
+      expect(path).toBe('shots/end/pic.jpg');
+    }
+  });
+
+  it('lets the platform argument win over a fields.platform that carries traversal', () => {
+    const path = sanitizeDownloadPath('pic', 'twitter', '.jpg', '{platform}', { platform: 'evil/../x' });
+    expect(path).toBe('twitter/pic.jpg');
+  });
+
+  it('falls back to the platform folder when the template renders empty', () => {
+    // {username} alone with no username renders nothing; validateTemplate rejects such
+    // a folder on input, so this only guards a stale stored value.
+    const path = sanitizeDownloadPath('pic', 'bluesky', '.jpg', '{username}', {});
+    expect(path).toBe('bluesky/pic.jpg');
+  });
+});
+
+describe('buildTemplateFields', () => {
+  it('builds the shared token bag from item meta', () => {
+    const item = { type: 'video', meta: { postId: 'abc', username: 'janedoe' } };
+    const fields = buildTemplateFields(item, 'instagram', 3);
+    expect(fields).toMatchObject({
+      platform: 'instagram', type: 'video', postId: 'abc', username: 'janedoe', index: 3,
+    });
+    expect(fields.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+
+  it('defaults type to file, index to 1, and leaves absent meta undefined', () => {
+    const fields = buildTemplateFields({}, 'twitter');
+    expect(fields.type).toBe('file');
+    expect(fields.index).toBe(1);
+    expect(fields.postId).toBeUndefined();
+    expect(fields.username).toBeUndefined();
+  });
+
+  it('honors an injected date so one download shares it across every path part', () => {
+    const fields = buildTemplateFields({ type: 'image' }, 'twitter', 1, '2020-01-01');
+    expect(fields.date).toBe('2020-01-01');
   });
 });
 
@@ -1485,6 +1566,13 @@ describe('resolveBaseFilename', () => {
     // The zip path numbers by position in the archive, which is the number the user
     // sees; meta.index is whatever the resolver happened to assign.
     expect(resolveBaseFilename(item, 'facebook', 'photo_{index}', 7)).toBe('photo_7');
+  });
+
+  it('renders a caller-supplied field bag so the filename shares the folder date', () => {
+    // The download paths build one bag per file and pass it here and to
+    // sanitizeDownloadPath, so both read the same {date} even across local midnight.
+    const fields = buildTemplateFields(item, 'facebook', 2, '2020-01-01');
+    expect(resolveBaseFilename(item, 'facebook', '{date}_{index}', 2, fields)).toBe('2020-01-01_2');
   });
 
   it('degrades to a shorter name when the resolver supplies no meta', () => {

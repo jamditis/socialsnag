@@ -9,7 +9,6 @@ import {
   extractId,
   TEMPLATE_TOKENS,
   ALWAYS_PRESENT_TOKENS,
-  FOLDER_TOKENS,
   renderTemplate,
   validateTemplate,
   templateFieldError,
@@ -385,27 +384,26 @@ describe('validateTemplate', () => {
     }
   });
 
-  // The folder renders {platform} only; validating it against the full vocabulary
-  // would accept {date} or {username} and then write a literal `{date}` folder to
-  // disk. allowedTokens restricts the folder to the tokens it can actually expand.
+  // allowedTokens stays an option for a caller that wants a narrower vocabulary, even
+  // though neither field passes one now. A token outside the subset is named unknown
+  // against the subset, so the reason lists what is available there, not the whole set.
   it('restricts a template to allowedTokens when given', () => {
-    const opts = { allowSlash: true, allowedTokens: FOLDER_TOKENS };
+    const opts = { allowSlash: true, allowedTokens: ['platform'] };
     expect(validateTemplate('SocialSnag/{platform}', opts).valid).toBe(true);
     const rejected = validateTemplate('shots/{date}', opts);
     expect(rejected.valid).toBe(false);
     expect(rejected.reason).toContain('{date}');
-    // A token outside the subset is named "unknown" against the subset, so the
-    // reason lists {platform} as what is available here, not the whole vocabulary.
     expect(rejected.reason).toContain('{platform}');
     expect(rejected.reason).not.toContain('{username}');
   });
 
-  // FOLDER_TOKENS is a subset of the vocabulary. If the folder is later widened to
-  // the full set, this stays true; a token invented for the folder alone would not.
-  it('keeps FOLDER_TOKENS inside the vocabulary', () => {
-    for (const token of FOLDER_TOKENS) {
-      expect(TEMPLATE_TOKENS).toContain(token);
+  // The folder now renders the full token set (issue #76), so a folder naming {date}
+  // or {username} validates instead of being rejected as it was under FOLDER_TOKENS.
+  it('accepts every token in a folder template', () => {
+    for (const token of TEMPLATE_TOKENS) {
+      expect(validateTemplate(`shots/{${token}}`, { allowSlash: true }).valid).toBe(true);
     }
+    expect(validateTemplate('{username}/{date}/{postId}', { allowSlash: true }).valid).toBe(true);
   });
 });
 
@@ -431,10 +429,17 @@ describe('templateFieldError', () => {
     expect(templateFieldError('{platform}/{postId}', { allowSlash: true })).toBe(null);
   });
 
-  // The options page passes the folder's allowedTokens through this wrapper, so the
-  // subset restriction has to survive the forwarding, not just the direct call.
-  it('forwards allowedTokens so the folder rejects a token it cannot render', () => {
-    const opts = { allowSlash: true, allowedTokens: FOLDER_TOKENS };
+  // The options page validates the folder with allowSlash and no allowedTokens, so a
+  // folder naming {username} or {date} now passes (issue #76).
+  it('accepts the full token set in a folder value', () => {
+    expect(templateFieldError('SocialSnag/{platform}', { allowSlash: true })).toBe(null);
+    expect(templateFieldError('{username}/{platform}', { allowSlash: true })).toBe(null);
+    expect(templateFieldError('shots/{date}', { allowSlash: true })).toBe(null);
+  });
+
+  // allowedTokens still forwards to the validator for any caller that narrows it.
+  it('forwards allowedTokens through to the validator', () => {
+    const opts = { allowSlash: true, allowedTokens: ['platform'] };
     expect(templateFieldError('SocialSnag/{platform}', opts)).toBe(null);
     expect(templateFieldError('{username}/{platform}', opts)).toContain('{username}');
   });
