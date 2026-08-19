@@ -114,6 +114,7 @@ describe('resolvePage', () => {
     expect(items[0]).toMatchObject({
       url: 'https://cdn.bsky.app/img/feed_fullsize/plain/did:plc:abc/3labc123xyz@jpeg',
       filename: 'post_3labc123xyz_1',
+      meta: { postId: '3labc123xyz', username: 'alice.bsky.social' },
     });
   });
 
@@ -132,6 +133,24 @@ describe('resolvePage', () => {
 
     expect(items).toHaveLength(1);
     expect(items[0].filename).toBe('post_3labc123xyz_1');
+  });
+
+  it('uses the selected reply identity without changing its existing page-based filename', async () => {
+    const reply = makePost('3lreply', 'did:plc:reply', 'reply.bsky.social');
+
+    const items = await resolveContentMessage(
+      { action: 'resolve', type: 'all' },
+      reply,
+      { querySelectorAll: () => [] },
+      '/profile/root.bsky.social/post/3lroot',
+    );
+
+    expect(items).toHaveLength(1);
+    expect(items[0].filename).toBe('post_3lroot_1');
+    expect(items[0].meta).toEqual({
+      postId: '3lreply',
+      username: 'reply.bsky.social',
+    });
   });
 
   it('does not select an unrelated feed item on a direct post page', async () => {
@@ -182,6 +201,10 @@ describe('resolvePage', () => {
     expect(items).toHaveLength(1);
     expect(items[0].url).toContain('did:plc:requested');
     expect(items[0].url).not.toContain('did:plc:other');
+    expect(items[0].meta).toEqual({
+      postId: '3lshared',
+      username: 'alice.bsky.social',
+    });
   });
 
   it('keeps handle submissions anchored to both account and post id', async () => {
@@ -293,5 +316,161 @@ describe('resolvePage', () => {
       'https://cdn.bsky.app/img/feed_fullsize/plain/did:plc:alice/own@jpeg',
       'https://video.bsky.app/watch/own.mp4',
     ]);
+  });
+});
+
+describe('resolveContentMessage', () => {
+  it('does not attribute an avatar to its containing post', async () => {
+    const permalink = {
+      href: '/profile/alice.bsky.social/post/3louter',
+      parentElement: null,
+    };
+    const avatarOwner = { matches: () => false, parentElement: null };
+    let post;
+    const avatar = {
+      tagName: 'IMG',
+      src: 'https://cdn.bsky.app/img/avatar_thumbnail/plain/did:plc:alice/avatar@jpeg',
+      matches: () => false,
+      parentElement: avatarOwner,
+      closest: (selector) => {
+        if (selector === '[data-testid="userAvatarImage"]') return avatarOwner;
+        if (selector.includes('postThreadItem') || selector.includes('feedItem')) return post;
+        return null;
+      },
+    };
+    post = {
+      matches: (selector) => selector === '[data-testid^="feedItem-by-"]',
+      parentElement: null,
+      querySelectorAll: (selector) => {
+        if (selector === 'a[href*="/post/"]') return [permalink];
+        if (selector === 'img[src*="cdn.bsky.app"]') return [avatar];
+        return [];
+      },
+    };
+    permalink.parentElement = post;
+    avatarOwner.parentElement = post;
+
+    const single = await resolveContentMessage(
+      { action: 'resolve', type: 'single', srcUrl: avatar.src },
+      avatar,
+      {},
+      '/profile/alice.bsky.social/post/3louter',
+    );
+    const all = await resolveContentMessage(
+      { action: 'resolve', type: 'all' },
+      avatar,
+      {},
+      '/profile/alice.bsky.social/post/3louter',
+    );
+
+    expect(single[0].meta).toBeUndefined();
+    expect(all[0].meta).toBeUndefined();
+  });
+
+  it('derives item metadata per collected media owner', async () => {
+    let post;
+    const outerPermalink = {
+      tagName: 'A',
+      href: '/profile/outer.bsky.social/post/3louter',
+      matches: () => false,
+      parentElement: null,
+    };
+    const quotedPermalink = {
+      tagName: 'A',
+      href: '/profile/quoted.bsky.social/post/3lquoted',
+      matches: () => false,
+      parentElement: null,
+    };
+    const media = (tagName, src, owner) => ({
+      tagName,
+      src,
+      matches: () => false,
+      parentElement: owner,
+      closest: (selector) => selector === 'a[href*="/post/"]' ? owner : null,
+    });
+    const outerImage = media(
+      'IMG',
+      'https://cdn.bsky.app/img/feed_thumbnail/plain/did:plc:outer/outer@jpeg',
+      outerPermalink,
+    );
+    const quotedImage = media(
+      'IMG',
+      'https://cdn.bsky.app/img/feed_thumbnail/plain/did:plc:quoted/quoted@jpeg',
+      quotedPermalink,
+    );
+    const quotedVideo = media(
+      'VIDEO',
+      'https://video.bsky.app/watch/quoted.mp4',
+      quotedPermalink,
+    );
+    post = {
+      matches: (selector) => selector === '[data-testid^="feedItem-by-"]',
+      parentElement: null,
+      querySelectorAll: (selector) => {
+        if (selector === 'a[href*="/post/"]') return [outerPermalink, quotedPermalink];
+        if (selector === 'img[src*="cdn.bsky.app"]') return [outerImage, quotedImage];
+        if (selector === 'video') return [quotedVideo];
+        return [];
+      },
+    };
+    outerPermalink.parentElement = post;
+    quotedPermalink.parentElement = post;
+
+    const items = await resolveContentMessage(
+      { action: 'resolve', type: 'all' },
+      outerImage,
+      { querySelectorAll: () => [] },
+      '/profile/outer.bsky.social/post/3louter',
+    );
+
+    expect(items.map((item) => item.meta)).toEqual([
+      { postId: '3louter', username: 'outer.bsky.social' },
+      { postId: '3lquoted', username: 'quoted.bsky.social' },
+      { postId: '3lquoted', username: 'quoted.bsky.social' },
+    ]);
+    expect(items.map((item) => item.filename)).toEqual([
+      'post_3louter_1',
+      'post_3louter_2',
+      'post_3louter_3',
+    ]);
+  });
+
+  it('uses the permalink that owns quoted media for item metadata', async () => {
+    const outerPermalink = { href: '/profile/outer.bsky.social/post/3louter' };
+    const quotedPermalink = {
+      tagName: 'A',
+      href: '/profile/quoted.bsky.social/post/3lquoted',
+      matches: () => false,
+      parentElement: null,
+    };
+    const post = {
+      matches: (selector) => selector === '[data-testid^="feedItem-by-"]',
+      parentElement: null,
+      querySelectorAll: (selector) => (
+        selector === 'a[href*="/post/"]' ? [outerPermalink, quotedPermalink] : []
+      ),
+    };
+    quotedPermalink.parentElement = post;
+    const target = {
+      tagName: 'IMG',
+      src: 'https://cdn.bsky.app/img/feed_thumbnail/plain/did:plc:quoted/quoted@jpeg',
+      matches: () => false,
+      parentElement: quotedPermalink,
+      closest: (selector) => selector === 'a[href*="/post/"]' ? quotedPermalink : null,
+    };
+
+    const items = await resolveContentMessage(
+      { action: 'resolve', type: 'single', srcUrl: target.src },
+      target,
+      { querySelectorAll: () => [] },
+      '/profile/outer.bsky.social/post/3louter',
+    );
+
+    expect(items).toHaveLength(1);
+    expect(items[0].filename).toBe('post_3louter');
+    expect(items[0].meta).toEqual({
+      postId: '3lquoted',
+      username: 'quoted.bsky.social',
+    });
   });
 });

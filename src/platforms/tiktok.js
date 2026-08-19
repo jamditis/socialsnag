@@ -20,6 +20,7 @@ SocialSnag.registerResolver(async (message, target) => {
       url: videos[0].url,
       type: 'video',
       filename: videoId ? `video_${videoId}` : null,
+      ...itemMeta(videoId, extractUsername()),
     }];
   }
 
@@ -40,6 +41,7 @@ function extractFromRehydrationJson() {
 
     if (videoDetail?.video) {
       const videoId = videoDetail.id || extractVideoId();
+      const username = videoDetail.author?.uniqueId || extractUsername();
       const playUrl = videoDetail.video.playAddr || videoDetail.video.downloadAddr;
 
       if (playUrl) {
@@ -47,6 +49,7 @@ function extractFromRehydrationJson() {
           url: playUrl,
           type: 'video',
           filename: videoId ? `video_${videoId}` : null,
+          ...itemMeta(videoId, username),
         };
       }
     }
@@ -67,10 +70,12 @@ function extractPhotoPosts() {
 
     if (videoDetail?.imagePost?.images) {
       const videoId = videoDetail.id || extractVideoId();
+      const username = videoDetail.author?.uniqueId || extractUsername();
       return videoDetail.imagePost.images.map((img, i) => ({
         url: img.imageURL?.urlList?.[0] || img.imageURL,
         type: 'image',
         filename: videoId ? `photo_${videoId}_${i + 1}` : null,
+        ...itemMeta(videoId, username),
       })).filter((item) => item.url);
     }
   } catch (e) { /* ignore */ }
@@ -81,4 +86,21 @@ function extractPhotoPosts() {
 function extractVideoId() {
   const match = window.location.pathname.match(/\/video\/(\d+)/);
   return match ? match[1] : null;
+}
+
+function extractUsername() {
+  const match = window.location.pathname.match(/^\/@([^/]+)\/(?:video|photo)\/\d+/);
+  if (!match) return null;
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    return match[1];
+  }
+}
+
+function itemMeta(postId, username) {
+  const meta = {};
+  if (postId) meta.postId = String(postId);
+  if (username) meta.username = String(username);
+  return Object.keys(meta).length > 0 ? { meta } : {};
 }

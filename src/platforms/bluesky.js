@@ -1,6 +1,11 @@
 // SocialSnag — Bluesky content script
 
-import { findNearestMedia, findPostContainer, hostMatches } from './common.js';
+import {
+  findNearestMedia,
+  findPostContainer,
+  hostMatches,
+  withItemMeta,
+} from './common.js';
 
 // --- Pure functions (exported for testing) ---
 
@@ -30,10 +35,24 @@ export function extractPostId(pathname) {
 // --- Browser wiring (not exported) ---
 
 function resolveSingle(srcUrl, target, pathname) {
+  const post = findPostContainer(target, [
+    '[data-testid^="postThreadItem-by-"]',
+    '[data-testid^="feedItem-by-"]',
+    '[data-testid^="postThreadItem"]',
+    '[data-testid^="feedItem"]',
+  ]);
+  const identity = blueskyMediaIdentity(
+    target,
+    post,
+    blueskyItemIdentity(pathname),
+  );
   const url = upgradeImageUrl(srcUrl);
   if (url) {
     const rkey = extractPostId(pathname);
-    return [{ url, type: 'image', filename: rkey ? `post_${rkey}` : null }];
+    return [withItemMeta(
+      { url, type: 'image', filename: rkey ? `post_${rkey}` : null },
+      identity,
+    )];
   }
 
   // If click landed on overlay, find nearest media
@@ -42,7 +61,10 @@ function resolveSingle(srcUrl, target, pathname) {
     const upgraded = upgradeImageUrl(nearest.src);
     if (upgraded) {
       const rkey = extractPostId(pathname);
-      return [{ url: upgraded, type: 'image', filename: rkey ? `post_${rkey}` : null }];
+      return [withItemMeta(
+        { url: upgraded, type: 'image', filename: rkey ? `post_${rkey}` : null },
+        blueskyMediaIdentity(nearest, post, identity),
+      )];
     }
   }
 
@@ -53,7 +75,10 @@ function resolveSingle(srcUrl, target, pathname) {
     const src = video.src;
     if (src && !src.startsWith('blob:')) {
       const rkey = extractPostId(pathname);
-      return [{ url: src, type: 'video', filename: rkey ? `post_${rkey}` : null }];
+      return [withItemMeta(
+        { url: src, type: 'video', filename: rkey ? `post_${rkey}` : null },
+        identity,
+      )];
     }
   }
 
@@ -70,6 +95,11 @@ const BLUESKY_POST_BOUNDARY_SELECTOR = [
 const BLUESKY_AVATAR_OWNER_SELECTOR = '[data-testid="userAvatarImage"]';
 const BLUESKY_LINK_OWNER_SELECTOR = 'a[href]';
 
+function blueskyMediaIdentity(media, post, fallbackIdentity) {
+  if (media?.closest?.(BLUESKY_AVATAR_OWNER_SELECTOR)) return null;
+  return blueskyItemIdentityForTarget(media, post) || fallbackIdentity;
+}
+
 function belongsToSubmittedPost(media, post) {
   const nearestPost = media.closest?.(BLUESKY_POST_BOUNDARY_SELECTOR);
   if (nearestPost && nearestPost !== post) return false;
@@ -82,7 +112,7 @@ function belongsToSubmittedPost(media, post) {
   return true;
 }
 
-function resolveAll(target, pathname, { submittedPost = null } = {}) {
+function resolveAll(target, pathname, { submittedPost = null, identity = null } = {}) {
   const post = findPostContainer(target, [
     '[data-testid^="postThreadItem-by-"]',
     '[data-testid^="feedItem-by-"]',
@@ -93,6 +123,9 @@ function resolveAll(target, pathname, { submittedPost = null } = {}) {
 
   const items = [];
   const rkey = extractPostId(pathname);
+  const itemIdentity = identity
+    || blueskyItemIdentityForTarget(target, post)
+    || blueskyItemIdentity(pathname);
   let index = 1;
 
   // Collect images from CDN
@@ -100,11 +133,12 @@ function resolveAll(target, pathname, { submittedPost = null } = {}) {
     if (submittedPost && !belongsToSubmittedPost(img, submittedPost)) return;
     const url = upgradeImageUrl(img.src);
     if (url) {
-      items.push({
+      const mediaIdentity = blueskyMediaIdentity(img, post, itemIdentity);
+      items.push(withItemMeta({
         url,
         type: 'image',
         filename: rkey ? `post_${rkey}_${index}` : null,
-      });
+      }, mediaIdentity));
       index++;
     }
   });
@@ -114,11 +148,12 @@ function resolveAll(target, pathname, { submittedPost = null } = {}) {
     if (submittedPost && !belongsToSubmittedPost(video, submittedPost)) return;
     const src = video.src;
     if (src && !src.startsWith('blob:')) {
-      items.push({
+      const mediaIdentity = blueskyItemIdentityForTarget(video, post) || itemIdentity;
+      items.push(withItemMeta({
         url: src,
         type: 'video',
         filename: rkey ? `post_${rkey}_${index}` : null,
-      });
+      }, mediaIdentity));
       index++;
     }
   });
@@ -142,6 +177,29 @@ function blueskySubmittedKey(rawUrl) {
     postId: match[2],
     did: match[1].startsWith('did:plc:'),
   };
+}
+
+function blueskyItemIdentity(rawUrl) {
+  const key = blueskySubmittedKey(rawUrl);
+  if (!key) return null;
+  return {
+    postId: key.postId,
+    username: key.did ? null : key.account,
+  };
+}
+
+function blueskyItemIdentityFromContainer(container) {
+  const links = container?.querySelectorAll?.('a[href*="/post/"]') || [];
+  for (const link of links) {
+    const identity = blueskyItemIdentity(link.href);
+    if (identity) return identity;
+  }
+  return null;
+}
+
+function blueskyItemIdentityForTarget(target, container) {
+  const owner = target?.closest?.('a[href*="/post/"]');
+  return blueskyItemIdentity(owner?.href) || blueskyItemIdentityFromContainer(container);
 }
 
 function matchesBlueskySubmission(requested, candidate) {
@@ -175,7 +233,10 @@ export async function resolvePage(
     if (Array.from(links).some((link) => (
       matchesBlueskySubmission(requestedKey, blueskySubmittedKey(link.href))
     ))) {
-      return resolveAll(candidate, new URL(pageUrl).pathname, { submittedPost: candidate });
+      return resolveAll(candidate, new URL(pageUrl).pathname, {
+        submittedPost: candidate,
+        identity: { postId: requestedKey.postId, username: requestedKey.account },
+      });
     }
   }
   return [];

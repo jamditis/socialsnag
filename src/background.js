@@ -1,6 +1,11 @@
 'use strict';
 
-import { ALLOWED_DOMAINS, sanitizeFilename, renderTemplate } from './platforms/common.js';
+import {
+  ALLOWED_DOMAINS,
+  sanitizeFilename,
+  renderTemplate,
+  withItemMeta,
+} from './platforms/common.js';
 import {
   IG_APP_ID,
   shortcodeToMediaId,
@@ -817,8 +822,21 @@ export async function resolveViaApi(platform, pageUrl) {
       const tweetId = match[1];
       const videoUrl = await resolveTwitterVideo(tweetId);
       if (videoUrl) {
+        let username = null;
+        try {
+          username = new URL(pageUrl).pathname
+            .match(/^\/([A-Za-z0-9_]+)\/status\/\d+/)?.[1] || null;
+        } catch { /* the post id remains useful when the caller supplied a relative url */ }
         await traceResolver({ platform, path: 'api-dispatch', outcome: 'ok', itemCount: 1 });
-        return { item: { url: videoUrl, type: 'video', filename: `tweet_${tweetId}`, needsVideoLookup: false } };
+        return { item: withItemMeta(
+          {
+            url: videoUrl,
+            type: 'video',
+            filename: `tweet_${tweetId}`,
+            needsVideoLookup: false,
+          },
+          { postId: tweetId, username },
+        ) };
       }
     }
   }
@@ -831,7 +849,15 @@ export async function resolveViaApi(platform, pageUrl) {
       const video = await resolveInstagramVideo(shortcode);
       if (video.url) {
         await traceResolver({ platform, path: 'api-dispatch', outcome: 'ok', itemCount: 1 });
-        return { item: { url: video.url, type: 'video', filename: `reel_${shortcode}`, needsVideoLookup: false } };
+        return { item: withItemMeta(
+          {
+            url: video.url,
+            type: 'video',
+            filename: `reel_${shortcode}`,
+            needsVideoLookup: false,
+          },
+          video.meta || { postId: shortcode },
+        ) };
       }
       error = video.error;
     }
@@ -1041,7 +1067,7 @@ export async function resolveInstagramStories(
       };
     }
     const data = await resp.json();
-    const items = parseStoryTray(data, { storyId });
+    const items = parseStoryTray(data, { storyId, username });
     if (items.length === 0) {
       // Expected when a story has aged out of the 24h window, and indistinguishable
       // from a lookup bug without this line.
@@ -1069,7 +1095,7 @@ async function resolveInstagramVideo(shortcode) {
   const video = post.items.find((it) => it.type === 'video');
   // A post that resolved fine but holds no video is a miss, not a failure: the
   // caller falls through to the DOM path for images, so there is no reason here.
-  return video ? { url: video.url } : { error: null };
+  return video ? { url: video.url, meta: video.meta } : { error: null };
 }
 
 // Bundle multiple resolved media items into one .zip via the offscreen document.
@@ -1241,8 +1267,9 @@ chrome.downloads.onErased.addListener(async (downloadId) => {
 // Resolve a lookup-placeholder item — a Twitter/X or Instagram video the content
 // script could only identify by id, needing a background API call — to a concrete
 // URL. Items that already carry a url pass straight through. Returns null if a
-// placeholder cannot be resolved. Shared by the download and copy-URL paths so
-// both handle these items identically.
+// placeholder cannot be resolved. An Instagram lookup also copies the API item
+// meta onto the placeholder so `{username}` is available for the download name.
+// Shared by the download and copy-URL paths so both handle these items identically.
 export async function resolveItemUrl(item, options = {}) {
   if (!item.needsVideoLookup) return item.url;
   if (item.tweetId) return resolveTwitterVideo(item.tweetId, options);
@@ -1250,7 +1277,13 @@ export async function resolveItemUrl(item, options = {}) {
   // notification branch, so a lookup that fails at this point (logged out,
   // rate-limited) reaches the user as the generic copy-failure message rather
   // than the Instagram-specific one a download would have shown.
-  if (item.shortcode) return (await resolveInstagramVideo(item.shortcode)).url ?? null;
+  if (item.shortcode) {
+    const video = await resolveInstagramVideo(item.shortcode);
+    if (video.url && video.meta) {
+      item.meta = { ...item.meta, ...video.meta };
+    }
+    return video.url ?? null;
+  }
   return null;
 }
 

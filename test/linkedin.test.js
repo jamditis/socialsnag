@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { upgradeUrl, extractPostId, buildImageItems } from '../src/platforms/linkedin.js';
+import { upgradeUrl, extractPostId, buildImageItems, resolveSingle } from '../src/platforms/linkedin.js';
 
 describe('upgradeUrl', () => {
   it('returns null for null input', () => {
@@ -105,6 +105,7 @@ describe('buildImageItems', () => {
       url: `${CDN}/photo.jpg`,
       type: 'image',
       filename: 'post_7012345678901234567_1',
+      meta: { postId: '7012345678901234567' },
     }]);
   });
 
@@ -133,6 +134,7 @@ describe('buildImageItems', () => {
       url: `${CDN}/photo.jpg`,
       type: 'image',
       filename: 'post_7012345678901234567_1',
+      meta: { postId: '7012345678901234567' },
     }]);
   });
 
@@ -152,10 +154,94 @@ describe('buildImageItems', () => {
   it('leaves the filename null when the page URL has no post id', () => {
     const { items } = buildImageItems([img(`${CDN}/a.jpg`, 500)]);
     expect(items[0].filename).toBeNull();
+    expect(items[0].meta).toBeUndefined();
+  });
+
+  it('adds a verified card id without changing the existing filename', () => {
+    const { items } = buildImageItems(
+      [img(`${CDN}/a.jpg`, 500)],
+      null,
+      '7099999999999999999',
+    );
+    expect(items[0].filename).toBeNull();
+    expect(items[0].meta).toEqual({ postId: '7099999999999999999' });
   });
 
   it('ignores images from outside the LinkedIn CDN', () => {
     const { items } = buildImageItems([img('https://example.com/photo.jpg', 500)]);
     expect(items).toEqual([]);
+  });
+});
+
+describe('resolveSingle', () => {
+  const CDN = 'https://media.licdn.com/dms/image/v2/D4E22';
+
+  function feedCardTarget(src) {
+    const post = {
+      matches: (selector) => selector === '.feed-shared-update-v2' || selector === '[data-urn]',
+      parentElement: null,
+      dataset: { urn: 'urn:li:activity:7012345678901234567' },
+      getAttribute: (name) => (
+        name === 'data-urn' ? 'urn:li:activity:7012345678901234567' : null
+      ),
+      querySelectorAll: () => [],
+    };
+    return {
+      tagName: 'IMG',
+      src,
+      matches: () => false,
+      parentElement: post,
+    };
+  }
+
+  it('does not tag an author avatar with the containing activity id', () => {
+    const originalWindow = globalThis.window;
+    globalThis.window = { location: { href: 'https://www.linkedin.com/feed/' } };
+    const target = feedCardTarget(
+      `${CDN}/profile-displayphoto-shrink_100_100/avatar.jpg`,
+    );
+
+    try {
+      expect(resolveSingle(target.src, target)).toEqual([{
+        url: `${CDN}/profile-displayphoto-shrink_100_100/avatar.jpg`,
+        type: 'image',
+        filename: null,
+      }]);
+    } finally {
+      globalThis.window = originalWindow;
+    }
+  });
+
+  it('does not tag a company logo with the containing activity id', () => {
+    const originalWindow = globalThis.window;
+    globalThis.window = { location: { href: 'https://www.linkedin.com/feed/' } };
+    const target = feedCardTarget(`${CDN}/company-logo_100_100/logo.png`);
+
+    try {
+      expect(resolveSingle(target.src, target)).toEqual([{
+        url: `${CDN}/company-logo_100_100/logo.png`,
+        type: 'image',
+        filename: null,
+      }]);
+    } finally {
+      globalThis.window = originalWindow;
+    }
+  });
+
+  it('still tags a post photo with the containing activity id', () => {
+    const originalWindow = globalThis.window;
+    globalThis.window = { location: { href: 'https://www.linkedin.com/feed/' } };
+    const target = feedCardTarget(`${CDN}/shrink_800_800/photo.jpg`);
+
+    try {
+      expect(resolveSingle(target.src, target)).toEqual([{
+        url: `${CDN}/photo.jpg`,
+        type: 'image',
+        filename: null,
+        meta: { postId: '7012345678901234567' },
+      }]);
+    } finally {
+      globalThis.window = originalWindow;
+    }
   });
 });

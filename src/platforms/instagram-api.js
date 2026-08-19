@@ -1,6 +1,6 @@
 // SocialSnag — Instagram private web API helpers (pure, testable)
 
-import { classifyFailure } from './common.js';
+import { classifyFailure, withItemMeta } from './common.js';
 
 export const IG_APP_ID = '936619743392459';
 
@@ -68,29 +68,36 @@ export function pickBestVideo(versions, preference = 'largest') {
 }
 
 // Build one media item from a post/carousel node. isCarousel controls naming.
-function mediaFromNode(node, shortcode, index, isCarousel) {
+function mediaFromNode(node, shortcode, index, isCarousel, username = null) {
   if (Array.isArray(node.video_versions) && node.video_versions.length) {
     const url = pickBestVideo(node.video_versions);
     if (!url) return null;
     const filename = isCarousel ? `post_${shortcode}_${index}` : `reel_${shortcode}`;
-    return { url, type: 'video', filename, index };
+    return withItemMeta(
+      { url, type: 'video', filename, index },
+      { postId: shortcode, username },
+    );
   }
   const url = pickBestCandidate(node?.image_versions2?.candidates);
   if (!url) return null;
   const filename = isCarousel ? `post_${shortcode}_${index}` : `post_${shortcode}`;
-  return { url, type: 'image', filename, index };
+  return withItemMeta(
+    { url, type: 'image', filename, index },
+    { postId: shortcode, username },
+  );
 }
 
 // Enumerate all media in a post response (single image/video or full carousel).
 export function parsePostMedia(apiJson, shortcode) {
   const item = apiJson?.items?.[0];
   if (!item) return [];
+  const username = item.user?.username || null;
   if (Array.isArray(item.carousel_media) && item.carousel_media.length) {
     return item.carousel_media
-      .map((node, i) => mediaFromNode(node, shortcode, i + 1, true))
+      .map((node, i) => mediaFromNode(node, shortcode, i + 1, true, username))
       .filter(Boolean);
   }
-  const single = mediaFromNode(item, shortcode, 1, false);
+  const single = mediaFromNode(item, shortcode, 1, false, username);
   return single ? [single] : [];
 }
 
@@ -109,7 +116,7 @@ export function extractStoryRef(pathname) {
 
 // Enumerate story items from a reels_media response. If storyId matches an
 // item pk, return only that one; otherwise return the whole active tray.
-export function parseStoryTray(apiJson, { storyId } = {}) {
+export function parseStoryTray(apiJson, { storyId, username = null } = {}) {
   const items = apiJson?.reels_media?.[0]?.items || [];
   const mapped = items.map((it, i) => {
     // Prefer the pk embedded in the string id (`<pk>_<userid>`) over the raw pk
@@ -121,10 +128,30 @@ export function parseStoryTray(apiJson, { storyId } = {}) {
     const base = { pk, id: it.id, index: i + 1 };
     if (Array.isArray(it.video_versions) && it.video_versions.length) {
       const url = pickBestVideo(it.video_versions);
-      return url ? { url, type: 'video', filename: `story_${base.pk}`, index: base.index, pk: base.pk, id: base.id } : null;
+      return url ? withItemMeta(
+        {
+          url,
+          type: 'video',
+          filename: `story_${base.pk}`,
+          index: base.index,
+          pk: base.pk,
+          id: base.id,
+        },
+        { postId: base.pk, username },
+      ) : null;
     }
     const url = pickBestCandidate(it?.image_versions2?.candidates);
-    return url ? { url, type: 'image', filename: `story_${base.pk}`, index: base.index, pk: base.pk, id: base.id } : null;
+    return url ? withItemMeta(
+      {
+        url,
+        type: 'image',
+        filename: `story_${base.pk}`,
+        index: base.index,
+        pk: base.pk,
+        id: base.id,
+      },
+      { postId: base.pk, username },
+    ) : null;
   }).filter(Boolean);
 
   // A single-story request ("download this") must return that exact story or
@@ -138,9 +165,15 @@ export function parseStoryTray(apiJson, { storyId } = {}) {
     // have been rounded if read from the numeric pk field.
     const target = String(storyId);
     const one = mapped.find((m) => m.pk === target);
-    return one ? [{ url: one.url, type: one.type, filename: one.filename, index: one.index }] : [];
+    return one ? [withItemMeta(
+      { url: one.url, type: one.type, filename: one.filename, index: one.index },
+      one.meta || {},
+    )] : [];
   }
-  return mapped.map((m) => ({ url: m.url, type: m.type, filename: m.filename, index: m.index }));
+  return mapped.map((m) => withItemMeta(
+    { url: m.url, type: m.type, filename: m.filename, index: m.index },
+    m.meta || {},
+  ));
 }
 
 // Map an Instagram API HTTP status to a user-facing message. Thin adapter over

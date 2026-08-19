@@ -6,6 +6,7 @@ import {
   getCapturedMedia,
   hostMatches,
   isContentSized,
+  withItemMeta,
 } from './common.js';
 
 // --- Pure functions (exported for testing) ---
@@ -188,9 +189,10 @@ export function extractSubmittedVideoUrl(scriptTexts, videoIds) {
  *
  * @param {Array<{src: string, width?: number, naturalWidth?: number}>} images
  * @param {number} startIndex first filename suffix to use
+ * @param {string|null} postId verified owning post identifier
  * @returns {{items: Array<object>, index: number}} items and the next free index
  */
-export function buildImageItems(images, startIndex = 1) {
+export function buildImageItems(images, startIndex = 1, postId = null) {
   const items = [];
   // key -> { itemIndex, area }: the position a photo's first sighting won, and the
   // sharpest variant placed so far, so a repeat can upgrade the URL without moving it.
@@ -215,7 +217,10 @@ export function buildImageItems(images, startIndex = 1) {
 
     const id = extractPhotoId(url);
     placed.set(key, { itemIndex: items.length, area });
-    items.push({ url, type: 'image', filename: id ? `photo_${id}_${index}` : null });
+    items.push(withItemMeta(
+      { url, type: 'image', filename: id ? `photo_${id}_${index}` : null },
+      { postId },
+    ));
     index++;
   }
 
@@ -295,7 +300,7 @@ function findVideoUrl(target, { allowDocumentScripts = true } = {}) {
   const video = container.querySelector('video');
   if (video) {
     const src = video.src || video.querySelector('source')?.src;
-    if (src && !src.startsWith('blob:')) return src;
+    if (src && !src.startsWith('blob:')) return { url: src, correlated: true };
   }
 
   if (!allowDocumentScripts) return null;
@@ -303,14 +308,23 @@ function findVideoUrl(target, { allowDocumentScripts = true } = {}) {
   // Try to find playable_url in page scripts
   const scripts = document.querySelectorAll('script');
   const scriptTexts = Array.from(scripts).map((s) => s.textContent);
-  return extractVideoUrlFromScripts(scriptTexts);
+  const url = extractVideoUrlFromScripts(scriptTexts);
+  return url ? { url, correlated: false } : null;
 }
 
-function resolveSingle(srcUrl, target, { allowDocumentScripts = true } = {}) {
+function resolveSingle(
+  srcUrl,
+  target,
+  { allowDocumentScripts = true, postId: suppliedPostId = null } = {},
+) {
+  const postId = suppliedPostId || facebookPostIdFromTarget(target);
   const url = upgradeUrl(srcUrl);
   if (url) {
     const id = extractPhotoId(srcUrl);
-    return [{ url, type: 'image', filename: id ? `photo_${id}` : null }];
+    return [withItemMeta(
+      { url, type: 'image', filename: id ? `photo_${id}` : null },
+      { postId },
+    )];
   }
 
   // If click landed on overlay, find nearest media
@@ -319,13 +333,19 @@ function resolveSingle(srcUrl, target, { allowDocumentScripts = true } = {}) {
     const upgraded = upgradeUrl(nearest.src);
     if (upgraded) {
       const id = extractPhotoId(nearest.src);
-      return [{ url: upgraded, type: 'image', filename: id ? `photo_${id}` : null }];
+      return [withItemMeta(
+        { url: upgraded, type: 'image', filename: id ? `photo_${id}` : null },
+        { postId },
+      )];
     }
   }
 
-  const videoUrl = findVideoUrl(target, { allowDocumentScripts });
-  if (videoUrl) {
-    return [{ url: videoUrl, type: 'video', filename: null }];
+  const video = findVideoUrl(target, { allowDocumentScripts });
+  if (video) {
+    return [withItemMeta(
+      { url: video.url, type: 'video', filename: null },
+      video.correlated ? { postId } : null,
+    )];
   }
 
   return [];
@@ -342,15 +362,17 @@ async function resolveAll(
   ]);
   if (!post) return resolveSingle(target?.src || '', target, { allowDocumentScripts });
 
+  const postId = facebookPostIdFromContainer(post);
+
   // querySelectorAll returns document order, which is the album's own slide order.
   const domImages = Array.from(post.querySelectorAll('img[src*="fbcdn.net"]'));
-  const { items } = buildImageItems(domImages);
+  const { items } = buildImageItems(domImages, 1, postId);
 
   // Fall back to webRequest captures if DOM is sparse. Numbering restarts at 1 by
   // construction: this branch only runs when the DOM walk produced nothing.
   if (items.length === 0) {
     if (!allowCaptured) {
-      return resolveSingle(target?.src || '', target, { allowDocumentScripts });
+      return resolveSingle(target?.src || '', target, { allowDocumentScripts, postId });
     }
     const captured = await getCapturedMedia();
     const fallback = buildCapturedItems(captured);
@@ -362,7 +384,7 @@ async function resolveAll(
     }
     return fallback.items.length > 0
       ? fallback.items
-      : resolveSingle(target?.src || '', target, { allowDocumentScripts });
+      : resolveSingle(target?.src || '', target, { allowDocumentScripts, postId });
   }
 
   return items;
@@ -413,9 +435,40 @@ function hasFacebookPermalink(container, requestedKey) {
   return Array.from(links).some((link) => facebookSubmittedKey(link.href) === requestedKey);
 }
 
+function facebookPostId(requestedKey) {
+  return requestedKey?.match(/^(?:post|photo|video):(.+)$/)?.[1] || null;
+}
+
+function facebookPostIdFromContainer(
+  container,
+  pageUrl = globalThis.window?.location?.href || '',
+) {
+  const requestedKey = facebookSubmittedKey(pageUrl);
+  if (!container) return facebookPostId(requestedKey);
+  if (requestedKey && hasFacebookPermalink(container, requestedKey)) {
+    return facebookPostId(requestedKey);
+  }
+
+  const links = container?.querySelectorAll?.('a[href]') || [];
+  for (const link of links) {
+    const postId = facebookPostId(facebookSubmittedKey(link.href));
+    if (postId) return postId;
+  }
+  return null;
+}
+
+function facebookPostIdFromTarget(target) {
+  const container = findPostContainer(target, [
+    '[role="article"]',
+    '[data-pagelet*="FeedUnit"]',
+    '[data-pagelet*="ProfileTimeline"]',
+  ]);
+  return facebookPostIdFromContainer(container);
+}
+
 function submittedVideoIds(requestedKey) {
   const ids = new Set();
-  const requestedId = requestedKey?.match(/^(?:post|photo|video):(.+)$/)?.[1];
+  const requestedId = facebookPostId(requestedKey);
   if (requestedId) ids.add(requestedId);
   return ids;
 }
@@ -450,22 +503,22 @@ function resolveSubmittedVideo(container, requestedKey, root) {
     const directUrl = directVideo.currentSrc
       || directVideo.src
       || directVideo.querySelector?.('source')?.src;
-    return {
+    return withItemMeta({
       url: directUrl,
       type: 'video',
       filename: filenameId ? `video_${filenameId}` : null,
-    };
+    }, { postId: filenameId });
   }
 
   const scriptTexts = Array.from(root.querySelectorAll?.('script') || [], (script) => (
     script.textContent || ''
   ));
   const url = extractSubmittedVideoUrl(scriptTexts, ids);
-  return url ? {
+  return url ? withItemMeta({
     url,
     type: 'video',
     filename: filenameId ? `video_${filenameId}` : null,
-  } : null;
+  }, { postId: filenameId }) : null;
 }
 
 // Resolve only a container or media link whose permalink proves it owns the
@@ -477,6 +530,7 @@ export async function resolvePage(
 ) {
   const requestedKey = facebookSubmittedKey(pageUrl);
   if (!requestedKey) return [];
+  const postId = facebookPostId(requestedKey);
 
   const candidates = root.querySelectorAll?.(
     '[role="article"], [data-pagelet*="FeedUnit"], '
@@ -487,7 +541,7 @@ export async function resolvePage(
       const domImages = Array.from(
         candidate.querySelectorAll?.('img[src*="fbcdn.net"]') || [],
       );
-      const { items } = buildImageItems(domImages);
+      const { items } = buildImageItems(domImages, 1, postId);
       const video = resolveSubmittedVideo(candidate, requestedKey, root);
       if (!video || items.some((item) => item.url === video.url)) return items;
       return [...items, video];
@@ -503,7 +557,7 @@ export async function resolvePage(
     );
     if (!media) return [];
     const items = media.tagName === 'IMG'
-      ? resolveSingle(media.src || '', media, { allowDocumentScripts: false })
+      ? resolveSingle(media.src || '', media, { allowDocumentScripts: false, postId })
       : [];
     const video = resolveSubmittedVideo(link, requestedKey, root);
     if (!video || items.some((item) => item.url === video.url)) return items;

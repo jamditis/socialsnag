@@ -1,6 +1,12 @@
 // SocialSnag — Instagram content script
 
-import { findNearestMedia, findPostContainer, getCapturedMedia, hostMatches } from './common.js';
+import {
+  findNearestMedia,
+  findPostContainer,
+  getCapturedMedia,
+  hostMatches,
+  withItemMeta,
+} from './common.js';
 
 // --- Pure functions (exported for testing) ---
 
@@ -86,11 +92,11 @@ export function buildImageItems(images, shortcode, startIndex = 1) {
     if (seen.has(url)) continue;
     seen.add(url);
 
-    items.push({
+    items.push(withItemMeta({
       url,
       type: 'image',
       filename: shortcode ? `post_${shortcode}_${index}` : null,
-    });
+    }, { postId: shortcode }));
     index++;
   }
 
@@ -249,18 +255,26 @@ function extractFromPageJson(pathname) {
   const parsed = parseMediaFromJson(jsonStrings);
   const shortcode = extractShortcode(pathname);
 
-  return parsed.map((item) => ({
+  return parsed.map((item) => withItemMeta({
     url: item.url,
     type: item.type,
     filename: shortcode ? `post_${shortcode}_${item.index}` : null,
-  }));
+  }, { postId: shortcode }));
 }
 
-function resolveSingle(srcUrl, target, pathname) {
+export function resolveSingle(srcUrl, target, pathname) {
+  const shortcode = shortcodeForTarget(target, pathname);
+  const filenameShortcode = extractShortcode(pathname);
   const url = upgradeImageUrl(srcUrl, target);
   if (url) {
-    const shortcode = extractShortcode(pathname);
-    return [{ url, type: 'image', filename: shortcode ? `post_${shortcode}` : null }];
+    return [withItemMeta(
+      {
+        url,
+        type: 'image',
+        filename: filenameShortcode ? `post_${filenameShortcode}` : null,
+      },
+      { postId: shortcode },
+    )];
   }
 
   // If click landed on overlay, find nearest media
@@ -268,8 +282,14 @@ function resolveSingle(srcUrl, target, pathname) {
   if (nearest?.tagName === 'IMG') {
     const upgraded = upgradeImageUrl(nearest.src, nearest);
     if (upgraded) {
-      const shortcode = extractShortcode(pathname);
-      return [{ url: upgraded, type: 'image', filename: shortcode ? `post_${shortcode}` : null }];
+      return [withItemMeta(
+        {
+          url: upgraded,
+          type: 'image',
+          filename: filenameShortcode ? `post_${filenameShortcode}` : null,
+        },
+        { postId: shortcode },
+      )];
     }
   }
 
@@ -278,8 +298,14 @@ function resolveSingle(srcUrl, target, pathname) {
   if (video) {
     const src = video.src;
     if (src && !src.startsWith('blob:')) {
-      const shortcode = extractShortcode(pathname);
-      return [{ url: src, type: 'video', filename: shortcode ? `reel_${shortcode}` : null }];
+      return [withItemMeta(
+        {
+          url: src,
+          type: 'video',
+          filename: filenameShortcode ? `reel_${filenameShortcode}` : null,
+        },
+        { postId: shortcode },
+      )];
     }
 
     // blob: URL — try to extract the real CDN URL from page scripts
@@ -287,14 +313,21 @@ function resolveSingle(srcUrl, target, pathname) {
     const scriptTexts = Array.from(scripts).map((s) => s.textContent);
     const cdnUrl = extractVideoUrlFromScripts(scriptTexts);
     if (cdnUrl) {
-      const shortcode = extractShortcode(pathname);
-      return [{ url: cdnUrl, type: 'video', filename: shortcode ? `reel_${shortcode}` : null }];
+      return [{
+        url: cdnUrl,
+        type: 'video',
+        filename: filenameShortcode ? `reel_${filenameShortcode}` : null,
+      }];
     }
 
     // Fall back to API lookup via background script
-    const shortcode = extractShortcode(pathname);
     if (shortcode) {
-      return [{ type: 'video', filename: shortcode ? `reel_${shortcode}` : null, shortcode, needsVideoLookup: true }];
+      return [withItemMeta({
+        type: 'video',
+        filename: filenameShortcode ? `reel_${filenameShortcode}` : null,
+        shortcode,
+        needsVideoLookup: true,
+      }, { postId: shortcode })];
     }
   }
 
@@ -331,11 +364,11 @@ export function collectMediaFromContainer(container, shortcode) {
     if (src && !src.startsWith('blob:')) {
       if (!usedVideoUrls.has(src)) {
         usedVideoUrls.add(src);
-        items.push({
+        items.push(withItemMeta({
           url: src,
           type: 'video',
           filename: shortcode ? `post_${shortcode}_${index}` : null,
-        });
+        }, { postId: shortcode }));
         index++;
       }
     } else if (src && src.startsWith('blob:')) {
@@ -352,12 +385,12 @@ export function collectMediaFromContainer(container, shortcode) {
       } else if (shortcode && !usedVideoUrls.has('api:' + shortcode)) {
         // Fall back to API lookup
         usedVideoUrls.add('api:' + shortcode);
-        items.push({
+        items.push(withItemMeta({
           type: 'video',
           filename: shortcode ? `reel_${shortcode}` : null,
           shortcode,
           needsVideoLookup: true,
-        });
+        }, { postId: shortcode }));
         index++;
       }
     }
@@ -409,6 +442,12 @@ function descendantHrefs(container) {
   return Array.from(container.querySelectorAll('a[href]')).map((a) => a.getAttribute('href'));
 }
 
+function shortcodeForTarget(target, pathname) {
+  return shortcodeFromContainer(ancestorHrefs(target))
+    || shortcodeFromContainer(descendantHrefs(target?.closest?.('article')))
+    || extractShortcode(pathname);
+}
+
 async function resolveAll(target, pathname) {
   const urlShortcode = extractShortcode(pathname);
 
@@ -442,9 +481,7 @@ async function resolveAll(target, pathname) {
   //      link in the article header, which is neither an ancestor of the media
   //      nor inside the narrow media wrapper findPostContainer often returns;
   //   3. the resolved container itself, as a last resort.
-  const shortcode = urlShortcode
-    || shortcodeFromContainer(ancestorHrefs(target))
-    || shortcodeFromContainer(descendantHrefs(target?.closest?.('article')))
+  const shortcode = shortcodeForTarget(target, pathname)
     || shortcodeFromContainer(descendantHrefs(post));
   const { items, index: nextIndex, domCount } = collectMediaFromContainer(post, shortcode);
   let index = nextIndex;

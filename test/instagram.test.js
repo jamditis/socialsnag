@@ -8,6 +8,7 @@ import {
   buildImageItems,
   mergeCapturedImages,
   collectMediaFromContainer,
+  resolveSingle,
 } from '../src/platforms/instagram.js';
 
 describe('upgradeImageUrl', () => {
@@ -201,6 +202,80 @@ describe('shortcodeFromContainer', () => {
   });
 });
 
+describe('resolveSingle', () => {
+  it('does not tag a page-wide script video with the clicked shortcode', () => {
+    const originalDocument = globalThis.document;
+    const permalink = {
+      tagName: 'A',
+      getAttribute: () => '/p/CxClicked/',
+      parentElement: null,
+    };
+    const target = {
+      tagName: 'VIDEO',
+      src: 'blob:https://www.instagram.com/video',
+      parentElement: permalink,
+      closest: () => null,
+    };
+    globalThis.document = {
+      querySelectorAll: (selector) => selector === 'script'
+        ? [{ textContent: '{"video_url":"https://scontent.cdninstagram.com/page-wide.mp4"}' }]
+        : [],
+    };
+
+    try {
+      expect(resolveSingle('', target, '/p/CxPage/')).toEqual([{
+        url: 'https://scontent.cdninstagram.com/page-wide.mp4',
+        type: 'video',
+        filename: 'reel_CxPage',
+      }]);
+    } finally {
+      globalThis.document = originalDocument;
+    }
+  });
+
+  it('uses the clicked profile-grid permalink for item metadata', () => {
+    const permalink = {
+      tagName: 'A',
+      getAttribute: () => '/p/CxGrid42/',
+      parentElement: null,
+    };
+    const target = {
+      tagName: 'IMG',
+      src: `${CDN}/s640x640/GRID_n.jpg`,
+      srcset: '',
+      parentElement: permalink,
+    };
+
+    expect(resolveSingle(target.src, target, '/alice/')).toEqual([{
+      url: `${CDN}/GRID_n.jpg`,
+      type: 'image',
+      filename: null,
+      meta: { postId: 'CxGrid42' },
+    }]);
+  });
+
+  it('prefers the clicked permalink over a different post in the page URL', () => {
+    const permalink = {
+      tagName: 'A',
+      getAttribute: () => '/p/CxClicked/',
+      parentElement: null,
+    };
+    const target = {
+      tagName: 'IMG',
+      src: `${CDN}/s640x640/RELATED_n.jpg`,
+      srcset: '',
+      parentElement: permalink,
+    };
+
+    expect(resolveSingle(target.src, target, '/p/CxPage/')).toEqual([{
+      url: `${CDN}/RELATED_n.jpg`,
+      type: 'image',
+      filename: 'post_CxPage',
+      meta: { postId: 'CxClicked' },
+    }]);
+  });
+});
+
 const CDN = 'https://scontent.cdninstagram.com/v/t51.2885-15';
 
 describe('buildImageItems', () => {
@@ -214,9 +289,12 @@ describe('buildImageItems', () => {
       { src: `${CDN}/s640x640/AAA_n.jpg` },
     ], 'CxYz1');
 
-    expect(items).toEqual([
-      { url: `${CDN}/AAA_n.jpg`, type: 'image', filename: 'post_CxYz1_1' },
-    ]);
+    expect(items).toEqual([{
+      url: `${CDN}/AAA_n.jpg`,
+      type: 'image',
+      filename: 'post_CxYz1_1',
+      meta: { postId: 'CxYz1' },
+    }]);
   });
 
   it('collapses two imgs for one slide that share a srcset', () => {
@@ -308,6 +386,7 @@ describe('buildImageItems', () => {
   it('leaves the filename null when the post has no shortcode', () => {
     const { items } = buildImageItems([{ src: `${CDN}/s640x640/AAA_n.jpg` }], null);
     expect(items[0].filename).toBeNull();
+    expect(items[0].meta).toBeUndefined();
   });
 
   // resolveAll reads a small media count as a sparse DOM and falls back to the
@@ -460,6 +539,33 @@ describe('mergeCapturedImages', () => {
 });
 
 describe('collectMediaFromContainer', () => {
+  it('does not tag a page-wide script video with the container shortcode', () => {
+    const originalDocument = globalThis.document;
+    const video = { src: 'blob:https://www.instagram.com/video' };
+    const post = {
+      querySelectorAll: (selector) => {
+        if (selector === 'video') return [video];
+        return [];
+      },
+    };
+    globalThis.document = {
+      querySelectorAll: (selector) => selector === 'script'
+        ? [{ textContent: '{"video_url":"https://scontent.cdninstagram.com/page-wide.mp4"}' }]
+        : [],
+    };
+
+    try {
+      const { items } = collectMediaFromContainer(post, 'CxContainer');
+      expect(items).toEqual([{
+        url: 'https://scontent.cdninstagram.com/page-wide.mp4',
+        type: 'video',
+        filename: 'post_CxContainer_1',
+      }]);
+    } finally {
+      globalThis.document = originalDocument;
+    }
+  });
+
   // The seam this change could regress silently. resolveAll reads domCount to decide
   // whether the DOM looked sparse, and a sparse DOM sends it to the page-wide captures,
   // which reach into neighbouring posts. So the two numbers have to diverge here: one

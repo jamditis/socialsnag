@@ -397,6 +397,7 @@ describe('resolveInstagramStories', () => {
 
     const { items } = await resolveInstagramStories({ username: 'x', storyId: null });
     expect(items.map((i) => i.url)).toEqual(['https://cdn.cdninstagram.com/s.jpg']);
+    expect(items[0].meta).toEqual({ postId: '1', username: 'x' });
   });
 
   it('returns only the viewed story when storyId matches', async () => {
@@ -527,6 +528,95 @@ describe('resolveItemUrl', () => {
 
   it('returns null for a placeholder with no id to resolve', async () => {
     expect(await resolveItemUrl({ needsVideoLookup: true })).toBeNull();
+  });
+
+  it('attaches Instagram API author metadata to the lookup item', async () => {
+    installFetch((url) => {
+      if (!url.includes('i.instagram.com')) return null;
+      return {
+        status: 200,
+        json: { items: [{
+          user: { username: 'alice' },
+          video_versions: [{ url: 'https://cdn.cdninstagram.com/reel.mp4', width: 1080 }],
+        }] },
+      };
+    });
+    const item = {
+      needsVideoLookup: true,
+      shortcode: 'CxClicked',
+      type: 'video',
+      filename: 'reel_CxClicked',
+      meta: { postId: 'CxClicked' },
+    };
+
+    const url = await resolveItemUrl(item);
+
+    expect(url).toBe('https://cdn.cdninstagram.com/reel.mp4');
+    expect(item.meta).toEqual({ postId: 'CxClicked', username: 'alice' });
+  });
+});
+
+describe('context-menu Instagram video lookup', () => {
+  afterEach(() => {
+    resetFetch();
+    globalThis.chrome.storage.sync._reset();
+    globalThis.chrome.storage.local._reset();
+  });
+
+  it('names a feed video lookup with the API author', async () => {
+    installFetch((url) => {
+      if (!url.includes('i.instagram.com')) return null;
+      return {
+        status: 200,
+        json: { items: [{
+          user: { username: 'alice' },
+          video_versions: [{ url: 'https://cdn.cdninstagram.com/reel.mp4', width: 1080 }],
+        }] },
+      };
+    });
+    await globalThis.chrome.storage.sync.set({ filenameTemplate: '{username}_{postId}' });
+
+    const origSend = globalThis.chrome.tabs.sendMessage;
+    const origDownload = globalThis.chrome.downloads.download;
+    const origSearch = globalThis.chrome.downloads.search;
+    const downloaded = [];
+    globalThis.chrome.tabs.sendMessage = async () => ({
+      platform: 'instagram',
+      urls: [{
+        type: 'video',
+        filename: 'reel_CxClicked',
+        shortcode: 'CxClicked',
+        needsVideoLookup: true,
+        meta: { postId: 'CxClicked' },
+      }],
+    });
+    globalThis.chrome.downloads.download = async (opts) => {
+      downloaded.push(opts);
+      return 11;
+    };
+    globalThis.chrome.downloads.search = async () => [{
+      id: 11,
+      state: 'complete',
+      filename: '/downloads/alice_CxClicked.mp4',
+    }];
+
+    try {
+      const handler = globalThis.chrome.contextMenus.onClicked._listeners[0];
+      await handler(
+        {
+          menuItemId: 'socialsnag-download-single',
+          pageUrl: 'https://www.instagram.com/',
+          srcUrl: '',
+        },
+        { id: 1, url: 'https://www.instagram.com/' },
+      );
+    } finally {
+      globalThis.chrome.tabs.sendMessage = origSend;
+      globalThis.chrome.downloads.download = origDownload;
+      globalThis.chrome.downloads.search = origSearch;
+    }
+
+    expect(downloaded[0].filename).toBe('SocialSnag/instagram/alice_CxClicked.mp4');
   });
 });
 
@@ -1697,7 +1787,27 @@ describe('resolveViaApi miss classification', () => {
 
     const result = await resolveViaApi('twitter', 'https://x.com/a/status/123');
     expect(result.item?.url).toBe('https://video.twimg.com/x.mp4');
+    expect(result.item?.meta).toEqual({ postId: '123', username: 'a' });
     expect(dispatchLine()).toBe('socialsnag[twitter] api-dispatch: ok (1 item)');
+  });
+
+  it('keeps Instagram API metadata on the resolved video item', async () => {
+    globalThis.installFetch(() => ({
+      status: 200,
+      json: {
+        items: [{
+          user: { username: 'reliable_user' },
+          video_versions: [{
+            url: 'https://cdn.cdninstagram.com/video.mp4',
+            width: 1080,
+          }],
+        }],
+      },
+    }));
+
+    const result = await resolveViaApi('instagram', 'https://www.instagram.com/reel/ABC/');
+
+    expect(result.item?.meta).toEqual({ postId: 'ABC', username: 'reliable_user' });
   });
 
   it('stays silent when the user has not enabled debug', async () => {

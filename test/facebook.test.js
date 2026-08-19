@@ -162,11 +162,16 @@ describe('buildImageItems', () => {
       img(`${CDN}/s320x320/111111111111_n.jpg`),
       img(`${CDN}/s320x320/222222222222_n.jpg`),
       img(`${CDN}/s320x320/333333333333_n.jpg`),
-    ]);
+    ], 1, '9876543210');
     expect(items.map((i) => i.filename)).toEqual([
       'photo_111111111111_1',
       'photo_222222222222_2',
       'photo_333333333333_3',
+    ]);
+    expect(items.map((i) => i.meta)).toEqual([
+      { postId: '9876543210' },
+      { postId: '9876543210' },
+      { postId: '9876543210' },
     ]);
   });
 
@@ -385,6 +390,7 @@ describe('buildCapturedItems', () => {
   it('numbers from one, since it only runs when the DOM walk found nothing', () => {
     const { items } = buildCapturedItems([cap(`${CDN}/a_n.jpg`), cap(`${CDN}/b_n.jpg`)], 5);
     expect(items.map((i) => i.filename)).toEqual(['photo_1', 'photo_2']);
+    expect(items.every((item) => item.meta === undefined)).toBe(true);
   });
 
   it('collapses signature-param variants by id and downloads the latest', () => {
@@ -424,6 +430,108 @@ describe('buildCapturedItems', () => {
   });
 });
 
+describe('resolveContentMessage', () => {
+  it('does not tag a document-wide script video with the selected post id', async () => {
+    const originalDocument = globalThis.document;
+    const permalink = { href: 'https://www.facebook.com/example/posts/9876543210/' };
+    const video = {
+      tagName: 'VIDEO',
+      src: 'blob:https://www.facebook.com/video',
+      matches: () => false,
+      parentElement: null,
+    };
+    const post = {
+      matches: (selector) => selector === '[role="article"]',
+      parentElement: null,
+      querySelector: (selector) => selector === 'video' ? video : null,
+      querySelectorAll: (selector) => selector === 'a[href]' ? [permalink] : [],
+    };
+    video.parentElement = post;
+    globalThis.document = {
+      body: null,
+      querySelectorAll: (selector) => selector === 'script'
+        ? [{ textContent: '{"playable_url":"https://video.xx.fbcdn.net/page-wide.mp4"}' }]
+        : [],
+    };
+
+    try {
+      const items = await resolveContentMessage({
+        action: 'resolve',
+        type: 'single',
+        srcUrl: '',
+      }, video, {});
+
+      expect(items).toEqual([{
+        url: 'https://video.xx.fbcdn.net/page-wide.mp4',
+        type: 'video',
+        filename: null,
+      }]);
+    } finally {
+      globalThis.document = originalDocument;
+    }
+  });
+
+  it('uses the direct photo URL when the media has no post container', async () => {
+    const originalWindow = globalThis.window;
+    globalThis.window = {
+      location: {
+        href: 'https://www.facebook.com/photo.php?fbid=9876543210&id=42',
+      },
+    };
+    const target = {
+      tagName: 'IMG',
+      src: `${CDN}/s720x720/123456789012_n.jpg`,
+      matches: () => false,
+      parentElement: null,
+    };
+
+    try {
+      const items = await resolveContentMessage({
+        action: 'resolve',
+        type: 'single',
+        srcUrl: target.src,
+      }, target, {});
+
+      expect(items).toEqual([{
+        url: `${CDN}/123456789012_n.jpg`,
+        type: 'image',
+        filename: 'photo_123456789012',
+        meta: { postId: '9876543210' },
+      }]);
+    } finally {
+      globalThis.window = originalWindow;
+    }
+  });
+
+  it('uses the selected feed post permalink for item metadata', async () => {
+    const permalink = { href: 'https://www.facebook.com/example/posts/9876543210/' };
+    const post = {
+      matches: (selector) => selector === '[role="article"]',
+      parentElement: null,
+      querySelectorAll: (selector) => selector === 'a[href]' ? [permalink] : [],
+    };
+    const target = {
+      tagName: 'IMG',
+      src: `${CDN}/s720x720/123456789012_n.jpg`,
+      matches: () => false,
+      parentElement: post,
+    };
+
+    const items = await resolveContentMessage({
+      action: 'resolve',
+      type: 'single',
+      srcUrl: target.src,
+    }, target, {});
+
+    expect(items).toEqual([{
+      url: `${CDN}/123456789012_n.jpg`,
+      type: 'image',
+      filename: 'photo_123456789012',
+      meta: { postId: '9876543210' },
+    }]);
+  });
+});
+
 describe('resolvePage', () => {
   const makePost = (pageUrl, src) => {
     const media = img(src);
@@ -448,6 +556,7 @@ describe('resolvePage', () => {
 
     expect(items).toHaveLength(1);
     expect(items[0].url).toBe(`${CDN}/123456789012_n.jpg`);
+    expect(items[0].meta).toEqual({ postId: '1234567890' });
   });
 
   it('handles a resolvePage message without a stored right-click target', async () => {
@@ -486,6 +595,7 @@ describe('resolvePage', () => {
       url: `${CDN}/123456789012_n.jpg`,
       type: 'image',
       filename: 'photo_123456789012',
+      meta: { postId: '123456789012' },
     }]);
   });
 
@@ -602,6 +712,7 @@ describe('resolvePage', () => {
       url: 'https://video.xx.fbcdn.net/requested.mp4',
       type: 'video',
       filename: 'video_1234567890',
+      meta: { postId: '1234567890' },
     }]);
   });
 
@@ -723,6 +834,7 @@ describe('resolvePage', () => {
       url: 'https://video.xx.fbcdn.net/requested-hd.mp4',
       type: 'video',
       filename: 'video_1234567890',
+      meta: { postId: '1234567890' },
     }]);
   });
 
