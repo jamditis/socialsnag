@@ -13,6 +13,7 @@ import {
   formatLocalDate,
   resolveInstagramPost,
   resolveInstagramStories,
+  resolveInstagramHighlights,
   downloadItemsAsZip,
   resolveItemUrl,
   resolveViaApi,
@@ -223,6 +224,8 @@ describe('parseSubmittedPageUrl', () => {
     ['https://instagram.com/reel/C9-ab_1/', 'instagram', 'https://instagram.com/reel/C9-ab_1/'],
     ['https://www.instagram.com/tv/IGTV123/', 'instagram', 'https://www.instagram.com/tv/IGTV123/'],
     ['https://www.instagram.com/stories/natgeo/1234567890/', 'instagram', 'https://www.instagram.com/stories/natgeo/1234567890/'],
+    ['https://www.instagram.com/stories/highlights/17913491234567890/', 'instagram', 'https://www.instagram.com/stories/highlights/17913491234567890/'],
+    ['https://www.instagram.com/stories/highlights/179134/33445566/', 'instagram', 'https://www.instagram.com/stories/highlights/179134/33445566/'],
     ['https://twitter.com/jack/status/20', 'twitter', 'https://twitter.com/jack/status/20'],
     ['https://x.com/example_user/status/1234567890123456789?s=20', 'twitter', 'https://x.com/example_user/status/1234567890123456789?s=20'],
     ['https://X.COM/example_user/status/123#section', 'twitter', 'https://X.COM/example_user/status/123'],
@@ -258,7 +261,10 @@ describe('parseSubmittedPageUrl', () => {
     ['https://user:secret@x.com/user/status/123', 'invalid_url'],
     ['https://x.com:8443/user/status/123', 'invalid_url'],
     [`https://x.com/user/status/${'1'.repeat(2100)}`, 'invalid_url'],
-    ['https://www.instagram.com/stories/highlights/123/', 'invalid_url'],
+    ['https://www.instagram.com/stories/highlights/notanid/', 'invalid_url'],
+    // Non-canonical casing must be rejected here, not admitted and then mis-routed
+    // as a story for a user named "HIGHLIGHTS" by the case-sensitive parsers (#29).
+    ['https://www.instagram.com/stories/HIGHLIGHTS/123/', 'invalid_url'],
     ['https://www.instagram.com/accounts/login/', 'invalid_url'],
     ['https://www.instagram.com/example/', 'invalid_url'],
     ['https://x.com/settings/account', 'invalid_url'],
@@ -518,6 +524,58 @@ describe('resolveInstagramStories', () => {
 
     const result = await resolveInstagramStories({ username: 'x', storyId: null });
 
+    expect(result.error).toBe(mapIgStatusToMessage(0));
+    expect(result.code).toBe('no_media');
+  });
+});
+
+describe('resolveInstagramHighlights', () => {
+  afterEach(() => resetFetch());
+
+  it('resolves a highlight without any user-id lookup', async () => {
+    const seen = [];
+    installFetch((url) => {
+      seen.push(url);
+      // A highlight carries its id in the URL, so the account user-id lookup that
+      // stories run first must never fire here; it is the call most likely to
+      // 401 when logged out. Return 500 so a regression that reintroduces it
+      // surfaces loudly instead of resolving.
+      if (url.includes('web_profile_info')) return { status: 500, json: {} };
+      if (url.includes('reels_media')) {
+        return { status: 200, json: { reels_media: [{ items: [igStoryImg('900', 'https://cdn.cdninstagram.com/h.jpg')] }] } };
+      }
+      return null;
+    });
+
+    const { items } = await resolveInstagramHighlights({ highlightId: '17913491234567890', itemId: null });
+    expect(items.map((i) => i.url)).toEqual(['https://cdn.cdninstagram.com/h.jpg']);
+    expect(seen.some((u) => u.includes('web_profile_info'))).toBe(false);
+    expect(seen.some((u) => u.includes('reel_ids=highlight%3A17913491234567890') || u.includes('reel_ids=highlight:17913491234567890'))).toBe(true);
+  });
+
+  it('returns only the viewed item when itemId matches', async () => {
+    installFetch((url) => url.includes('reels_media')
+      ? { status: 200, json: { reels_media: [{ items: [
+          igStoryImg('900', 'https://cdn.cdninstagram.com/0.jpg'),
+          igStoryImg('901', 'https://cdn.cdninstagram.com/1.jpg'),
+        ] }] } }
+      : null);
+
+    const { items } = await resolveInstagramHighlights({ highlightId: '5', itemId: '901' });
+    expect(items).toHaveLength(1);
+    expect(items[0].url).toBe('https://cdn.cdninstagram.com/1.jpg');
+  });
+
+  it('propagates the auth code when the highlight API requires login', async () => {
+    installFetch((url) => url.includes('reels_media') ? { status: 401, json: {} } : null);
+    const result = await resolveInstagramHighlights({ highlightId: '5', itemId: null });
+    expect(result.error).toBe(mapIgStatusToMessage(401));
+    expect(result.code).toBe('auth_required');
+  });
+
+  it('returns a stable no-media code for an empty highlight', async () => {
+    installFetch((url) => url.includes('reels_media') ? { status: 200, json: { reels_media: [{ items: [] }] } } : null);
+    const result = await resolveInstagramHighlights({ highlightId: '5', itemId: null });
     expect(result.error).toBe(mapIgStatusToMessage(0));
     expect(result.code).toBe('no_media');
   });
@@ -2121,6 +2179,38 @@ describe('submitted URL external bridge', () => {
 
     expect(result).toEqual({ ok: true, code: 'ok', platform: 'instagram', count: 1 });
     expect(chrome.tabs.create).not.toHaveBeenCalled();
+  });
+
+  it('downloads an Instagram highlight through the API, skipping the account lookup', async () => {
+    const seen = [];
+    installFetch((url) => {
+      seen.push(url);
+      // A highlight submits its id directly, so the account lookup a story runs
+      // first must never fire; fail it loudly to catch a regression.
+      if (url.includes('web_profile_info')) return { status: 500, json: {} };
+      if (url.includes('reels_media')) {
+        return {
+          status: 200,
+          json: { reels_media: [{ items: [
+            igStoryImg('900', 'https://cdn.cdninstagram.com/highlight.jpg'),
+          ] }] },
+        };
+      }
+      return null;
+    });
+    chrome.tabs.create = vi.fn();
+    chrome.downloads.download = vi.fn(async () => 44);
+    chrome.downloads.search = async () => [{
+      id: 44, state: 'complete', filename: '/downloads/story_900.jpg',
+    }];
+
+    const result = await orchestrateSubmittedDownload(
+      'https://www.instagram.com/stories/highlights/17913491234567890/',
+    );
+
+    expect(result).toEqual({ ok: true, code: 'ok', platform: 'instagram', count: 1 });
+    expect(chrome.tabs.create).not.toHaveBeenCalled();
+    expect(seen.some((u) => u.includes('web_profile_info'))).toBe(false);
   });
 
   it.each([

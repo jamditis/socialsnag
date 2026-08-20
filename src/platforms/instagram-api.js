@@ -106,18 +106,37 @@ export function extractStoryRef(pathname) {
   const m = pathname.match(/^\/stories\/([^/]+)\/(\d+)/);
   if (!m) return null;
   // /stories/highlights/<id>/ is a highlight, not an active story: "highlights"
-  // is a literal path segment (not a username) and highlights are not served by
-  // the reels tray API. Skip it so we don't look up an account named
-  // "highlights" and download unrelated media; the page falls back to the
-  // generic resolver instead. Highlight support is tracked for v1.3.
+  // is a literal path segment (not a username) and a highlight is not addressed
+  // by username. Skip it so we don't look up an account named "highlights" and
+  // download unrelated media; extractHighlightRef below is the other half of
+  // this guard and routes the highlight through the reels_media API instead.
   if (m[1] === 'highlights') return null;
   return { username: m[1], storyId: m[2] };
+}
+
+// Parse a highlight page path: /stories/highlights/{highlightId}/ for the whole
+// highlight, or /stories/highlights/{highlightId}/{itemId}/ for a single item.
+// This is the other half of extractStoryRef's `highlights` guard: that function
+// returns null here so a highlight never routes to a story lookup, and this one
+// enumerates it through the highlights reel API (reel_ids=highlight:<id>). The
+// itemId sits where extractStoryRef's storyId sits, so parseStoryTray's
+// single-item filter reuses unchanged. See issue #29.
+export function extractHighlightRef(pathname) {
+  const m = pathname.match(/^\/stories\/highlights\/(\d+)(?:\/(\d+))?/);
+  if (!m) return null;
+  return { highlightId: m[1], itemId: m[2] || null };
 }
 
 // Enumerate story items from a reels_media response. If storyId matches an
 // item pk, return only that one; otherwise return the whole active tray.
 export function parseStoryTray(apiJson, { storyId, username = null } = {}) {
-  const items = apiJson?.reels_media?.[0]?.items || [];
+  const reel = apiJson?.reels_media?.[0];
+  const items = reel?.items || [];
+  // A highlight skips the username -> user-id lookup, so its caller has no owner
+  // to pass. The reels_media payload names the owner at reels_media[0].user.username,
+  // so fall back to it. This keeps {username} filename and folder templates filled
+  // for highlights the same as for stories; an explicit caller username still wins.
+  const owner = username ?? reel?.user?.username ?? null;
   const mapped = items.map((it, i) => {
     // Prefer the pk embedded in the string id (`<pk>_<userid>`) over the raw pk
     // field. When Instagram sends pk as a JSON number it loses its low digits
@@ -137,7 +156,7 @@ export function parseStoryTray(apiJson, { storyId, username = null } = {}) {
           pk: base.pk,
           id: base.id,
         },
-        { postId: base.pk, username },
+        { postId: base.pk, username: owner },
       ) : null;
     }
     const url = pickBestCandidate(it?.image_versions2?.candidates);
@@ -150,7 +169,7 @@ export function parseStoryTray(apiJson, { storyId, username = null } = {}) {
         pk: base.pk,
         id: base.id,
       },
-      { postId: base.pk, username },
+      { postId: base.pk, username: owner },
     ) : null;
   }).filter(Boolean);
 

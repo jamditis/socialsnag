@@ -11,6 +11,7 @@ import {
   shortcodeToMediaId,
   parsePostMedia,
   extractStoryRef,
+  extractHighlightRef,
   parseStoryTray,
   mapIgStatusToMessage,
   mapIgStatusToCode,
@@ -262,7 +263,13 @@ export function parseSubmittedPageUrl(rawUrl) {
   if (submittedHostMatches(host, 'instagram.com')) {
     platform = 'instagram';
     validPath = /^\/(?:p|reel|tv)\/[A-Za-z0-9_-]+\/?$/.test(url.pathname)
-      || /^\/stories\/(?!highlights(?:\/|$))[A-Za-z0-9._]+\/\d+\/?$/i.test(url.pathname);
+      || /^\/stories\/(?!highlights(?:\/|$))[A-Za-z0-9._]+\/\d+\/?$/i.test(url.pathname)
+      // Case-sensitive on purpose: extractHighlightRef and extractStoryRef's guard
+      // both compare lowercase "highlights" case-sensitively, so a mixed-case path
+      // like /stories/HIGHLIGHTS/123/ would slip past here and then be mis-routed as
+      // a story for a user named "HIGHLIGHTS". Only the canonical lowercase path is
+      // a real Instagram highlight, so reject the rest here rather than downstream.
+      || /^\/stories\/highlights\/\d+(?:\/\d+)?\/?$/.test(url.pathname);
   } else if (submittedHostMatches(host, 'twitter.com') || submittedHostMatches(host, 'x.com')) {
     platform = 'twitter';
     validPath = TWITTER_SUBMITTED_STATUS_PATTERN.test(url.pathname);
@@ -656,15 +663,25 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       }
     }
 
-    // Instagram stories: resolve via the reels_media API (no DOM path exists).
+    // Instagram stories and highlights: resolve via the reels_media API (no DOM
+    // path exists). A highlight is checked only when the path is not an active
+    // story, since extractStoryRef already returns null for /stories/highlights/.
     if (platform === 'instagram' && !response) {
-      const storyRef = extractStoryRef(new URL(pageUrl).pathname);
+      const pathname = new URL(pageUrl).pathname;
+      const storyRef = extractStoryRef(pathname);
+      const highlightRef = storyRef ? null : extractHighlightRef(pathname);
       if (storyRef) {
         // "single" grabs the viewed story; "all" grabs the whole tray.
         const ref = type === 'all' ? { ...storyRef, storyId: null } : storyRef;
         const stories = await resolveInstagramStories(ref);
         if (stories.items) response = { urls: stories.items, platform };
         else if (stories.error) igError = stories.error;
+      } else if (highlightRef) {
+        // "single" grabs the viewed item; "all" grabs the whole highlight.
+        const ref = type === 'all' ? { ...highlightRef, itemId: null } : highlightRef;
+        const highlights = await resolveInstagramHighlights(ref);
+        if (highlights.items) response = { urls: highlights.items, platform };
+        else if (highlights.error) igError = highlights.error;
       }
     }
 
@@ -1076,23 +1093,19 @@ async function fetchInstagramUserId(
   }
 }
 
-// Resolve a story ref to its media via the reels_media API. storyId null means
-// the whole active tray.
-export async function resolveInstagramStories(
-  { username, storyId },
-  { fetchImpl = globalThis.fetch, signal } = {},
+// Fetch and parse one reels_media tray by reel id, the half that is identical
+// for active stories and highlights. The reel id is a numeric user id for a
+// story tray or `highlight:<id>` for a highlight; storyId null returns the whole
+// tray, a specific id returns just that item. Everything above this seam differs
+// (a story looks the account's user id up first; a highlight carries its id in
+// the URL and skips that call), everything from the fetch down is shared.
+async function resolveReelsMedia(
+  reelId,
+  { storyId, username = null, detail, fetchImpl = globalThis.fetch, signal } = {},
 ) {
-  // Checked before the user-id lookup, not after: that lookup is itself a request,
-  // so testing the cache later would still spend one call per re-download.
-  const storyKey = `${username}_${storyId ?? 'tray'}`;
-  const cached = getResolved('instagram_story', storyKey);
-  if (cached) return { items: cached };
-  const lookup = await fetchInstagramUserId(username, { fetchImpl, signal });
-  if (!lookup.userId) return { error: lookup.error, code: lookup.code };
-  const userId = lookup.userId;
   try {
     const resp = await fetchImpl(
-      `https://i.instagram.com/api/v1/feed/reels_media/?reel_ids=${userId}`,
+      `https://i.instagram.com/api/v1/feed/reels_media/?reel_ids=${reelId}`,
       { headers: { 'x-ig-app-id': IG_APP_ID }, credentials: 'include', signal },
     );
     if (!resp.ok) {
@@ -1106,18 +1119,58 @@ export async function resolveInstagramStories(
     const items = parseStoryTray(data, { storyId, username });
     if (items.length === 0) {
       // Expected when a story has aged out of the 24h window, and indistinguishable
-      // from a lookup bug without this line.
-      await traceResolver({ platform: 'instagram', path: 'story-api', outcome: 'empty', status: resp.status, itemCount: 0, detail: storyId ? 'single story' : 'full tray' });
+      // from a lookup bug without this line. Highlights are permanent, so an empty
+      // highlight instead means a wrong or revoked id.
+      await traceResolver({ platform: 'instagram', path: 'story-api', outcome: 'empty', status: resp.status, itemCount: 0, detail: detail ?? (storyId ? 'single story' : 'full tray') });
       return { error: mapIgStatusToMessage(0), code: mapIgStatusToCode(0) };
     }
     await traceResolver({ platform: 'instagram', path: 'story-api', outcome: 'ok', status: resp.status, itemCount: items.length });
-    setResolved('instagram_story', storyKey, items);
     return { items };
   } catch (e) {
-    console.error('SocialSnag: IG stories API failed:', e);
+    console.error('SocialSnag: IG reels_media API failed:', e);
     await traceResolver({ platform: 'instagram', path: 'story-api', outcome: 'threw' });
     return { error: null };
   }
+}
+
+// Resolve a story ref to its media via the reels_media API. storyId null means
+// the whole active tray.
+export async function resolveInstagramStories(
+  { username, storyId },
+  { fetchImpl = globalThis.fetch, signal } = {},
+) {
+  // Checked before the user-id lookup, not after: that lookup is itself a request,
+  // so testing the cache later would still spend one call per re-download.
+  const storyKey = `${username}_${storyId ?? 'tray'}`;
+  const cached = getResolved('instagram_story', storyKey);
+  if (cached) return { items: cached };
+  const lookup = await fetchInstagramUserId(username, { fetchImpl, signal });
+  if (!lookup.userId) return { error: lookup.error, code: lookup.code };
+  const result = await resolveReelsMedia(lookup.userId, { storyId, username, fetchImpl, signal });
+  if (result.items) setResolved('instagram_story', storyKey, result.items);
+  return result;
+}
+
+// Resolve a highlight ref to its media via the reels_media API. Highlights are
+// addressed as reel_ids=highlight:<id> and carry the id in the URL, so unlike
+// stories they skip the username -> user-id lookup entirely -- that lookup is the
+// call most likely to 401 when logged out, and a highlight never needs it.
+// itemId null means the whole highlight; a specific item id returns just that one.
+export async function resolveInstagramHighlights(
+  { highlightId, itemId = null },
+  { fetchImpl = globalThis.fetch, signal } = {},
+) {
+  const highlightKey = `highlight_${highlightId}_${itemId ?? 'all'}`;
+  const cached = getResolved('instagram_highlight', highlightKey);
+  if (cached) return { items: cached };
+  const result = await resolveReelsMedia(`highlight:${highlightId}`, {
+    storyId: itemId,
+    detail: itemId ? 'single highlight item' : 'full highlight',
+    fetchImpl,
+    signal,
+  });
+  if (result.items) setResolved('instagram_highlight', highlightKey, result.items);
+  return result;
 }
 
 // Resolve the first video URL in an Instagram post (used by single-video flows).
@@ -1600,6 +1653,9 @@ async function resolveSubmittedInstagram(parsed, options = {}) {
   const pathname = new URL(parsed.url).pathname;
   const storyRef = extractStoryRef(pathname);
   if (storyRef) return resolveInstagramStories(storyRef, options);
+
+  const highlightRef = extractHighlightRef(pathname);
+  if (highlightRef) return resolveInstagramHighlights(highlightRef, options);
 
   const shortcode = pathname.match(/^\/(?:p|reel|tv)\/([A-Za-z0-9_-]+)/)?.[1];
   if (!shortcode) return { code: 'invalid_url' };

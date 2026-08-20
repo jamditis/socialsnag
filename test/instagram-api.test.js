@@ -168,6 +168,7 @@ describe('parsePostMedia', () => {
 
 import {
   extractStoryRef,
+  extractHighlightRef,
   parseStoryTray,
   mapIgStatusToMessage,
   mapIgStatusToCode,
@@ -182,6 +183,27 @@ describe('extractStoryRef', () => {
   });
   it('returns null for highlights (not active stories, different API)', () => {
     expect(extractStoryRef('/stories/highlights/99/')).toBeNull();
+  });
+});
+
+describe('extractHighlightRef', () => {
+  it('parses a whole-highlight path with no item id', () => {
+    expect(extractHighlightRef('/stories/highlights/17913491234567890/')).toEqual({
+      highlightId: '17913491234567890', itemId: null,
+    });
+  });
+  it('parses a single-item highlight path, itemId where storyId sits', () => {
+    expect(extractHighlightRef('/stories/highlights/179134/33445566/')).toEqual({
+      highlightId: '179134', itemId: '33445566',
+    });
+  });
+  it('returns null for an active story path (that is extractStoryRef territory)', () => {
+    // The two guards are complementary: a real /stories/<user>/<id>/ must not be
+    // read as a highlight, or a story would route to the highlight resolver.
+    expect(extractHighlightRef('/stories/natgeo/1234567890/')).toBeNull();
+  });
+  it('returns null for a non-story path', () => {
+    expect(extractHighlightRef('/p/ABC/')).toBeNull();
   });
 });
 
@@ -227,6 +249,39 @@ describe('parseStoryTray', () => {
   });
   it('returns empty for empty tray', () => {
     expect(parseStoryTray({ reels_media: [] }, {})).toEqual([]);
+  });
+  it('parses a highlight-shaped response and filters one item by id (#29)', () => {
+    // A highlights reel_ids=highlight:<id> response uses the same reels_media
+    // envelope as a story tray, so enumeration and the single-item filter reuse
+    // unchanged. The itemId from a /stories/highlights/<id>/<itemId>/ URL is
+    // passed as storyId, matching the item's pk.
+    const highlight = { reels_media: [{ items: [
+      { pk: '900', image_versions2: { candidates: [{ url: 'h0', width: 1080, height: 1920 }] } },
+      { pk: '901', video_versions: [{ url: 'h1', width: 720 }] },
+    ] }] };
+    expect(parseStoryTray(highlight, { username: 'natgeo' }).map((o) => o.url)).toEqual(['h0', 'h1']);
+    const one = parseStoryTray(highlight, { storyId: '901' });
+    expect(one).toHaveLength(1);
+    expect(one[0].url).toBe('h1');
+  });
+  it('fills meta.username from the reel owner when the caller passes none (#29)', () => {
+    // A highlight skips the username -> user-id lookup, so resolveInstagramHighlights
+    // calls with no username. The reels_media payload still names the owner, so
+    // {username} filename and folder templates must fill from reels_media[0].user.
+    const owned = { reels_media: [{
+      user: { username: 'natgeo' },
+      items: [{ pk: '900', image_versions2: { candidates: [{ url: 'h0', width: 1080, height: 1920 }] } }],
+    }] };
+    expect(parseStoryTray(owned, {})[0].meta).toEqual({ postId: '900', username: 'natgeo' });
+  });
+  it('prefers an explicit caller username over the reel owner', () => {
+    // A story passes the username it already looked up; that stays authoritative
+    // even if the payload's reel user disagrees.
+    const owned = { reels_media: [{
+      user: { username: 'reel_owner' },
+      items: [{ pk: '900', image_versions2: { candidates: [{ url: 'h0', width: 1080, height: 1920 }] } }],
+    }] };
+    expect(parseStoryTray(owned, { username: 'caller' })[0].meta.username).toBe('caller');
   });
 });
 
