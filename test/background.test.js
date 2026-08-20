@@ -262,6 +262,9 @@ describe('parseSubmittedPageUrl', () => {
     ['https://x.com:8443/user/status/123', 'invalid_url'],
     [`https://x.com/user/status/${'1'.repeat(2100)}`, 'invalid_url'],
     ['https://www.instagram.com/stories/highlights/notanid/', 'invalid_url'],
+    // Non-canonical casing must be rejected here, not admitted and then mis-routed
+    // as a story for a user named "HIGHLIGHTS" by the case-sensitive parsers (#29).
+    ['https://www.instagram.com/stories/HIGHLIGHTS/123/', 'invalid_url'],
     ['https://www.instagram.com/accounts/login/', 'invalid_url'],
     ['https://www.instagram.com/example/', 'invalid_url'],
     ['https://x.com/settings/account', 'invalid_url'],

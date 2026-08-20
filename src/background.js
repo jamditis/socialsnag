@@ -264,7 +264,12 @@ export function parseSubmittedPageUrl(rawUrl) {
     platform = 'instagram';
     validPath = /^\/(?:p|reel|tv)\/[A-Za-z0-9_-]+\/?$/.test(url.pathname)
       || /^\/stories\/(?!highlights(?:\/|$))[A-Za-z0-9._]+\/\d+\/?$/i.test(url.pathname)
-      || /^\/stories\/highlights\/\d+(?:\/\d+)?\/?$/i.test(url.pathname);
+      // Case-sensitive on purpose: extractHighlightRef and extractStoryRef's guard
+      // both compare lowercase "highlights" case-sensitively, so a mixed-case path
+      // like /stories/HIGHLIGHTS/123/ would slip past here and then be mis-routed as
+      // a story for a user named "HIGHLIGHTS". Only the canonical lowercase path is
+      // a real Instagram highlight, so reject the rest here rather than downstream.
+      || /^\/stories\/highlights\/\d+(?:\/\d+)?\/?$/.test(url.pathname);
   } else if (submittedHostMatches(host, 'twitter.com') || submittedHostMatches(host, 'x.com')) {
     platform = 'twitter';
     validPath = TWITTER_SUBMITTED_STATUS_PATTERN.test(url.pathname);

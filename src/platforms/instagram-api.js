@@ -130,7 +130,13 @@ export function extractHighlightRef(pathname) {
 // Enumerate story items from a reels_media response. If storyId matches an
 // item pk, return only that one; otherwise return the whole active tray.
 export function parseStoryTray(apiJson, { storyId, username = null } = {}) {
-  const items = apiJson?.reels_media?.[0]?.items || [];
+  const reel = apiJson?.reels_media?.[0];
+  const items = reel?.items || [];
+  // A highlight skips the username -> user-id lookup, so its caller has no owner
+  // to pass. The reels_media payload names the owner at reels_media[0].user.username,
+  // so fall back to it. This keeps {username} filename and folder templates filled
+  // for highlights the same as for stories; an explicit caller username still wins.
+  const owner = username ?? reel?.user?.username ?? null;
   const mapped = items.map((it, i) => {
     // Prefer the pk embedded in the string id (`<pk>_<userid>`) over the raw pk
     // field. When Instagram sends pk as a JSON number it loses its low digits
@@ -150,7 +156,7 @@ export function parseStoryTray(apiJson, { storyId, username = null } = {}) {
           pk: base.pk,
           id: base.id,
         },
-        { postId: base.pk, username },
+        { postId: base.pk, username: owner },
       ) : null;
     }
     const url = pickBestCandidate(it?.image_versions2?.candidates);
@@ -163,7 +169,7 @@ export function parseStoryTray(apiJson, { storyId, username = null } = {}) {
         pk: base.pk,
         id: base.id,
       },
-      { postId: base.pk, username },
+      { postId: base.pk, username: owner },
     ) : null;
   }).filter(Boolean);
 

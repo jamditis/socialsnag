@@ -264,6 +264,25 @@ describe('parseStoryTray', () => {
     expect(one).toHaveLength(1);
     expect(one[0].url).toBe('h1');
   });
+  it('fills meta.username from the reel owner when the caller passes none (#29)', () => {
+    // A highlight skips the username -> user-id lookup, so resolveInstagramHighlights
+    // calls with no username. The reels_media payload still names the owner, so
+    // {username} filename and folder templates must fill from reels_media[0].user.
+    const owned = { reels_media: [{
+      user: { username: 'natgeo' },
+      items: [{ pk: '900', image_versions2: { candidates: [{ url: 'h0', width: 1080, height: 1920 }] } }],
+    }] };
+    expect(parseStoryTray(owned, {})[0].meta).toEqual({ postId: '900', username: 'natgeo' });
+  });
+  it('prefers an explicit caller username over the reel owner', () => {
+    // A story passes the username it already looked up; that stays authoritative
+    // even if the payload's reel user disagrees.
+    const owned = { reels_media: [{
+      user: { username: 'reel_owner' },
+      items: [{ pk: '900', image_versions2: { candidates: [{ url: 'h0', width: 1080, height: 1920 }] } }],
+    }] };
+    expect(parseStoryTray(owned, { username: 'caller' })[0].meta.username).toBe('caller');
+  });
 });
 
 describe('mapIgStatusToMessage', () => {
