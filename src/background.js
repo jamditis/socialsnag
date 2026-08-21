@@ -1295,7 +1295,7 @@ function updatePendingBlobs(mutate) {
   return next;
 }
 
-async function trackBlobForDownload(downloadId, blobUrl) {
+export async function trackBlobForDownload(downloadId, blobUrl) {
   await updatePendingBlobs((pending) => {
     pending[downloadId] = blobUrl;
   });

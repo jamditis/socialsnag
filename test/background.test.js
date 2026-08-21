@@ -15,6 +15,7 @@ import {
   resolveInstagramStories,
   resolveInstagramHighlights,
   downloadItemsAsZip,
+  trackBlobForDownload,
   resolveItemUrl,
   resolveViaApi,
   parseSubmittedPageUrl,
@@ -1594,6 +1595,65 @@ describe('zip blob revocation lifecycle', () => {
   it('ignores downloads it is not tracking', async () => {
     await fire({ id: 999, state: { current: 'complete' } });
     expect(revoked).toEqual([]);
+  });
+});
+
+describe('pendingBlobRevokes write serialisation (#53)', () => {
+  const KEY = 'pendingBlobRevokes';
+  let origSearch;
+
+  beforeEach(async () => {
+    // Start with the key absent, not seeded to {}. A fresh worker has no pending
+    // map yet, so each caller's `stored || {}` builds its own object -- which is
+    // exactly the state an unserialised read-modify-write clobbers. (Seeding {}
+    // would instead hand both callers the mock's one shared reference, hiding the
+    // race the same way the real structured-clone read would not.)
+    await globalThis.chrome.storage.session.remove(KEY);
+    // Keep the tracked downloads non-terminal so trackBlobForDownload's
+    // terminal-catch-up does not revoke (and delete) the entries under test.
+    origSearch = globalThis.chrome.downloads.search;
+    globalThis.chrome.downloads.search = async () => [{ id: 1, state: 'in_progress' }];
+  });
+
+  afterEach(async () => {
+    globalThis.chrome.storage.session._gate(null);
+    globalThis.chrome.downloads.search = origSearch;
+    await globalThis.chrome.storage.session.remove(KEY);
+  });
+
+  // Drive every parked session op forward in waves until both tracks settle.
+  // A serialised read-modify-write parks one op per wave, so its second read
+  // sees the first write. An unserialised one parks both reads together, both
+  // off the same empty map, and the second write clobbers the first entry.
+  async function drainUntil(done) {
+    let settled = false;
+    done.then(() => { settled = true; }, () => { settled = true; });
+    for (let i = 0; i < 200 && !settled; i++) {
+      for (let t = 0; t < 6; t++) await Promise.resolve();
+      parked.splice(0).forEach((release) => release());
+    }
+    globalThis.chrome.storage.session._gate(null);
+    await done;
+  }
+
+  let parked;
+
+  it('keeps both blob entries when two tracks race the session map', async () => {
+    parked = [];
+    // Park each session get/set on a promise the drain loop releases, so the
+    // two tracks reach their write windows together instead of the mock
+    // resolving each one before the other starts.
+    globalThis.chrome.storage.session._gate(() => new Promise((release) => { parked.push(release); }));
+
+    await drainUntil(Promise.all([
+      trackBlobForDownload(1, 'blob:one'),
+      trackBlobForDownload(2, 'blob:two'),
+    ]));
+
+    const stored = (await globalThis.chrome.storage.session.get(KEY))[KEY];
+    // Reverting the serialisation in updatePendingBlobs drops one entry here:
+    // both tracks read the absent map, and the second write overwrites the first.
+    expect(stored).toEqual({ 1: 'blob:one', 2: 'blob:two' });
   });
 });
 
