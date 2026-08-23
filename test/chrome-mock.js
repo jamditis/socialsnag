@@ -1,7 +1,15 @@
 function createStorageArea() {
   let data = {};
+  // Optional test hook. When a gate is installed, every get/set/remove awaits
+  // gate(op) before it touches `data`. A test can return a promise it resolves
+  // at a chosen point to park one caller mid-update and let another complete --
+  // the interleave a synchronously-resolving mock can never produce on its own
+  // (issue #53). No gate means the ops resolve as before.
+  let gate = null;
+  const pass = async () => {};
   return {
     get: async (keys) => {
+      await (gate ? gate('get') : pass());
       if (typeof keys === 'string') {
         return { [keys]: data[keys] };
       }
@@ -12,14 +20,18 @@ function createStorageArea() {
       return result;
     },
     set: async (items) => {
+      await (gate ? gate('set') : pass());
       Object.assign(data, items);
     },
     remove: async (keys) => {
+      await (gate ? gate('remove') : pass());
       const keyList = Array.isArray(keys) ? keys : [keys];
       keyList.forEach((k) => delete data[k]);
     },
     _reset: () => { data = {}; },
     _data: () => ({ ...data }),
+    // Install (or clear with null) the deferral gate described above.
+    _gate: (fn) => { gate = fn; },
   };
 }
 
