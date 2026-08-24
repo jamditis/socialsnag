@@ -19,6 +19,7 @@
     "client-zip": "^2.5.0",
     "esbuild": "^0.24.0",
     "eslint": "^9.0.0",
+    "fflate": "^0.8.2",
     "playwright-core": "^1.58.2",
     "vitest": "^3.0.0"
   }

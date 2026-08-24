@@ -1,7 +1,7 @@
 import * as esbuild from 'esbuild';
 import { cpSync, mkdirSync, readFileSync, writeFileSync, rmSync, readdirSync } from 'fs';
 import { join } from 'path';
-import { execFileSync } from 'child_process';
+import { writeReleaseArchive } from './release-archive.js';
 import { zipFileName } from './zip-name.js';
 
 const isZip = process.argv.includes('--zip');
@@ -63,6 +63,6 @@ if (isZip) {
   // looks for the same <name>-<version>.zip.
   const { name } = JSON.parse(readFileSync('package.json', 'utf8'));
   const zipName = zipFileName(name, manifest.version);
-  execFileSync('zip', ['-r', `../${zipName}`, '.'], { cwd: 'dist' });
+  writeReleaseArchive('dist', zipName);
   console.log(`Zip created: ${zipName}`);
 }
