@@ -1857,6 +1857,75 @@ describe('terminal download state', () => {
     }
   });
 
+  it('serializes a history clear after terminal settlement starts', async () => {
+    const batchId = await begin();
+    await track(batchId, 205);
+    await finishDownloadBatchRegistration(batchId);
+    const originalGet = globalThis.chrome.storage.local.get;
+    let releasePendingRead;
+    let pendingReadStarted;
+    const pendingRead = new Promise((resolve) => { pendingReadStarted = resolve; });
+    const readBlocked = new Promise((resolve) => { releasePendingRead = resolve; });
+    let blockPendingRead = true;
+    globalThis.chrome.storage.local.get = async (keys) => {
+      const result = await originalGet(keys);
+      if (blockPendingRead && keys && typeof keys === 'object'
+          && PENDING_KEY in keys && !(BATCH_KEY in keys)) {
+        blockPendingRead = false;
+        pendingReadStarted();
+        await readBlocked;
+      }
+      return result;
+    };
+
+    try {
+      const completion = fireChanged({ id: 205, state: { current: 'complete' } });
+      await pendingRead;
+      const clearing = clearDownloadHistory();
+      releasePendingRead();
+      await Promise.all([completion, clearing]);
+      expect(globalThis.chrome.storage.local._data().downloadHistory).toEqual([]);
+    } finally {
+      releasePendingRead();
+      globalThis.chrome.storage.local.get = originalGet;
+    }
+  });
+
+  it('does not double-count a transfer when terminal catch-up fails after staging', async () => {
+    const batchId = await begin();
+    globalThis.chrome.downloads.search = async ({ id }) => [{ id, state: 'complete' }];
+    const originalGet = globalThis.chrome.storage.local.get;
+    let rejectPendingRead = true;
+    globalThis.chrome.storage.local.get = async (keys) => {
+      if (rejectPendingRead && keys && typeof keys === 'object'
+          && PENDING_KEY in keys && !(BATCH_KEY in keys)) {
+        rejectPendingRead = false;
+        throw new Error('lifecycle lookup unavailable');
+      }
+      return originalGet(keys);
+    };
+
+    try {
+      await expect(track(batchId, 206)).resolves.toBe('history_failed');
+      await finishDownloadBatchRegistration(batchId);
+      const staged = await originalGet({ [PENDING_KEY]: {}, [BATCH_KEY]: {} });
+      expect(staged[BATCH_KEY][batchId]).toEqual(expect.objectContaining({
+        total: 1,
+        completed: 0,
+        failed: 0,
+      }));
+    } finally {
+      globalThis.chrome.storage.local.get = originalGet;
+    }
+
+    await reconcilePendingDownloads();
+    const settled = await originalGet({ [PENDING_KEY]: {}, [BATCH_KEY]: {} });
+    expect(settled[PENDING_KEY]).toEqual({});
+    expect(settled[BATCH_KEY]).toEqual({});
+    expect(globalThis.chrome.storage.local._data().downloadHistory).toHaveLength(1);
+    expect(notifications).toContain('Downloaded 1 file from facebook.');
+  });
+
   it('keeps a completed transfer successful when history storage fails', async () => {
     const batchId = await begin();
     await track(batchId, 204);

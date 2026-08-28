@@ -1295,7 +1295,14 @@ export async function downloadItemsAsZip(items, platform, { notify = true } = {}
 const PENDING_DOWNLOADS_KEY = 'pendingDownloadStates';
 const PENDING_DOWNLOAD_BATCHES_KEY = 'pendingDownloadBatches';
 let pendingDownloadWrites = Promise.resolve();
+let terminalLifecycleWrites = Promise.resolve();
 const settlingDownloads = new Set();
+
+function queueTerminalLifecycle(run) {
+  const next = terminalLifecycleWrites.then(run);
+  terminalLifecycleWrites = next.catch(() => {});
+  return next;
+}
 
 function updatePendingDownloads(mutate) {
   const next = pendingDownloadWrites.then(async () => {
@@ -1419,36 +1426,46 @@ async function pendingDownload(downloadId) {
   return pending[String(downloadId)] || null;
 }
 
-async function settleTerminalDownload(downloadId, outcome) {
+async function performTerminalSettlement(downloadId, outcome) {
   const key = String(downloadId);
   const historyDownloadId = Number.isFinite(Number(downloadId)) ? Number(downloadId) : downloadId;
-  if (settlingDownloads.has(key)) return;
+  const tracked = await pendingDownload(downloadId);
+  if (!tracked) return null;
+
+  let finalOutcome = outcome;
+  if (outcome === 'complete') {
+    try {
+      await recordDownload(tracked.item, tracked.platform, historyDownloadId);
+    } catch (error) {
+      console.warn('SocialSnag: could not record completed download:', error);
+      finalOutcome = 'history_failed';
+    }
+  }
+
+  // Removing the item and accounting for its batch are one persisted write.
+  // A worker restart can replay the whole operation before this write, but it
+  // cannot lose the item in between two separate lifecycle updates.
+  const settledBatch = await updatePendingDownloads((pending, batches) => {
+    const current = pending[key];
+    if (!current) return null;
+    delete pending[key];
+    return applyDownloadBatchOutcome(batches, current.batchId, finalOutcome);
+  });
+  notifyDownloadBatch(settledBatch);
+  return finalOutcome;
+}
+
+async function settleTerminalDownload(downloadId, outcome) {
+  const key = String(downloadId);
+  if (settlingDownloads.has(key)) return null;
   settlingDownloads.add(key);
   try {
-    const tracked = await pendingDownload(downloadId);
-    if (!tracked) return null;
-
-    let finalOutcome = outcome;
-    if (outcome === 'complete') {
-      try {
-        await recordDownload(tracked.item, tracked.platform, historyDownloadId);
-      } catch (error) {
-        console.warn('SocialSnag: could not record completed download:', error);
-        finalOutcome = 'history_failed';
-      }
-    }
-
-    // Removing the item and accounting for its batch are one persisted write.
-    // A worker restart can replay the whole operation before this write, but it
-    // cannot lose the item in between two separate lifecycle updates.
-    const settledBatch = await updatePendingDownloads((pending, batches) => {
-      const current = pending[key];
-      if (!current) return null;
-      delete pending[key];
-      return applyDownloadBatchOutcome(batches, current.batchId, finalOutcome);
-    });
-    notifyDownloadBatch(settledBatch);
-    return finalOutcome;
+    return await queueTerminalLifecycle(() => performTerminalSettlement(downloadId, outcome));
+  } catch (error) {
+    // The download was already staged. Leave it pending for reconciliation
+    // instead of throwing to a caller that would count the same slot as failed.
+    console.warn('SocialSnag: could not settle terminal download:', error);
+    return 'history_failed';
   } finally {
     settlingDownloads.delete(key);
   }
@@ -1796,11 +1813,13 @@ async function downloadMedia(item, platform, index = 1) {
 let downloadHistoryWrites = Promise.resolve();
 
 export function clearDownloadHistory() {
-  const next = downloadHistoryWrites.then(() => (
-    chrome.storage.local.set({ downloadHistory: [] })
-  ));
-  downloadHistoryWrites = next.catch(() => {});
-  return next;
+  return queueTerminalLifecycle(() => {
+    const next = downloadHistoryWrites.then(() => (
+      chrome.storage.local.set({ downloadHistory: [] })
+    ));
+    downloadHistoryWrites = next.catch(() => {});
+    return next;
+  });
 }
 
 async function recordDownload(item, platform, downloadId) {
