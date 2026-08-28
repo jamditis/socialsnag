@@ -21,6 +21,7 @@ import {
   markDownloadStartFailed,
   finishDownloadBatchRegistration,
   reconcilePendingDownloads,
+  clearDownloadHistory,
   resolveItemUrl,
   resolveViaApi,
   parseSubmittedPageUrl,
@@ -1224,6 +1225,41 @@ describe('zip download flow', () => {
     }
   });
 
+  it('preserves zip fallback status in the terminal notification', async () => {
+    const off = installOffscreenMock(false);
+    const originalSend = globalThis.chrome.tabs.sendMessage;
+    const originalDownload = globalThis.chrome.downloads.download;
+    const originalSearch = globalThis.chrome.downloads.search;
+    const originalNotify = globalThis.chrome.notifications.create;
+    const notes = [];
+    let nextId = 60;
+    globalThis.chrome.tabs.sendMessage = async () => ({
+      platform: 'bluesky',
+      urls: imgItems,
+    });
+    globalThis.chrome.downloads.download = async () => nextId++;
+    globalThis.chrome.downloads.search = async ({ id }) => [{
+      id, state: 'complete', filename: `/downloads/${id}.jpg`,
+    }];
+    globalThis.chrome.notifications.create = (options) => notes.push(options.message);
+    globalThis.chrome.storage.local._reset();
+
+    try {
+      const handler = globalThis.chrome.contextMenus.onClicked._listeners[0];
+      await handler(
+        { menuItemId: 'socialsnag-download-zip', pageUrl: 'https://bsky.app/profile/x/post/1' },
+        { id: 5, url: 'https://bsky.app/profile/x/post/1' },
+      );
+      expect(notes).toContain('Zip failed; saved 2 files individually from bluesky.');
+    } finally {
+      globalThis.chrome.tabs.sendMessage = originalSend;
+      globalThis.chrome.downloads.download = originalDownload;
+      globalThis.chrome.downloads.search = originalSearch;
+      globalThis.chrome.notifications.create = originalNotify;
+      off.restore();
+    }
+  });
+
   it('degrades a forced zip to a normal download when only one item resolves', async () => {
     const off = installOffscreenMock(true);
     const origTabsSend = globalThis.chrome.tabs.sendMessage;
@@ -1727,6 +1763,39 @@ describe('terminal download state', () => {
     expect(globalThis.chrome.storage.local._data().downloadHistory).toHaveLength(1);
   });
 
+  it('does not close a batch created after startup reconciliation took its snapshot', async () => {
+    const originalGet = globalThis.chrome.storage.local.get;
+    let releaseSnapshot;
+    const snapshotBlocked = new Promise((resolve) => { releaseSnapshot = resolve; });
+    let firstGet = true;
+    globalThis.chrome.storage.local.get = async (keys) => {
+      const snapshot = await originalGet(keys);
+      if (firstGet) {
+        firstGet = false;
+        await snapshotBlocked;
+      }
+      return snapshot;
+    };
+
+    try {
+      const reconciling = reconcilePendingDownloads();
+      await vi.waitFor(() => expect(firstGet).toBe(false));
+      const batchId = await begin(2);
+      releaseSnapshot();
+      await reconciling;
+
+      const stored = await originalGet(BATCH_KEY);
+      expect(stored[BATCH_KEY][batchId]).toEqual(expect.objectContaining({
+        total: 0,
+        failed: 0,
+        registrationComplete: false,
+      }));
+    } finally {
+      releaseSnapshot();
+      globalThis.chrome.storage.local.get = originalGet;
+    }
+  });
+
   it('keeps both history entries when terminal events arrive together', async () => {
     const batchId = await begin(2);
     await track(batchId, 201);
@@ -1755,6 +1824,55 @@ describe('terminal download state', () => {
       .map((entry) => entry.downloadId)
       .sort((a, b) => a - b);
     expect(ids).toEqual([201, 202]);
+  });
+
+  it('serializes a history clear after an in-flight terminal write', async () => {
+    const batchId = await begin();
+    await track(batchId, 203);
+    await finishDownloadBatchRegistration(batchId);
+    const originalGet = globalThis.chrome.storage.local.get;
+    let releaseHistoryRead;
+    let historyReadStarted;
+    const historyRead = new Promise((resolve) => { historyReadStarted = resolve; });
+    const readBlocked = new Promise((resolve) => { releaseHistoryRead = resolve; });
+    globalThis.chrome.storage.local.get = async (keys) => {
+      const result = await originalGet(keys);
+      if (keys && typeof keys === 'object' && 'downloadHistory' in keys) {
+        historyReadStarted();
+        await readBlocked;
+      }
+      return result;
+    };
+
+    try {
+      const completion = fireChanged({ id: 203, state: { current: 'complete' } });
+      await historyRead;
+      const clearing = clearDownloadHistory();
+      releaseHistoryRead();
+      await Promise.all([completion, clearing]);
+      expect(globalThis.chrome.storage.local._data().downloadHistory).toEqual([]);
+    } finally {
+      releaseHistoryRead();
+      globalThis.chrome.storage.local.get = originalGet;
+    }
+  });
+
+  it('keeps a completed transfer successful when history storage fails', async () => {
+    const batchId = await begin();
+    await track(batchId, 204);
+    await finishDownloadBatchRegistration(batchId);
+    const originalSet = globalThis.chrome.storage.local.set;
+    globalThis.chrome.storage.local.set = async (items) => {
+      if ('downloadHistory' in items) throw new Error('history unavailable');
+      return originalSet(items);
+    };
+
+    try {
+      await fireChanged({ id: 204, state: { current: 'complete' } });
+      expect(notifications).toContain('Downloaded 1 file from facebook.');
+    } finally {
+      globalThis.chrome.storage.local.set = originalSet;
+    }
   });
 
   it('reports completed and failed counts from terminal outcomes for a mixed batch', async () => {
@@ -3320,6 +3438,38 @@ describe('submitted URL external bridge', () => {
         ok: false, code: 'history_failed', platform: 'twitter', count: 1,
       });
       expect(chrome.tabs.remove).toHaveBeenCalledWith(84);
+    } finally {
+      chrome.storage.local.set = originalSet;
+    }
+  });
+
+  it('starts the download when lifecycle storage initialization fails', async () => {
+    const originalSet = chrome.storage.local.set;
+    chrome.tabs.create = vi.fn(async () => ({ id: 86, status: 'complete' }));
+    chrome.tabs.get = vi.fn(async () => ({
+      id: 86, status: 'complete', url: 'https://x.com/user/status/123',
+    }));
+    chrome.tabs.remove = vi.fn();
+    chrome.tabs.sendMessage = vi.fn(async () => ({
+      platform: 'twitter',
+      urls: [{ url: 'https://pbs.twimg.com/media/one.jpg', type: 'image', filename: 'one' }],
+    }));
+    chrome.downloads.download = vi.fn(async () => 87);
+    chrome.downloads.search = async () => [{
+      id: 87, state: 'in_progress', filename: '/downloads/one.jpg',
+    }];
+    chrome.storage.local.set = vi.fn(async (items) => {
+      if ('pendingDownloadBatches' in items) throw new Error('lifecycle unavailable');
+      return originalSet(items);
+    });
+
+    try {
+      const result = await orchestrateSubmittedDownload('https://x.com/user/status/123');
+      expect(chrome.downloads.download).toHaveBeenCalledOnce();
+      expect(result).toEqual({
+        ok: false, code: 'history_failed', platform: 'twitter', count: 1,
+      });
+      expect(chrome.tabs.remove).toHaveBeenCalledWith(86);
     } finally {
       chrome.storage.local.set = originalSet;
     }

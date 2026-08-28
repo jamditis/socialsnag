@@ -150,8 +150,8 @@ function initPopup() {
     });
 
     document.getElementById('clear-history').addEventListener('click', async () => {
-      await chrome.storage.local.set({ downloadHistory: [] });
-      renderHistory();
+      const result = await chrome.runtime.sendMessage({ action: 'clearDownloadHistory' });
+      if (result?.ok) renderHistory();
     });
   });
 }
