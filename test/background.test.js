@@ -16,6 +16,12 @@ import {
   resolveInstagramHighlights,
   downloadItemsAsZip,
   trackBlobForDownload,
+  createDownloadBatch,
+  trackTerminalDownload,
+  markDownloadStartFailed,
+  finishDownloadBatchRegistration,
+  reconcilePendingDownloads,
+  clearDownloadHistory,
   resolveItemUrl,
   resolveViaApi,
   parseSubmittedPageUrl,
@@ -973,7 +979,13 @@ describe('zip download flow', () => {
   // The revoke listener is now a module-level singleton registered at import,
   // not one per zip, so _listeners[0] is already deterministic. Clearing it here
   // would delete it for the rest of the file.
-  afterEach(() => resetFetch());
+  afterEach(async () => {
+    resetFetch();
+    await globalThis.chrome.storage.local.remove([
+      'pendingDownloadStates',
+      'pendingDownloadBatches',
+    ]);
+  });
 
   // Pretend the offscreen doc exists and capture every message sent to it. The
   // 'zip' action resolves to a blob URL (or a failure when zipOk is false);
@@ -1026,6 +1038,30 @@ describe('zip download flow', () => {
       expect(off.sent).toContainEqual({ target: 'offscreen', action: 'revoke', url: 'blob:zip1' });
     } finally {
       globalThis.chrome.downloads.download = origDownload;
+      off.restore();
+    }
+  });
+
+  it('reports a zip start before an immediate terminal success', async () => {
+    const off = installOffscreenMock(true);
+    const origDownload = globalThis.chrome.downloads.download;
+    const origSearch = globalThis.chrome.downloads.search;
+    const origNotify = globalThis.chrome.notifications.create;
+    const notes = [];
+    globalThis.chrome.downloads.download = async () => 66;
+    globalThis.chrome.downloads.search = async () => [{ id: 66, state: 'complete' }];
+    globalThis.chrome.notifications.create = (options) => notes.push(options.message);
+
+    try {
+      await downloadItemsAsZip(imgItems, 'bluesky');
+      expect(notes).toEqual([
+        'Started a .zip with 2 files from bluesky.',
+        'Downloaded 2 files as a .zip from bluesky.',
+      ]);
+    } finally {
+      globalThis.chrome.downloads.download = origDownload;
+      globalThis.chrome.downloads.search = origSearch;
+      globalThis.chrome.notifications.create = origNotify;
       off.restore();
     }
   });
@@ -1189,6 +1225,41 @@ describe('zip download flow', () => {
     }
   });
 
+  it('preserves zip fallback status in the terminal notification', async () => {
+    const off = installOffscreenMock(false);
+    const originalSend = globalThis.chrome.tabs.sendMessage;
+    const originalDownload = globalThis.chrome.downloads.download;
+    const originalSearch = globalThis.chrome.downloads.search;
+    const originalNotify = globalThis.chrome.notifications.create;
+    const notes = [];
+    let nextId = 60;
+    globalThis.chrome.tabs.sendMessage = async () => ({
+      platform: 'bluesky',
+      urls: imgItems,
+    });
+    globalThis.chrome.downloads.download = async () => nextId++;
+    globalThis.chrome.downloads.search = async ({ id }) => [{
+      id, state: 'complete', filename: `/downloads/${id}.jpg`,
+    }];
+    globalThis.chrome.notifications.create = (options) => notes.push(options.message);
+    globalThis.chrome.storage.local._reset();
+
+    try {
+      const handler = globalThis.chrome.contextMenus.onClicked._listeners[0];
+      await handler(
+        { menuItemId: 'socialsnag-download-zip', pageUrl: 'https://bsky.app/profile/x/post/1' },
+        { id: 5, url: 'https://bsky.app/profile/x/post/1' },
+      );
+      expect(notes).toContain('Zip failed; saved 2 files individually from bluesky.');
+    } finally {
+      globalThis.chrome.tabs.sendMessage = originalSend;
+      globalThis.chrome.downloads.download = originalDownload;
+      globalThis.chrome.downloads.search = originalSearch;
+      globalThis.chrome.notifications.create = originalNotify;
+      off.restore();
+    }
+  });
+
   it('degrades a forced zip to a normal download when only one item resolves', async () => {
     const off = installOffscreenMock(true);
     const origTabsSend = globalThis.chrome.tabs.sendMessage;
@@ -1237,17 +1308,26 @@ describe('zip download flow', () => {
     }
   });
 
-  it('records the archive with no url in history', async () => {
+  it('records the archive with no url only after completion', async () => {
     const off = installOffscreenMock(true);
     const origDownload = globalThis.chrome.downloads.download;
+    const origSearch = globalThis.chrome.downloads.search;
     globalThis.chrome.downloads.download = async () => 55;
+    globalThis.chrome.downloads.search = async () => [{ id: 55, state: 'in_progress' }];
 
     try {
       await globalThis.chrome.storage.local.set({ downloadHistory: [] });
       const result = await downloadItemsAsZip(imgItems, 'bluesky');
       expect(result).toBe(2);
 
-      const { downloadHistory } = await globalThis.chrome.storage.local.get({ downloadHistory: [] });
+      let { downloadHistory } = await globalThis.chrome.storage.local.get({ downloadHistory: [] });
+      expect(downloadHistory).toEqual([]);
+      await globalThis.chrome.downloads.onChanged._listeners[0]({
+        id: 55,
+        state: { current: 'complete' },
+      });
+
+      ({ downloadHistory } = await globalThis.chrome.storage.local.get({ downloadHistory: [] }));
       expect(downloadHistory).toHaveLength(1);
       const entry = downloadHistory[0];
       expect('url' in entry).toBe(false);
@@ -1255,6 +1335,7 @@ describe('zip download flow', () => {
       expect(entry.filename.endsWith('.zip')).toBe(true);
     } finally {
       globalThis.chrome.downloads.download = origDownload;
+      globalThis.chrome.downloads.search = origSearch;
       off.restore();
     }
   });
@@ -1499,6 +1580,403 @@ describe('optional content script registration', () => {
   });
 });
 
+describe('terminal download state', () => {
+  const PENDING_KEY = 'pendingDownloadStates';
+  const BATCH_KEY = 'pendingDownloadBatches';
+  let originalSearch;
+  let originalCreateNotification;
+  let notifications;
+
+  const fireChanged = async (delta) => {
+    for (const listener of [...globalThis.chrome.downloads.onChanged._listeners]) {
+      await listener(delta);
+    }
+  };
+
+  const fireErased = async (downloadId) => {
+    for (const listener of [...globalThis.chrome.downloads.onErased._listeners]) {
+      await listener(downloadId);
+    }
+  };
+
+  const begin = (total = 1) => createDownloadBatch({
+    platform: 'facebook',
+    total,
+    notify: true,
+    successLabel: total === 1 ? '1 file' : `${total} files`,
+  });
+
+  const track = (batchId, downloadId, filename = `facebook_${downloadId}.jpg`) => (
+    trackTerminalDownload({
+      batchId,
+      downloadId,
+      item: { type: 'image', filename },
+      platform: 'facebook',
+    })
+  );
+
+  beforeEach(async () => {
+    originalSearch = globalThis.chrome.downloads.search;
+    originalCreateNotification = globalThis.chrome.notifications.create;
+    notifications = [];
+    globalThis.chrome.notifications.create = (options) => notifications.push(options.message);
+    globalThis.chrome.downloads.search = async ({ id }) => [{ id, state: 'in_progress' }];
+    globalThis.chrome.storage.local._reset();
+    await globalThis.chrome.storage.local.remove([PENDING_KEY, BATCH_KEY]);
+  });
+
+  afterEach(async () => {
+    globalThis.chrome.downloads.search = originalSearch;
+    globalThis.chrome.notifications.create = originalCreateNotification;
+    await globalThis.chrome.storage.local.remove([PENDING_KEY, BATCH_KEY]);
+  });
+
+  it('does not record a started download until Chrome completes it', async () => {
+    const batchId = await begin();
+    await track(batchId, 101);
+    await finishDownloadBatchRegistration(batchId);
+
+    expect(globalThis.chrome.storage.local._data().downloadHistory).toBeUndefined();
+
+    await fireChanged({ id: 101, state: { current: 'complete' } });
+
+    expect(globalThis.chrome.storage.local._data().downloadHistory).toEqual([
+      expect.objectContaining({ downloadId: 101, filename: 'facebook_101.jpg' }),
+    ]);
+    expect(notifications).toContain('Downloaded 1 file from facebook.');
+  });
+
+  it('removes a terminal item and settles its batch in one lifecycle write', async () => {
+    const batchId = await begin();
+    await track(batchId, 110);
+    await finishDownloadBatchRegistration(batchId);
+    const originalSet = globalThis.chrome.storage.local.set;
+    const writes = [];
+    globalThis.chrome.storage.local.set = async (items) => {
+      writes.push(structuredClone(items));
+      return originalSet(items);
+    };
+
+    try {
+      await fireChanged({ id: 110, state: { current: 'complete' } });
+    } finally {
+      globalThis.chrome.storage.local.set = originalSet;
+    }
+
+    expect(writes).toContainEqual({
+      [PENDING_KEY]: {},
+      [BATCH_KEY]: {},
+    });
+  });
+
+  it('keeps a new download pending while Chrome has not indexed it yet', async () => {
+    globalThis.chrome.downloads.search = async () => [];
+    const batchId = await begin();
+
+    await track(batchId, 109);
+    await finishDownloadBatchRegistration(batchId);
+
+    expect(globalThis.chrome.storage.local._data().downloadHistory).toBeUndefined();
+    expect((await globalThis.chrome.storage.local.get(PENDING_KEY))[PENDING_KEY]['109'])
+      .toBeTruthy();
+  });
+
+  it('keeps a resumable interruption pending, then records it after completion', async () => {
+    const batchId = await begin();
+    await track(batchId, 102);
+    await finishDownloadBatchRegistration(batchId);
+    globalThis.chrome.downloads.search = async ({ id }) => [{
+      id, state: 'interrupted', canResume: true,
+    }];
+
+    await fireChanged({ id: 102, state: { current: 'interrupted' } });
+    expect(globalThis.chrome.storage.local._data().downloadHistory).toBeUndefined();
+    expect((await globalThis.chrome.storage.local.get(PENDING_KEY))[PENDING_KEY]['102'])
+      .toBeTruthy();
+
+    await fireChanged({ id: 102, state: { current: 'complete' } });
+    expect(globalThis.chrome.storage.local._data().downloadHistory).toHaveLength(1);
+  });
+
+  it.each([
+    ['non-resumable interruption', async (id) => {
+      globalThis.chrome.downloads.search = async () => [{
+        id, state: 'interrupted', canResume: false,
+      }];
+      await fireChanged({ id, state: { current: 'interrupted' } });
+    }],
+    ['erased record', async (id) => fireErased(id)],
+  ])('does not record a %s as completed', async (_label, terminate) => {
+    const batchId = await begin();
+    await track(batchId, 103);
+    await finishDownloadBatchRegistration(batchId);
+
+    await terminate(103);
+
+    expect(globalThis.chrome.storage.local._data().downloadHistory).toBeUndefined();
+    expect(notifications).toContain('SocialSnag: download failed for facebook.');
+  });
+
+  it('reconciles persistent terminal IDs after a worker or browser restart', async () => {
+    const completedBatch = await begin();
+    await track(completedBatch, 104);
+    const failedBatch = await begin();
+    await track(failedBatch, 105);
+    globalThis.chrome.downloads.search = async ({ id }) => (
+      id === 104
+        ? [{ id, state: 'complete' }]
+        : [{ id, state: 'interrupted', canResume: false }]
+    );
+
+    await reconcilePendingDownloads();
+
+    expect(globalThis.chrome.storage.local._data().downloadHistory).toEqual([
+      expect.objectContaining({ downloadId: 104 }),
+    ]);
+    expect((await globalThis.chrome.storage.local.get(PENDING_KEY))[PENDING_KEY]).toEqual({});
+  });
+
+  it('fails unregistered slots when a restart interrupts batch registration', async () => {
+    const batchId = await begin(2);
+    await track(batchId, 111);
+
+    await reconcilePendingDownloads();
+
+    let stored = await globalThis.chrome.storage.local.get(BATCH_KEY);
+    expect(stored[BATCH_KEY][batchId]).toEqual(expect.objectContaining({
+      expectedTotal: 2,
+      total: 2,
+      completed: 0,
+      failed: 1,
+      registrationComplete: true,
+    }));
+
+    globalThis.chrome.downloads.search = async () => [{ id: 111, state: 'complete' }];
+    await reconcilePendingDownloads();
+
+    stored = await globalThis.chrome.storage.local.get({
+      [PENDING_KEY]: {},
+      [BATCH_KEY]: {},
+    });
+    expect(stored[PENDING_KEY]).toEqual({});
+    expect(stored[BATCH_KEY]).toEqual({});
+    expect(globalThis.chrome.storage.local._data().downloadHistory).toHaveLength(1);
+  });
+
+  it('does not close a batch created after startup reconciliation took its snapshot', async () => {
+    const originalGet = globalThis.chrome.storage.local.get;
+    let releaseSnapshot;
+    const snapshotBlocked = new Promise((resolve) => { releaseSnapshot = resolve; });
+    let firstGet = true;
+    globalThis.chrome.storage.local.get = async (keys) => {
+      const snapshot = await originalGet(keys);
+      if (firstGet) {
+        firstGet = false;
+        await snapshotBlocked;
+      }
+      return snapshot;
+    };
+
+    try {
+      const reconciling = reconcilePendingDownloads();
+      await vi.waitFor(() => expect(firstGet).toBe(false));
+      const batchId = await begin(2);
+      releaseSnapshot();
+      await reconciling;
+
+      const stored = await originalGet(BATCH_KEY);
+      expect(stored[BATCH_KEY][batchId]).toEqual(expect.objectContaining({
+        total: 0,
+        failed: 0,
+        registrationComplete: false,
+      }));
+    } finally {
+      releaseSnapshot();
+      globalThis.chrome.storage.local.get = originalGet;
+    }
+  });
+
+  it('keeps both history entries when terminal events arrive together', async () => {
+    const batchId = await begin(2);
+    await track(batchId, 201);
+    await track(batchId, 202);
+    await finishDownloadBatchRegistration(batchId);
+    const originalSet = globalThis.chrome.storage.local.set;
+    let delayedHistoryWrite = false;
+    globalThis.chrome.storage.local.set = async (items) => {
+      if ('downloadHistory' in items && !delayedHistoryWrite) {
+        delayedHistoryWrite = true;
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      return originalSet(structuredClone(items));
+    };
+
+    try {
+      await Promise.all([
+        fireChanged({ id: 201, state: { current: 'complete' } }),
+        fireChanged({ id: 202, state: { current: 'complete' } }),
+      ]);
+    } finally {
+      globalThis.chrome.storage.local.set = originalSet;
+    }
+
+    const ids = globalThis.chrome.storage.local._data().downloadHistory
+      .map((entry) => entry.downloadId)
+      .sort((a, b) => a - b);
+    expect(ids).toEqual([201, 202]);
+  });
+
+  it('serializes a history clear after an in-flight terminal write', async () => {
+    const batchId = await begin();
+    await track(batchId, 203);
+    await finishDownloadBatchRegistration(batchId);
+    const originalGet = globalThis.chrome.storage.local.get;
+    let releaseHistoryRead;
+    let historyReadStarted;
+    const historyRead = new Promise((resolve) => { historyReadStarted = resolve; });
+    const readBlocked = new Promise((resolve) => { releaseHistoryRead = resolve; });
+    globalThis.chrome.storage.local.get = async (keys) => {
+      const result = await originalGet(keys);
+      if (keys && typeof keys === 'object' && 'downloadHistory' in keys) {
+        historyReadStarted();
+        await readBlocked;
+      }
+      return result;
+    };
+
+    try {
+      const completion = fireChanged({ id: 203, state: { current: 'complete' } });
+      await historyRead;
+      const clearing = clearDownloadHistory();
+      releaseHistoryRead();
+      await Promise.all([completion, clearing]);
+      expect(globalThis.chrome.storage.local._data().downloadHistory).toEqual([]);
+    } finally {
+      releaseHistoryRead();
+      globalThis.chrome.storage.local.get = originalGet;
+    }
+  });
+
+  it('serializes a history clear after terminal settlement starts', async () => {
+    const batchId = await begin();
+    await track(batchId, 205);
+    await finishDownloadBatchRegistration(batchId);
+    const originalGet = globalThis.chrome.storage.local.get;
+    let releasePendingRead;
+    let pendingReadStarted;
+    const pendingRead = new Promise((resolve) => { pendingReadStarted = resolve; });
+    const readBlocked = new Promise((resolve) => { releasePendingRead = resolve; });
+    let blockPendingRead = true;
+    globalThis.chrome.storage.local.get = async (keys) => {
+      const result = await originalGet(keys);
+      if (blockPendingRead && keys && typeof keys === 'object'
+          && PENDING_KEY in keys && !(BATCH_KEY in keys)) {
+        blockPendingRead = false;
+        pendingReadStarted();
+        await readBlocked;
+      }
+      return result;
+    };
+
+    try {
+      const completion = fireChanged({ id: 205, state: { current: 'complete' } });
+      await pendingRead;
+      const clearing = clearDownloadHistory();
+      releasePendingRead();
+      await Promise.all([completion, clearing]);
+      expect(globalThis.chrome.storage.local._data().downloadHistory).toEqual([]);
+    } finally {
+      releasePendingRead();
+      globalThis.chrome.storage.local.get = originalGet;
+    }
+  });
+
+  it('does not double-count a transfer when terminal catch-up fails after staging', async () => {
+    const batchId = await begin();
+    globalThis.chrome.downloads.search = async ({ id }) => [{ id, state: 'complete' }];
+    const originalGet = globalThis.chrome.storage.local.get;
+    let rejectPendingRead = true;
+    globalThis.chrome.storage.local.get = async (keys) => {
+      if (rejectPendingRead && keys && typeof keys === 'object'
+          && PENDING_KEY in keys && !(BATCH_KEY in keys)) {
+        rejectPendingRead = false;
+        throw new Error('lifecycle lookup unavailable');
+      }
+      return originalGet(keys);
+    };
+
+    try {
+      await expect(track(batchId, 206)).resolves.toBe('history_failed');
+      await finishDownloadBatchRegistration(batchId);
+      const staged = await originalGet({ [PENDING_KEY]: {}, [BATCH_KEY]: {} });
+      expect(staged[BATCH_KEY][batchId]).toEqual(expect.objectContaining({
+        total: 1,
+        completed: 0,
+        failed: 0,
+      }));
+    } finally {
+      globalThis.chrome.storage.local.get = originalGet;
+    }
+
+    await reconcilePendingDownloads();
+    const settled = await originalGet({ [PENDING_KEY]: {}, [BATCH_KEY]: {} });
+    expect(settled[PENDING_KEY]).toEqual({});
+    expect(settled[BATCH_KEY]).toEqual({});
+    expect(globalThis.chrome.storage.local._data().downloadHistory).toHaveLength(1);
+    expect(notifications).toContain('Downloaded 1 file from facebook.');
+  });
+
+  it('keeps a completed transfer successful when history storage fails', async () => {
+    const batchId = await begin();
+    await track(batchId, 204);
+    await finishDownloadBatchRegistration(batchId);
+    const originalSet = globalThis.chrome.storage.local.set;
+    globalThis.chrome.storage.local.set = async (items) => {
+      if ('downloadHistory' in items) throw new Error('history unavailable');
+      return originalSet(items);
+    };
+
+    try {
+      await fireChanged({ id: 204, state: { current: 'complete' } });
+      expect(notifications).toContain('Downloaded 1 file from facebook.');
+    } finally {
+      globalThis.chrome.storage.local.set = originalSet;
+    }
+  });
+
+  it('reports completed and failed counts from terminal outcomes for a mixed batch', async () => {
+    const batchId = await begin(3);
+    await track(batchId, 106);
+    await track(batchId, 107);
+    await markDownloadStartFailed(batchId);
+    await finishDownloadBatchRegistration(batchId);
+
+    await fireChanged({ id: 106, state: { current: 'complete' } });
+    globalThis.chrome.downloads.search = async () => [{
+      id: 107, state: 'interrupted', canResume: false,
+    }];
+    await fireChanged({ id: 107, state: { current: 'interrupted' } });
+
+    expect(globalThis.chrome.storage.local._data().downloadHistory).toHaveLength(1);
+    expect(notifications).toContain('1 download completed; 2 failed from facebook.');
+  });
+
+  it('stores lifecycle metadata without a media URL', async () => {
+    const batchId = await begin();
+    await track(batchId, 108);
+    await finishDownloadBatchRegistration(batchId);
+
+    const stored = await globalThis.chrome.storage.local.get({
+      [PENDING_KEY]: {},
+      [BATCH_KEY]: {},
+    });
+    expect(JSON.stringify(stored)).not.toMatch(/https?:\/\//);
+    const session = globalThis.chrome.storage.session._data();
+    expect(session[PENDING_KEY]).toBeUndefined();
+    expect(session[BATCH_KEY]).toBeUndefined();
+  });
+});
+
 describe('zip blob revocation lifecycle', () => {
   const KEY = 'pendingBlobRevokes';
   let origSendMessage;
@@ -1735,10 +2213,10 @@ describe('formatLocalDate', () => {
   });
 });
 
-// The whole download path, from a context-menu click to what history records. This
-// seam had no harness, which is how the file on disk came to carry the templated name
-// while Recent downloads still listed the one the resolver had picked.
-describe('context-menu download history', () => {
+// The whole download path, from a context-menu click to the metadata staged for
+// terminal completion. Chrome's assigned filename must survive this boundary so
+// history can use it later without representing an in-progress transfer as done.
+describe('context-menu download metadata', () => {
   // The menu ids are private to background.js; this is the "Download this (HD)" one.
   const MENU_DOWNLOAD_SINGLE = 'socialsnag-download-single';
   const PAGE = 'https://www.facebook.com/photo/?fbid=999';
@@ -1752,7 +2230,14 @@ describe('context-menu download history', () => {
     return onClicked({ menuItemId: MENU_DOWNLOAD_SINGLE, pageUrl: PAGE }, { id: 1, url: PAGE });
   }
 
-  beforeEach(() => {
+  async function stagedItem() {
+    const { pendingDownloadStates = {} } = await globalThis.chrome.storage.local.get({
+      pendingDownloadStates: {},
+    });
+    return Object.values(pendingDownloadStates)[0]?.item;
+  }
+
+  beforeEach(async () => {
     globalThis.chrome.storage.sync._reset();
     globalThis.chrome.storage.local._reset();
     origSendMessage = globalThis.chrome.tabs.sendMessage;
@@ -1761,6 +2246,10 @@ describe('context-menu download history', () => {
     // The mock's listener array is shared across the file, so the attach/detach
     // assertions below only mean something from a known-empty start.
     globalThis.chrome.downloads.onChanged._listeners.length = 0;
+    await globalThis.chrome.storage.local.remove([
+      'pendingDownloadStates',
+      'pendingDownloadBatches',
+    ]);
     globalThis.chrome.tabs.sendMessage = async () => ({
       platform: 'facebook',
       urls: [{
@@ -1773,44 +2262,44 @@ describe('context-menu download history', () => {
     globalThis.chrome.downloads.download = async () => 7;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     globalThis.chrome.tabs.sendMessage = origSendMessage;
     globalThis.chrome.downloads.download = origDownload;
     globalThis.chrome.downloads.search = origSearch;
     globalThis.chrome.storage.sync._reset();
     globalThis.chrome.storage.local._reset();
+    await globalThis.chrome.storage.local.remove([
+      'pendingDownloadStates',
+      'pendingDownloadBatches',
+    ]);
   });
 
-  it('records the templated name, which is the name the file has', async () => {
+  it('stages the templated name, which is the name the file has', async () => {
     await globalThis.chrome.storage.sync.set({ filenameTemplate: '{platform}_{postId}' });
     await clickDownload();
 
-    const { downloadHistory } = globalThis.chrome.storage.local._data();
-    expect(downloadHistory).toHaveLength(1);
-    expect(downloadHistory[0].filename).toBe('facebook_999.jpg');
-    expect(downloadHistory[0].downloadId).toBe(7);
+    expect(globalThis.chrome.storage.local._data().downloadHistory).toBeUndefined();
+    expect((await stagedItem()).filename).toBe('facebook_999.jpg');
   });
 
-  it('records the resolver name when no template is configured', async () => {
+  it('stages the resolver name when no template is configured', async () => {
     await clickDownload();
 
-    const { downloadHistory } = globalThis.chrome.storage.local._data();
-    expect(downloadHistory[0].filename).toBe('facebook_resolver_name.jpg');
+    expect((await stagedItem()).filename).toBe('facebook_resolver_name.jpg');
   });
 
   // The name we ask for and the name on disk part company exactly when a template is
   // non-unique: conflictAction:'uniquify' renames the second `facebook_999.jpg` and
   // never tells the requested path. History listing a file that does not exist is the
   // failure this whole return value exists to prevent, so it has to survive the rename.
-  it('records the uniquified name when the requested one was already taken', async () => {
+  it('stages the uniquified name when the requested one was already taken', async () => {
     globalThis.chrome.downloads.search = async () => [
       { filename: '/home/joe/Downloads/SocialSnag/facebook/facebook_999 (1).jpg' },
     ];
     await globalThis.chrome.storage.sync.set({ filenameTemplate: '{platform}_{postId}' });
     await clickDownload();
 
-    const { downloadHistory } = globalThis.chrome.storage.local._data();
-    expect(downloadHistory[0].filename).toBe('facebook_999 (1).jpg');
+    expect((await stagedItem()).filename).toBe('facebook_999 (1).jpg');
   });
 
   it('reads a Windows path back to its basename', async () => {
@@ -1820,8 +2309,7 @@ describe('context-menu download history', () => {
     await globalThis.chrome.storage.sync.set({ filenameTemplate: '{platform}_{postId}' });
     await clickDownload();
 
-    const { downloadHistory } = globalThis.chrome.storage.local._data();
-    expect(downloadHistory[0].filename).toBe('facebook_999 (2).jpg');
+    expect((await stagedItem()).filename).toBe('facebook_999 (2).jpg');
   });
 
   // Chrome names the file asynchronously, so the lookup can land before there is a
@@ -1844,8 +2332,7 @@ describe('context-menu download history', () => {
     await globalThis.chrome.storage.sync.set({ filenameTemplate: '{platform}_{postId}' });
     await clickDownload();
 
-    const { downloadHistory } = globalThis.chrome.storage.local._data();
-    expect(downloadHistory[0].filename).toBe('facebook_999 (1).jpg');
+    expect((await stagedItem()).filename).toBe('facebook_999 (1).jpg');
   });
 
   // Attaching after the search would drop a delta that fired in between, and onChanged
@@ -1854,7 +2341,10 @@ describe('context-menu download history', () => {
   it('attaches the filename listener before it looks the download up', async () => {
     let listenersAtSearch = -1;
     globalThis.chrome.downloads.search = async () => {
-      listenersAtSearch = globalThis.chrome.downloads.onChanged._listeners.length;
+      listenersAtSearch = Math.max(
+        listenersAtSearch,
+        globalThis.chrome.downloads.onChanged._listeners.length,
+      );
       return [{ filename: '/home/joe/Downloads/SocialSnag/facebook/facebook_999.jpg' }];
     };
     await clickDownload();
@@ -1888,8 +2378,7 @@ describe('context-menu download history', () => {
       vi.useRealTimers();
     }
 
-    const { downloadHistory } = globalThis.chrome.storage.local._data();
-    expect(downloadHistory[0].filename).toBe('facebook_resolver_name.jpg');
+    expect((await stagedItem()).filename).toBe('facebook_resolver_name.jpg');
   });
 
   // A download Chrome has already given up on will never fire a filename delta, so
@@ -1897,13 +2386,16 @@ describe('context-menu download history', () => {
   // sequential, so every item behind it waits too. Real timers here on purpose: if the
   // wait ever came back, this test would take seconds instead of failing on the clock.
   it('does not wait for a name on a download that already failed', async () => {
-    globalThis.chrome.downloads.search = async () => [{ state: 'interrupted' }];
+    let searchCount = 0;
+    globalThis.chrome.downloads.search = async () => {
+      searchCount += 1;
+      return [{ state: searchCount === 1 ? 'interrupted' : 'in_progress' }];
+    };
     const startedAt = Date.now();
     await clickDownload();
     const elapsed = Date.now() - startedAt;
 
-    const { downloadHistory } = globalThis.chrome.storage.local._data();
-    expect(downloadHistory[0].filename).toBe('facebook_resolver_name.jpg');
+    expect((await stagedItem()).filename).toBe('facebook_resolver_name.jpg');
     expect(elapsed).toBeLessThan(500);
   });
 
@@ -1911,8 +2403,77 @@ describe('context-menu download history', () => {
     globalThis.chrome.downloads.search = async () => { throw new Error('no such id'); };
     await clickDownload();
 
-    const { downloadHistory } = globalThis.chrome.storage.local._data();
-    expect(downloadHistory[0].filename).toBe('facebook_resolver_name.jpg');
+    expect((await stagedItem()).filename).toBe('facebook_resolver_name.jpg');
+  });
+
+  it('accounts for the remaining batch when a later item throws before starting', async () => {
+    const originalGet = globalThis.chrome.storage.sync.get;
+    let downloadSettingsReads = 0;
+    globalThis.chrome.tabs.sendMessage = async () => ({
+      platform: 'facebook',
+      urls: [
+        {
+          url: 'https://scontent.fbcdn.net/v/one.jpg',
+          type: 'image',
+          filename: 'one',
+        },
+        {
+          url: 'https://scontent.fbcdn.net/v/two.jpg',
+          type: 'image',
+          filename: 'two',
+        },
+      ],
+    });
+    globalThis.chrome.storage.sync.get = async (...args) => {
+      if (args[0] && typeof args[0] === 'object' && 'downloadPath' in args[0]) {
+        downloadSettingsReads += 1;
+        if (downloadSettingsReads === 2) throw new Error('settings unavailable');
+      }
+      return originalGet(...args);
+    };
+
+    try {
+      await clickDownload();
+
+      const staged = await globalThis.chrome.storage.local.get({
+        pendingDownloadBatches: {},
+      });
+      expect(Object.values(staged.pendingDownloadBatches)).toEqual([
+        expect.objectContaining({ total: 2, completed: 0, failed: 1 }),
+      ]);
+
+      globalThis.chrome.downloads.search = async () => [{ id: 7, state: 'complete' }];
+      await reconcilePendingDownloads();
+      const settled = await globalThis.chrome.storage.local.get({
+        pendingDownloadBatches: {},
+      });
+      expect(settled.pendingDownloadBatches).toEqual({});
+      expect(globalThis.chrome.storage.local._data().downloadHistory).toHaveLength(1);
+    } finally {
+      globalThis.chrome.storage.sync.get = originalGet;
+    }
+  });
+
+  it('reports start before terminal success for a fast context-menu download', async () => {
+    const originalNotify = globalThis.chrome.notifications.create;
+    const notes = [];
+    globalThis.chrome.notifications.create = (options) => notes.push(options.message);
+    globalThis.chrome.downloads.search = async () => [{
+      id: 7,
+      state: 'complete',
+      filename: '/downloads/facebook_resolver_name.jpg',
+    }];
+
+    try {
+      await clickDownload();
+    } finally {
+      globalThis.chrome.notifications.create = originalNotify;
+    }
+
+    expect(notes).toEqual([
+      'Download started from facebook.',
+      'Downloaded 1 file from facebook.',
+    ]);
   });
 
   it('records nothing when the download itself fails', async () => {
@@ -2210,6 +2771,30 @@ describe('submitted URL external bridge', () => {
     const { downloadHistory } = await chrome.storage.local.get({ downloadHistory: [] });
     expect(downloadHistory).toHaveLength(2);
     expect(downloadHistory.every((entry) => !('url' in entry))).toBe(true);
+  });
+
+  it('does not count a submitted download that is already terminally interrupted', async () => {
+    installFetch((url) => url.includes('i.instagram.com') ? {
+      status: 200,
+      json: { items: [{ image_versions2: { candidates: [{
+        url: 'https://cdn.cdninstagram.com/failed.jpg',
+        width: 1080,
+      }] } }] },
+    } : null);
+    chrome.tabs.create = vi.fn();
+    chrome.downloads.download = vi.fn(async () => 120);
+    chrome.downloads.search = async () => [{
+      id: 120,
+      state: 'interrupted',
+      canResume: false,
+    }];
+
+    const result = await orchestrateSubmittedDownload('https://www.instagram.com/p/ABC/');
+
+    expect(result).toEqual({
+      ok: false, code: 'download_failed', platform: 'instagram', count: 0,
+    });
+    expect(chrome.storage.local._data().downloadHistory).toBeUndefined();
   });
 
   it('downloads an active Instagram story through the authenticated API without opening a tab', async () => {
@@ -2911,7 +3496,10 @@ describe('submitted URL external bridge', () => {
     chrome.downloads.search = async () => [{
       id: 85, state: 'complete', filename: '/downloads/one.jpg',
     }];
-    chrome.storage.local.set = vi.fn(async () => { throw new Error('storage unavailable'); });
+    chrome.storage.local.set = vi.fn(async (items) => {
+      if ('downloadHistory' in items) throw new Error('storage unavailable');
+      return originalSet(items);
+    });
 
     try {
       const result = await orchestrateSubmittedDownload('https://x.com/user/status/123');
@@ -2919,6 +3507,38 @@ describe('submitted URL external bridge', () => {
         ok: false, code: 'history_failed', platform: 'twitter', count: 1,
       });
       expect(chrome.tabs.remove).toHaveBeenCalledWith(84);
+    } finally {
+      chrome.storage.local.set = originalSet;
+    }
+  });
+
+  it('starts the download when lifecycle storage initialization fails', async () => {
+    const originalSet = chrome.storage.local.set;
+    chrome.tabs.create = vi.fn(async () => ({ id: 86, status: 'complete' }));
+    chrome.tabs.get = vi.fn(async () => ({
+      id: 86, status: 'complete', url: 'https://x.com/user/status/123',
+    }));
+    chrome.tabs.remove = vi.fn();
+    chrome.tabs.sendMessage = vi.fn(async () => ({
+      platform: 'twitter',
+      urls: [{ url: 'https://pbs.twimg.com/media/one.jpg', type: 'image', filename: 'one' }],
+    }));
+    chrome.downloads.download = vi.fn(async () => 87);
+    chrome.downloads.search = async () => [{
+      id: 87, state: 'in_progress', filename: '/downloads/one.jpg',
+    }];
+    chrome.storage.local.set = vi.fn(async (items) => {
+      if ('pendingDownloadBatches' in items) throw new Error('lifecycle unavailable');
+      return originalSet(items);
+    });
+
+    try {
+      const result = await orchestrateSubmittedDownload('https://x.com/user/status/123');
+      expect(chrome.downloads.download).toHaveBeenCalledOnce();
+      expect(result).toEqual({
+        ok: false, code: 'history_failed', platform: 'twitter', count: 1,
+      });
+      expect(chrome.tabs.remove).toHaveBeenCalledWith(86);
     } finally {
       chrome.storage.local.set = originalSet;
     }

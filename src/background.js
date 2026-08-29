@@ -787,48 +787,63 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 
     // Zip: bundle multiple items into one archive when forced by the menu or by
     // the setting default. Only worth it for 2+ items.
-    let zipFellBack = false;
     const shouldZip = (isZipMenu || (type === 'all' && platformSettings.zipMultiPosts))
       && response.urls.length >= 2;
+    let zipFellBack = false;
     if (shouldZip) {
-      const zippedCount = await downloadItemsAsZip(response.urls, response.platform);
-      if (zippedCount) {
-        if (platformSettings.showNotifications) {
-          showNotification(`Downloaded ${zippedCount} files as a .zip from ${response.platform}.`);
-        }
-        return;
-      }
+      const zippedCount = await downloadItemsAsZip(response.urls, response.platform, {
+        notify: platformSettings.showNotifications,
+      });
+      if (zippedCount) return;
       // Zip failed (offscreen or all fetches failed) — fall through to per-file,
       // and tell the user why they got loose files instead of the archive.
       console.warn('SocialSnag: zip failed, downloading files individually.');
       zipFellBack = true;
     }
 
+    const successLabel = response.urls.length === 1 ? '1 file' : `${response.urls.length} files`;
+    const batchId = await createDownloadBatch({
+      platform: response.platform,
+      total: response.urls.length,
+      notify: platformSettings.showNotifications,
+      successLabel,
+      zipFellBack,
+    });
     let count = 0;
+    let notifiedStarted = false;
     for (const [position, item] of response.urls.entries()) {
-      const saved = await downloadMedia(item, response.platform, position + 1);
+      let saved = null;
+      try {
+        saved = await downloadMedia(item, response.platform, position + 1);
+      } catch {
+        // One resolver or settings failure must not strand the rest of the
+        // batch. Keep the warning URL-free and account for this slot below.
+        console.warn('SocialSnag: a download item failed before it could start.');
+      }
       if (saved) {
-        // Record the name the file actually landed under, not the resolver's. With a
-        // template configured those differ, and history is how the user finds the
-        // download again -- listing a name no file has is worse than listing nothing.
-        await recordDownload(
-          { ...item, filename: saved.filename },
-          response.platform,
-          saved.downloadId,
-        );
-        count++;
+        try {
+          if (!notifiedStarted && platformSettings.showNotifications) {
+            showNotification(`Download started from ${response.platform}.`);
+            notifiedStarted = true;
+          }
+          await trackTerminalDownload({
+            batchId,
+            downloadId: saved.downloadId,
+            item: { ...item, filename: saved.filename },
+            platform: response.platform,
+          });
+          count++;
+        } catch {
+          await markDownloadStartFailed(batchId);
+          console.warn('SocialSnag: could not track a started download.');
+        }
+      } else {
+        await markDownloadStartFailed(batchId);
       }
     }
+    await finishDownloadBatchRegistration(batchId);
 
-    if (count > 0) {
-      if (platformSettings.showNotifications) {
-        const label = count === 1 ? '1 file' : `${count} files`;
-        const msg = zipFellBack
-          ? `Zip failed — saved ${label} individually from ${response.platform}.`
-          : `Downloaded ${label} from ${response.platform}.`;
-        showNotification(msg);
-      }
-    } else {
+    if (count === 0) {
       // Logs what failed without logging where it lives. The whole item carries a
       // CDN url, and this is the one console line a user is most likely to be
       // reading (and pasting into a bug report) when a download breaks -- which is
@@ -838,9 +853,6 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
         `SocialSnag: all ${response.urls.length} download attempt(s) failed for ${response.platform}`,
         response.urls.map((item) => ({ type: item.type, filename: item.filename })),
       );
-      if (platformSettings.showNotifications) {
-        showNotification('SocialSnag: download failed. Check the browser console for details.');
-      }
     }
   } catch (error) {
     // This is the unexpected-exception path (network failure, a bug) -- distinct
@@ -1190,7 +1202,7 @@ async function resolveInstagramVideo(shortcode, options = {}) {
 // Bundle multiple resolved media items into one .zip via the offscreen document.
 // Returns the count of files archived (a truthy number) once the download has
 // started, or false to fall back to per-file.
-export async function downloadItemsAsZip(items, platform) {
+export async function downloadItemsAsZip(items, platform, { notify = true } = {}) {
   // Zip bundles direct URLs only. If any item needs a video-API lookup (the
   // Instagram DOM fallback emits video slides with no url yet), fall back to
   // per-file so a slide is never silently dropped from the archive.
@@ -1258,9 +1270,271 @@ export async function downloadItemsAsZip(items, platform) {
   // Revoke only after the download finishes reading the blob (see below).
   await trackBlobForDownload(downloadId, zip.url);
 
-  // Record one history entry for the archive; no url is stored.
-  await recordDownload({ type: 'zip', filename: `${zipBase}.zip` }, platform, downloadId);
-  return zip.count ?? files.length;
+  const count = zip.count ?? files.length;
+  const batchId = await createDownloadBatch({
+    platform,
+    total: 1,
+    notify,
+    successLabel: `${count} files as a .zip`,
+  });
+  if (notify) showNotification(`Started a .zip with ${count} files from ${platform}.`);
+  await trackTerminalDownload({
+    batchId,
+    downloadId,
+    item: { type: 'zip', filename: `${zipBase}.zip` },
+    platform,
+  });
+  await finishDownloadBatchRegistration(batchId);
+  return count;
+}
+
+// A download() promise means Chrome accepted the transfer, not that the bytes
+// reached disk. Keep only the non-URL metadata needed to finish history and a
+// batch summary after Chrome reports a terminal state. Local storage lets a
+// replacement MV3 worker or restarted browser reconcile an existing transfer.
+const PENDING_DOWNLOADS_KEY = 'pendingDownloadStates';
+const PENDING_DOWNLOAD_BATCHES_KEY = 'pendingDownloadBatches';
+let pendingDownloadWrites = Promise.resolve();
+let terminalLifecycleWrites = Promise.resolve();
+const settlingDownloads = new Set();
+
+function queueTerminalLifecycle(run) {
+  const next = terminalLifecycleWrites.then(run);
+  terminalLifecycleWrites = next.catch(() => {});
+  return next;
+}
+
+function updatePendingDownloads(mutate) {
+  const next = pendingDownloadWrites.then(async () => {
+    const stored = await chrome.storage.local.get({
+      [PENDING_DOWNLOADS_KEY]: {},
+      [PENDING_DOWNLOAD_BATCHES_KEY]: {},
+    });
+    const pending = stored[PENDING_DOWNLOADS_KEY] || {};
+    const batches = stored[PENDING_DOWNLOAD_BATCHES_KEY] || {};
+    const result = mutate(pending, batches);
+    await chrome.storage.local.set({
+      [PENDING_DOWNLOADS_KEY]: pending,
+      [PENDING_DOWNLOAD_BATCHES_KEY]: batches,
+    });
+    return result;
+  });
+  pendingDownloadWrites = next.catch(() => {});
+  return next;
+}
+
+function newDownloadBatchId() {
+  return globalThis.crypto?.randomUUID?.()
+    || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+export async function createDownloadBatch({
+  platform, total, notify, successLabel, zipFellBack = false,
+}) {
+  const batchId = newDownloadBatchId();
+  try {
+    await updatePendingDownloads((_pending, batches) => {
+      batches[batchId] = {
+        platform,
+        expectedTotal: total,
+        total: 0,
+        completed: 0,
+        failed: 0,
+        registrationComplete: false,
+        notify: Boolean(notify),
+        successLabel,
+        zipFellBack,
+      };
+    });
+    return batchId;
+  } catch (error) {
+    console.warn('SocialSnag: could not initialize download tracking:', error);
+    return null;
+  }
+}
+
+function notifyDownloadBatch(batch) {
+  if (!batch?.notify) return;
+  if (batch.failed === 0) {
+    const message = batch.zipFellBack
+      ? `Zip failed; saved ${batch.successLabel} individually from ${batch.platform}.`
+      : `Downloaded ${batch.successLabel} from ${batch.platform}.`;
+    showNotification(message);
+  } else if (batch.completed === 0) {
+    showNotification(`SocialSnag: download failed for ${batch.platform}.`);
+  } else {
+    const completedLabel = batch.completed === 1 ? 'download' : 'downloads';
+    showNotification(
+      `${batch.completed} ${completedLabel} completed; ${batch.failed} failed from ${batch.platform}.`,
+    );
+  }
+}
+
+function applyDownloadBatchOutcome(batches, batchId, outcome) {
+  const batch = batches[batchId];
+  if (!batch) return null;
+  batch[outcome === 'complete' || outcome === 'history_failed' ? 'completed' : 'failed'] += 1;
+  if (!batch.registrationComplete || batch.completed + batch.failed < batch.total) return null;
+  delete batches[batchId];
+  return { ...batch };
+}
+
+export async function markDownloadStartFailed(batchId) {
+  if (!batchId) return;
+  try {
+    const settledBatch = await updatePendingDownloads((_pending, batches) => {
+      const batch = batches[batchId];
+      if (!batch) return null;
+      batch.total += 1;
+      return applyDownloadBatchOutcome(batches, batchId, 'failed');
+    });
+    notifyDownloadBatch(settledBatch);
+  } catch (error) {
+    console.warn('SocialSnag: could not update download tracking:', error);
+  }
+}
+
+function finishBatchRegistration(batches, batchId) {
+  const batch = batches[batchId];
+  if (!batch) return null;
+  const missing = Math.max(0, batch.expectedTotal - batch.total);
+  batch.total += missing;
+  batch.failed += missing;
+  batch.registrationComplete = true;
+  if (batch.completed + batch.failed < batch.total) return null;
+  delete batches[batchId];
+  return { ...batch };
+}
+
+export async function finishDownloadBatchRegistration(batchId) {
+  if (!batchId) return;
+  try {
+    const settledBatch = await updatePendingDownloads(
+      (_pending, batches) => finishBatchRegistration(batches, batchId),
+    );
+    notifyDownloadBatch(settledBatch);
+  } catch (error) {
+    console.warn('SocialSnag: could not finish download tracking:', error);
+  }
+}
+
+async function pendingDownload(downloadId) {
+  await pendingDownloadWrites;
+  const { [PENDING_DOWNLOADS_KEY]: pending = {} } = await chrome.storage.local.get({
+    [PENDING_DOWNLOADS_KEY]: {},
+  });
+  return pending[String(downloadId)] || null;
+}
+
+async function performTerminalSettlement(downloadId, outcome) {
+  const key = String(downloadId);
+  const historyDownloadId = Number.isFinite(Number(downloadId)) ? Number(downloadId) : downloadId;
+  const tracked = await pendingDownload(downloadId);
+  if (!tracked) return null;
+
+  let finalOutcome = outcome;
+  if (outcome === 'complete') {
+    try {
+      await recordDownload(tracked.item, tracked.platform, historyDownloadId);
+    } catch (error) {
+      console.warn('SocialSnag: could not record completed download:', error);
+      finalOutcome = 'history_failed';
+    }
+  }
+
+  // Removing the item and accounting for its batch are one persisted write.
+  // A worker restart can replay the whole operation before this write, but it
+  // cannot lose the item in between two separate lifecycle updates.
+  const settledBatch = await updatePendingDownloads((pending, batches) => {
+    const current = pending[key];
+    if (!current) return null;
+    delete pending[key];
+    return applyDownloadBatchOutcome(batches, current.batchId, finalOutcome);
+  });
+  notifyDownloadBatch(settledBatch);
+  return finalOutcome;
+}
+
+async function settleTerminalDownload(downloadId, outcome) {
+  const key = String(downloadId);
+  if (settlingDownloads.has(key)) return null;
+  settlingDownloads.add(key);
+  try {
+    return await queueTerminalLifecycle(() => performTerminalSettlement(downloadId, outcome));
+  } catch (error) {
+    // The download was already staged. Leave it pending for reconciliation
+    // instead of throwing to a caller that would count the same slot as failed.
+    console.warn('SocialSnag: could not settle terminal download:', error);
+    return 'history_failed';
+  } finally {
+    settlingDownloads.delete(key);
+  }
+}
+
+export async function trackTerminalDownload({ batchId, downloadId, item, platform }) {
+  // Never persist the media URL. The filename is the actual basename Chrome
+  // selected, and the remaining fields are the same bounded history metadata.
+  const trackedItem = {
+    filename: item.filename,
+    type: item.type || 'image',
+  };
+  if (!batchId) return 'history_failed';
+  try {
+    await updatePendingDownloads((pending, batches) => {
+      const key = String(downloadId);
+      if (pending[key]) return;
+      const batch = batches[batchId];
+      if (!batch) throw new Error('Download batch is missing');
+      pending[key] = { batchId, item: trackedItem, platform };
+      batch.total += 1;
+    });
+  } catch (error) {
+    console.warn('SocialSnag: could not persist download tracking:', error);
+    return 'history_failed';
+  }
+
+  // A small transfer can finish before the session write. Search after storing
+  // so that an event which raced the write is caught up instead of lost.
+  const current = await findDownload(downloadId);
+  if (current?.state === 'complete') {
+    return settleTerminalDownload(downloadId, 'complete');
+  } else if (current?.state === 'interrupted' && !current.canResume) {
+    return settleTerminalDownload(downloadId, 'failed');
+  }
+  return 'pending';
+}
+
+export async function reconcilePendingDownloads() {
+  await pendingDownloadWrites;
+  const {
+    [PENDING_DOWNLOADS_KEY]: pending = {},
+    [PENDING_DOWNLOAD_BATCHES_KEY]: batchesAtStart = {},
+  } = await chrome.storage.local.get({
+    [PENDING_DOWNLOADS_KEY]: {},
+    [PENDING_DOWNLOAD_BATCHES_KEY]: {},
+  });
+  const interruptedBatchIds = Object.entries(batchesAtStart)
+    .filter(([, batch]) => !batch.registrationComplete)
+    .map(([batchId]) => batchId);
+  for (const downloadId of Object.keys(pending)) {
+    const current = await findDownload(Number(downloadId));
+    if (current?.state === 'complete') {
+      await settleTerminalDownload(downloadId, 'complete');
+    } else if (isTerminalDownload(current)) {
+      await settleTerminalDownload(downloadId, 'failed');
+    }
+  }
+  const settledBatches = await updatePendingDownloads((_pending, batches) => {
+    const settled = [];
+    for (const batchId of interruptedBatchIds) {
+      const batch = batches[batchId];
+      if (!batch || batch.registrationComplete) continue;
+      const result = finishBatchRegistration(batches, batchId);
+      if (result) settled.push(result);
+    }
+    return settled;
+  });
+  settledBatches.forEach(notifyDownloadBatch);
 }
 
 // Blob URLs whose download has not finished reading them yet, as
@@ -1335,15 +1609,13 @@ function isTerminalDownload(item) {
     || (item?.state === 'interrupted' && !item.canResume);
 }
 
-async function revokeBlobIfTerminal(downloadId) {
-  const item = await findDownload(downloadId);
-  if (isTerminalDownload(item)) await revokePendingBlob(downloadId);
-}
-
 chrome.downloads.onChanged.addListener(async (delta) => {
   const state = delta.state?.current;
   if (state === 'complete') {
-    await revokePendingBlob(delta.id);
+    await Promise.all([
+      revokePendingBlob(delta.id),
+      settleTerminalDownload(delta.id, 'complete'),
+    ]);
     return;
   }
   const stoppedBeingResumable = delta.canResume && delta.canResume.current !== true;
@@ -1358,11 +1630,26 @@ chrome.downloads.onChanged.addListener(async (delta) => {
   // an interruption it cannot come back from is really terminal. If the download
   // cannot be found at all, its record is gone and no resume is possible. Query
   // failures stay distinct from a missing record so transient errors keep the blob.
-  await revokeBlobIfTerminal(delta.id);
+  const item = await findDownload(delta.id);
+  if (isTerminalDownload(item)) {
+    await Promise.all([
+      revokePendingBlob(delta.id),
+      settleTerminalDownload(delta.id, 'failed'),
+    ]);
+  }
 });
 
 chrome.downloads.onErased.addListener(async (downloadId) => {
-  await revokePendingBlob(downloadId);
+  await Promise.all([
+    revokePendingBlob(downloadId),
+    settleTerminalDownload(downloadId, 'failed'),
+  ]);
+});
+
+// A service worker can start for an event other than browser startup, so do the
+// reconciliation at module load rather than relying only on runtime.onStartup.
+void reconcilePendingDownloads().catch((error) => {
+  console.warn('SocialSnag: could not reconcile pending downloads:', error);
 });
 
 // Validate and download a single media item
@@ -1520,7 +1807,21 @@ async function downloadMedia(item, platform, index = 1) {
   }
 }
 
-// Record a successful download to history
+// Record a successful download to history. Terminal events for two files can
+// arrive together, so serialize the local-storage read-modify-write or the last
+// writer can replace the other file's entry.
+let downloadHistoryWrites = Promise.resolve();
+
+export function clearDownloadHistory() {
+  return queueTerminalLifecycle(() => {
+    const next = downloadHistoryWrites.then(() => (
+      chrome.storage.local.set({ downloadHistory: [] })
+    ));
+    downloadHistoryWrites = next.catch(() => {});
+    return next;
+  });
+}
+
 async function recordDownload(item, platform, downloadId) {
   const rawFilename = item.filename || `${Date.now()}`;
   const filename = rawFilename
@@ -1534,15 +1835,22 @@ async function recordDownload(item, platform, downloadId) {
     downloadId: downloadId,
   };
 
-  const { downloadHistory } = await chrome.storage.local.get({ downloadHistory: [] });
-  downloadHistory.push(entry);
+  const next = downloadHistoryWrites.then(async () => {
+    const { downloadHistory } = await chrome.storage.local.get({ downloadHistory: [] });
+    // Reconciliation can retry a completion after the previous worker wrote
+    // history but died before clearing lifecycle state. Chrome download IDs are
+    // stable, so make that replay safe instead of duplicating the entry.
+    if (downloadHistory.some((existing) => existing.downloadId === downloadId)) return;
+    downloadHistory.push(entry);
 
-  // Prune to 50 entries max
-  if (downloadHistory.length > 50) {
-    downloadHistory.splice(0, downloadHistory.length - 50);
-  }
+    if (downloadHistory.length > 50) {
+      downloadHistory.splice(0, downloadHistory.length - 50);
+    }
 
-  await chrome.storage.local.set({ downloadHistory });
+    await chrome.storage.local.set({ downloadHistory });
+  });
+  downloadHistoryWrites = next.catch(() => {});
+  return next;
 }
 
 const SUBMITTED_TAB_LOAD_TIMEOUT_MS = 15000;
@@ -1780,6 +2088,13 @@ export async function orchestrateSubmittedDownload(rawUrl, options = {}) {
       return submittedDownloadResult(false, 'no_media', platform);
     }
 
+    const { showNotifications } = await chrome.storage.sync.get({ showNotifications: true });
+    const batchId = await createDownloadBatch({
+      platform,
+      total: items.length,
+      notify: showNotifications,
+      successLabel: items.length === 1 ? '1 file' : `${items.length} files`,
+    });
     let count = 0;
     let hadDownloadFailure = false;
     let hadHistoryFailure = false;
@@ -1795,10 +2110,12 @@ export async function orchestrateSubmittedDownload(rawUrl, options = {}) {
         if (resolvedItem === SUBMITTED_OPERATION_TIMEOUT) {
           hadDownloadFailure = true;
           hadResolutionTimeout = true;
+          await markDownloadStartFailed(batchId);
           continue;
         }
         if (!resolvedItem) {
           hadDownloadFailure = true;
+          await markDownloadStartFailed(batchId);
           continue;
         }
         downloadItem = resolvedItem;
@@ -1813,17 +2130,30 @@ export async function orchestrateSubmittedDownload(rawUrl, options = {}) {
       }
       if (!saved) {
         hadDownloadFailure = true;
+        await markDownloadStartFailed(batchId);
         continue;
       }
       try {
-        await recordDownload({ ...item, filename: saved.filename }, platform, saved.downloadId);
+        const lifecycleOutcome = await trackTerminalDownload({
+          batchId,
+          downloadId: saved.downloadId,
+          item: { ...item, filename: saved.filename },
+          platform,
+        });
+        if (lifecycleOutcome === 'history_failed') hadHistoryFailure = true;
+        if (lifecycleOutcome === 'failed') {
+          hadDownloadFailure = true;
+          continue;
+        }
       } catch {
         // The browser download has already started. Count it as saved while the
-        // incomplete batch result tells the page not every operation finished.
+        // response tells the page lifecycle tracking could not be persisted.
         hadHistoryFailure = true;
+        await markDownloadStartFailed(batchId);
       }
       count++;
     }
+    await finishDownloadBatchRegistration(batchId);
 
     if (hadDownloadFailure || count !== items.length) {
       if (count === 0 && hadResolutionTimeout) {
@@ -1948,5 +2278,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'disableAdvancedMode') {
     unregisterWebRequestListener();
     return;
+  }
+
+  if (message.action === 'clearDownloadHistory') {
+    clearDownloadHistory().then(
+      () => sendResponse({ ok: true }),
+      () => sendResponse({ ok: false }),
+    );
+    return true;
   }
 });
