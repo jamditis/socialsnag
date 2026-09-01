@@ -7,7 +7,7 @@ import {
   RESOLVE_CACHE_TTL_MS,
 } from '../src/platforms/resolve-cache.js';
 import { resolveInstagramPost, resolveInstagramStories, resolveViaApi } from '../src/background.js';
-import { mapIgStatusToMessage } from '../src/platforms/instagram-api.js';
+import { mapIgStatusToMessage, shortcodeToMediaId } from '../src/platforms/instagram-api.js';
 
 // Count every request a resolver makes so a cache hit is proven by the absence of
 // a second call, not merely by the returned value looking right.
@@ -124,9 +124,10 @@ describe('resolver caching', () => {
     expect(calls()).toBe(1);
 
     // Age the entry past its TTL rather than waiting it out.
-    const key = resolveCacheKey('instagram_post', 'ABC');
-    expect(key).toBe('instagram_post_ABC');
-    setResolved('instagram_post', 'ABC', [{ url: 'stale' }], { ttlMs: -1 });
+    const cacheId = JSON.stringify(['ABC', null]);
+    const key = resolveCacheKey('instagram_post', cacheId);
+    expect(key).toBe(`instagram_post_${cacheId}`);
+    setResolved('instagram_post', cacheId, [{ url: 'stale' }], { ttlMs: -1 });
 
     await resolveInstagramPost('ABC');
     expect(calls()).toBe(2);
@@ -138,6 +139,42 @@ describe('resolver caching', () => {
     );
     await resolveInstagramPost('ABC');
     await resolveInstagramPost('XYZ');
+    expect(calls()).toBe(2);
+  });
+
+  it('keeps a capped result separate from the largest result for the same post', async () => {
+    const calls = countingFetch({
+      status: 200,
+      json: { items: [{ image_versions2: { candidates: [
+        { url: 'https://cdn.cdninstagram.com/720.jpg', width: 720, height: 720 },
+        { url: 'https://cdn.cdninstagram.com/1440.jpg', width: 1440, height: 1440 },
+      ] } }] },
+    });
+
+    const largest = await resolveInstagramPost('ABC');
+    const capped = await resolveInstagramPost('ABC', { preference: { maxWidth: 720 } });
+    const cappedAgain = await resolveInstagramPost('ABC', { preference: { maxWidth: 720 } });
+
+    expect(largest.items[0].url).toBe('https://cdn.cdninstagram.com/1440.jpg');
+    expect(capped.items[0].url).toBe('https://cdn.cdninstagram.com/720.jpg');
+    expect(cappedAgain.items).toEqual(capped.items);
+    expect(calls()).toBe(2);
+  });
+
+  it('does not collide with a real shortcode that resembles a quality suffix', async () => {
+    const suffixShortcode = 'ABC_max-720';
+    const suffixMediaId = shortcodeToMediaId(suffixShortcode);
+    const calls = countingFetch((url) => (
+      url.includes(`/media/${suffixMediaId}/`)
+        ? igPost('https://cdn.cdninstagram.com/suffix-post.jpg')
+        : igPost('https://cdn.cdninstagram.com/capped-post.jpg')
+    ));
+
+    const capped = await resolveInstagramPost('ABC', { preference: { maxWidth: 720 } });
+    const suffixPost = await resolveInstagramPost(suffixShortcode);
+
+    expect(capped.items[0].url).toBe('https://cdn.cdninstagram.com/capped-post.jpg');
+    expect(suffixPost.items[0].url).toBe('https://cdn.cdninstagram.com/suffix-post.jpg');
     expect(calls()).toBe(2);
   });
 

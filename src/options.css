@@ -204,7 +204,8 @@ main {
   opacity: 0.4;
 }
 
-.text-input {
+.text-input,
+.select-input {
   width: 100%;
   margin-top: 8px;
   padding: 10px 12px;
@@ -218,7 +219,12 @@ main {
   transition: border-color 0.15s;
 }
 
-.text-input:focus {
+.select-input {
+  font-family: var(--font-body);
+}
+
+.text-input:focus,
+.select-input:focus {
   border-color: var(--blue);
 }
 

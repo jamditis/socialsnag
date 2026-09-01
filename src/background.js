@@ -15,6 +15,7 @@ import {
   parseStoryTray,
   mapIgStatusToMessage,
   mapIgStatusToCode,
+  qualityPreferenceFromSetting,
 } from './platforms/instagram-api.js';
 import { getResolved, setResolved, clearResolveCache } from './platforms/resolve-cache.js';
 import { createTracer } from './resolver-debug.js';
@@ -639,7 +640,11 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   const platformSettings = await chrome.storage.sync.get({
     showNotifications: true,
     zipMultiPosts: false,
+    downloadQuality: 'largest',
   });
+  const instagramOptions = {
+    preference: qualityPreferenceFromSetting(platformSettings.downloadQuality),
+  };
 
   try {
     // Scoped to this click, so a concurrent click in another tab cannot
@@ -654,7 +659,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       const shortcode = pageUrl.match(/\/(p|reel|tv)\/([A-Za-z0-9_-]+)/)?.[2];
       if (shortcode) {
         triedIgPostApi = true;
-        const post = await resolveInstagramPost(shortcode);
+        const post = await resolveInstagramPost(shortcode, instagramOptions);
         if (post.items) {
           response = { urls: post.items, platform };
         } else if (post.error) {
@@ -673,13 +678,13 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       if (storyRef) {
         // "single" grabs the viewed story; "all" grabs the whole tray.
         const ref = type === 'all' ? { ...storyRef, storyId: null } : storyRef;
-        const stories = await resolveInstagramStories(ref);
+        const stories = await resolveInstagramStories(ref, instagramOptions);
         if (stories.items) response = { urls: stories.items, platform };
         else if (stories.error) igError = stories.error;
       } else if (highlightRef) {
         // "single" grabs the viewed item; "all" grabs the whole highlight.
         const ref = type === 'all' ? { ...highlightRef, itemId: null } : highlightRef;
-        const highlights = await resolveInstagramHighlights(ref);
+        const highlights = await resolveInstagramHighlights(ref, instagramOptions);
         if (highlights.items) response = { urls: highlights.items, platform };
         else if (highlights.error) igError = highlights.error;
       }
@@ -690,7 +695,9 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       // Try API-based video resolution FIRST (works without content script).
       // Skip it if the post API already ran this click — resolveViaApi would
       // only repeat the identical i.instagram.com fetch for the same shortcode.
-      const apiResult = triedIgPostApi ? null : await resolveViaApi(platform, pageUrl);
+      const apiResult = triedIgPostApi
+        ? null
+        : await resolveViaApi(platform, pageUrl, instagramOptions);
       if (apiResult?.error) igError = apiResult.error;
       if (apiResult?.item) {
         // API found a video — use it directly
@@ -703,6 +710,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
             type: type,
             srcUrl: info.srcUrl || '',
             pageUrl: pageUrl,
+            preference: instagramOptions.preference,
           });
           await traceResolver({
             platform,
@@ -725,6 +733,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
               type: type,
               srcUrl: info.srcUrl || '',
               pageUrl: pageUrl,
+              preference: instagramOptions.preference,
             });
             await traceResolver({
               platform,
@@ -749,7 +758,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     // the fallback when the API comes up empty.
     if (platform === 'instagram' && type === 'all' && !triedIgPostApi
         && response && response.shortcode) {
-      const post = await resolveInstagramPost(response.shortcode);
+      const post = await resolveInstagramPost(response.shortcode, instagramOptions);
       if (post.items) {
         response = { urls: post.items, platform };
       } else if (post.error) {
@@ -769,7 +778,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     if (isCopy) {
       // Resolve a lookup placeholder (e.g. a Twitter/X timeline video identified
       // only by id) to a real URL first, the same way the download path does.
-      const firstUrl = await resolveItemUrl(response.urls[0]);
+      const firstUrl = await resolveItemUrl(response.urls[0], instagramOptions);
       const validation = validateDownloadUrl(firstUrl);
       if (!validation.valid) {
         console.warn(`SocialSnag: refused to copy ${validation.reason}`);
@@ -814,7 +823,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     for (const [position, item] of response.urls.entries()) {
       let saved = null;
       try {
-        saved = await downloadMedia(item, response.platform, position + 1);
+        saved = await downloadMedia(item, response.platform, position + 1, instagramOptions);
       } catch {
         // One resolver or settings failure must not strand the rest of the
         // batch. Keep the warning URL-free and account for this slot below.
@@ -873,7 +882,7 @@ const API_RESOLVED_PLATFORMS = new Set(['twitter', 'instagram']);
 // plus any platform-specific reason for the miss. The reason rides the return
 // value rather than shared state so it stays tied to this call (#30); it is null
 // for platforms whose resolvers classify nothing.
-export async function resolveViaApi(platform, pageUrl) {
+export async function resolveViaApi(platform, pageUrl, options = {}) {
   // Whether the url actually carried an id this resolver understands. Without
   // this the miss below cannot tell "no id to look up" from "looked it up and
   // got nothing", and would report an image-only post as a url-parsing failure.
@@ -911,7 +920,7 @@ export async function resolveViaApi(platform, pageUrl) {
     if (match) {
       foundId = true;
       const shortcode = match[2];
-      const video = await resolveInstagramVideo(shortcode);
+      const video = await resolveInstagramVideo(shortcode, options);
       if (video.url) {
         await traceResolver({ platform, path: 'api-dispatch', outcome: 'ok', itemCount: 1 });
         return { item: withItemMeta(
@@ -1024,11 +1033,23 @@ async function resolveTwitterVideo(
 
 // Fetch and enumerate every media item in an Instagram post (single image/video
 // or full carousel) via the private web API.
+function instagramQualityCacheId(id, preference) {
+  const maxWidth = preference && typeof preference === 'object'
+    && Number.isFinite(preference.maxWidth)
+    ? preference.maxWidth
+    : null;
+  // Encode both fields as a tuple. Instagram shortcodes allow `_` and `-`, so a
+  // suffix such as `_max-720` can also be part of a real shortcode and would
+  // otherwise let two different posts share one resolved-media entry.
+  return JSON.stringify([id, maxWidth]);
+}
+
 export async function resolveInstagramPost(
   shortcode,
-  { fetchImpl = globalThis.fetch, signal } = {},
+  { fetchImpl = globalThis.fetch, signal, preference = 'largest' } = {},
 ) {
-  const cached = getResolved('instagram_post', shortcode);
+  const cacheId = instagramQualityCacheId(shortcode, preference);
+  const cached = getResolved('instagram_post', cacheId);
   if (cached) return { items: cached };
   try {
     const mediaId = shortcodeToMediaId(shortcode);
@@ -1054,7 +1075,7 @@ export async function resolveInstagramPost(
     }
 
     const data = await resp.json();
-    const items = parsePostMedia(data, shortcode);
+    const items = parsePostMedia(data, shortcode, preference);
     if (items.length === 0) {
       // The case #25 was filed for: a 200 that parses to nothing looks identical to
       // a network failure from the outside.
@@ -1063,7 +1084,7 @@ export async function resolveInstagramPost(
     }
 
     await traceResolver({ platform: 'instagram', path: 'post-api', outcome: 'ok', status: resp.status, itemCount: items.length });
-    setResolved('instagram_post', shortcode, items);
+    setResolved('instagram_post', cacheId, items);
     return { items };
   } catch (e) {
     console.error('SocialSnag: Instagram post API failed:', e);
@@ -1113,7 +1134,14 @@ async function fetchInstagramUserId(
 // the URL and skips that call), everything from the fetch down is shared.
 async function resolveReelsMedia(
   reelId,
-  { storyId, username = null, detail, fetchImpl = globalThis.fetch, signal } = {},
+  {
+    storyId,
+    username = null,
+    detail,
+    fetchImpl = globalThis.fetch,
+    signal,
+    preference = 'largest',
+  } = {},
 ) {
   try {
     const resp = await fetchImpl(
@@ -1128,7 +1156,7 @@ async function resolveReelsMedia(
       };
     }
     const data = await resp.json();
-    const items = parseStoryTray(data, { storyId, username });
+    const items = parseStoryTray(data, { storyId, username, preference });
     if (items.length === 0) {
       // Expected when a story has aged out of the 24h window, and indistinguishable
       // from a lookup bug without this line. Highlights are permanent, so an empty
@@ -1149,16 +1177,25 @@ async function resolveReelsMedia(
 // the whole active tray.
 export async function resolveInstagramStories(
   { username, storyId },
-  { fetchImpl = globalThis.fetch, signal } = {},
+  { fetchImpl = globalThis.fetch, signal, preference = 'largest' } = {},
 ) {
   // Checked before the user-id lookup, not after: that lookup is itself a request,
   // so testing the cache later would still spend one call per re-download.
-  const storyKey = `${username}_${storyId ?? 'tray'}`;
+  const storyKey = instagramQualityCacheId(
+    `${username}_${storyId ?? 'tray'}`,
+    preference,
+  );
   const cached = getResolved('instagram_story', storyKey);
   if (cached) return { items: cached };
   const lookup = await fetchInstagramUserId(username, { fetchImpl, signal });
   if (!lookup.userId) return { error: lookup.error, code: lookup.code };
-  const result = await resolveReelsMedia(lookup.userId, { storyId, username, fetchImpl, signal });
+  const result = await resolveReelsMedia(lookup.userId, {
+    storyId,
+    username,
+    fetchImpl,
+    signal,
+    preference,
+  });
   if (result.items) setResolved('instagram_story', storyKey, result.items);
   return result;
 }
@@ -1170,9 +1207,12 @@ export async function resolveInstagramStories(
 // itemId null means the whole highlight; a specific item id returns just that one.
 export async function resolveInstagramHighlights(
   { highlightId, itemId = null },
-  { fetchImpl = globalThis.fetch, signal } = {},
+  { fetchImpl = globalThis.fetch, signal, preference = 'largest' } = {},
 ) {
-  const highlightKey = `highlight_${highlightId}_${itemId ?? 'all'}`;
+  const highlightKey = instagramQualityCacheId(
+    `highlight_${highlightId}_${itemId ?? 'all'}`,
+    preference,
+  );
   const cached = getResolved('instagram_highlight', highlightKey);
   if (cached) return { items: cached };
   const result = await resolveReelsMedia(`highlight:${highlightId}`, {
@@ -1180,6 +1220,7 @@ export async function resolveInstagramHighlights(
     detail: itemId ? 'single highlight item' : 'full highlight',
     fetchImpl,
     signal,
+    preference,
   });
   if (result.items) setResolved('instagram_highlight', highlightKey, result.items);
   return result;
@@ -1762,10 +1803,10 @@ async function savedBasename(downloadId, requestedPath) {
 // `filename` is the basename on disk. The caller needs it for history and has no way
 // to work it out: the template, the folder setting, and the sanitizer all live in
 // here, so a second derivation out there would be a second answer.
-async function downloadMedia(item, platform, index = 1) {
+async function downloadMedia(item, platform, index = 1, resolveOptions = {}) {
   // Resolve API-based video lookups to a concrete URL before downloading.
   if (item.needsVideoLookup) {
-    const resolvedItem = await resolveItem(item);
+    const resolvedItem = await resolveItem(item, resolveOptions);
     if (!resolvedItem) {
       console.warn('SocialSnag: video API lookup returned no URL');
       return null;
@@ -2002,10 +2043,18 @@ export async function orchestrateSubmittedDownload(rawUrl, options = {}) {
 
     let resolved;
     if (platform === 'instagram') {
+      let preference = options.preference;
+      if (preference === undefined) {
+        const { downloadQuality } = await chrome.storage.sync.get({
+          downloadQuality: 'largest',
+        });
+        preference = qualityPreferenceFromSetting(downloadQuality);
+      }
       resolved = await runSubmittedWithDeadline(
         (signal) => resolveSubmittedInstagram(parsed, {
           fetchImpl: submittedFetch,
           signal,
+          preference,
         }),
         operationTimeoutMs,
         { abort: true },

@@ -44,6 +44,16 @@ describe('upgradeImageUrl', () => {
     expect(result).toBe('https://cdn.cdninstagram.com/large.jpg');
   });
 
+  it('applies a resolution cap to srcset candidates', () => {
+    const url = 'https://scontent.cdninstagram.com/v/t51/photo.jpg';
+    const imgElement = {
+      srcset: 'https://cdn.cdninstagram.com/small.jpg 320w, https://cdn.cdninstagram.com/large.jpg 1080w, https://cdn.cdninstagram.com/med.jpg 640w',
+    };
+
+    expect(upgradeImageUrl(url, imgElement, { maxWidth: 720 }))
+      .toBe('https://cdn.cdninstagram.com/med.jpg');
+  });
+
   it('falls back to URL upgrade when srcset is empty', () => {
     const url = 'https://scontent.cdninstagram.com/v/t51/s480x480/photo.jpg';
     const imgElement = { srcset: '' };

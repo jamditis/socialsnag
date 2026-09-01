@@ -1,13 +1,13 @@
 # Privacy policy
 
-*Last updated: 2026-07-22*
+*Last updated: 2026-09-01*
 
 SocialSnag is a browser extension that downloads media from Instagram, Twitter/X, Facebook, and Bluesky. You can use it from the right-click menu on a supported site or submit a direct post link through the SocialSnag GitHub Pages site. Both workflows resolve and download media inside your browser. When platform access is required, the extension uses the account session already signed in to that browser. Requests go directly to the selected social platform and its media hosts. SocialSnag has no developer-operated backend or intermediary service. Building a .zip archive and copying a media URL to the clipboard also happen locally inside the extension.
 
 ## Data stored by the extension
 
 - **Download history** (`chrome.storage.local`): Filename, platform, media type, timestamp, and Chrome download ID for each successful download, up to 50 entries. Download history does not contain media URLs and is not synced.
-- **User preferences** (`chrome.storage.sync`): Enabled platforms, notification setting, download path, .zip preference, advanced mode, and resolver debug setting. Chrome may sync these settings through the signed-in browser account.
+- **User preferences** (`chrome.storage.sync`): Enabled platforms, notification setting, download path, .zip preference, Instagram download quality, advanced mode, and resolver debug setting. Chrome may sync these settings through the signed-in browser account.
 - **Advanced-mode captures** (`chrome.storage.session`): Media URL, browser request type, and timestamp, up to 50 entries per tab. These entries are held in browser session storage and removed when the tab closes.
 - **Pending .zip cleanup** (`chrome.storage.session`): A locally created blob URL keyed by its Chrome download ID while a .zip download is active. The entry is removed when the download completes, is erased, or can no longer resume.
 

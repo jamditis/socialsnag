@@ -7,23 +7,22 @@ import {
   hostMatches,
   withItemMeta,
 } from './common.js';
+import { selectByQuality } from './instagram-api.js';
 
 // --- Pure functions (exported for testing) ---
 
-export function upgradeImageUrl(url, imgElement) {
+export function upgradeImageUrl(url, imgElement, preference = 'largest') {
   if (!hostMatches(url, 'cdninstagram.com')) return null;
 
-  // Check srcset for highest resolution
+  // Select from srcset at the requested quality.
   if (imgElement?.srcset) {
     const candidates = imgElement.srcset.split(',').map((s) => {
       const parts = s.trim().split(/\s+/);
       const width = parseInt(parts[1]) || 0;
       return { url: parts[0], width };
     });
-    candidates.sort((a, b) => b.width - a.width);
-    if (candidates.length > 0 && candidates[0].url) {
-      return candidates[0].url;
-    }
+    const selected = selectByQuality(candidates, (candidate) => candidate.width, preference);
+    if (selected) return selected;
   }
 
   // Remove size constraints from URL path
@@ -79,14 +78,14 @@ export function upgradeImageUrl(url, imgElement) {
  * @returns {{items: Array<object>, index: number, considered: number}} items, the next
  *   free index, and how many usable images the DOM offered before deduping
  */
-export function buildImageItems(images, shortcode, startIndex = 1) {
+export function buildImageItems(images, shortcode, startIndex = 1, preference = 'largest') {
   const items = [];
   const seen = new Set();
   let index = startIndex;
   let considered = 0;
 
   for (const img of images) {
-    const url = upgradeImageUrl(img?.src, img);
+    const url = upgradeImageUrl(img?.src, img, preference);
     if (!url) continue;
     considered++;
     if (seen.has(url)) continue;
@@ -262,10 +261,10 @@ function extractFromPageJson(pathname) {
   }, { postId: shortcode }));
 }
 
-export function resolveSingle(srcUrl, target, pathname) {
+export function resolveSingle(srcUrl, target, pathname, preference = 'largest') {
   const shortcode = shortcodeForTarget(target, pathname);
   const filenameShortcode = extractShortcode(pathname);
-  const url = upgradeImageUrl(srcUrl, target);
+  const url = upgradeImageUrl(srcUrl, target, preference);
   if (url) {
     return [withItemMeta(
       {
@@ -280,7 +279,7 @@ export function resolveSingle(srcUrl, target, pathname) {
   // If click landed on overlay, find nearest media
   const nearest = findNearestMedia(target);
   if (nearest?.tagName === 'IMG') {
-    const upgraded = upgradeImageUrl(nearest.src, nearest);
+    const upgraded = upgradeImageUrl(nearest.src, nearest, preference);
     if (upgraded) {
       return [withItemMeta(
         {
@@ -338,9 +337,9 @@ export function resolveSingle(srcUrl, target, pathname) {
 // Exported for the domCount test. The seam between the deduped list and the count
 // resolveAll reads is where this change could regress silently, so it needs to be
 // reachable without a DOM.
-export function collectMediaFromContainer(container, shortcode) {
+export function collectMediaFromContainer(container, shortcode, preference = 'largest') {
   const images = Array.from(container.querySelectorAll('img[src*="cdninstagram.com"]'));
-  const built = buildImageItems(images, shortcode);
+  const built = buildImageItems(images, shortcode, 1, preference);
   const items = built.items;
   // The video loop below keeps numbering where the images stopped, so a carousel of
   // photos and clips reads as one sequence.
@@ -451,7 +450,7 @@ function shortcodeForTarget(target, pathname) {
     || extractShortcode(pathname);
 }
 
-async function resolveAll(target, pathname) {
+async function resolveAll(target, pathname, preference = 'largest') {
   const urlShortcode = extractShortcode(pathname);
 
   // Try JSON extraction first for carousel data
@@ -473,7 +472,12 @@ async function resolveAll(target, pathname) {
     post = findBroadContainer(target);
   }
 
-  if (!post) return { items: resolveSingle(target?.src || '', target, pathname), shortcode: urlShortcode };
+  if (!post) {
+    return {
+      items: resolveSingle(target?.src || '', target, pathname, preference),
+      shortcode: urlShortcode,
+    };
+  }
 
   // On the feed/grid the URL has no shortcode; read the post's permalink from
   // the DOM so the background can enumerate the whole carousel via the API (the
@@ -486,7 +490,11 @@ async function resolveAll(target, pathname) {
   //   3. the resolved container itself, as a last resort.
   const shortcode = shortcodeForTarget(target, pathname)
     || shortcodeFromContainer(descendantHrefs(post));
-  const { items, index: nextIndex, domCount } = collectMediaFromContainer(post, shortcode);
+  const { items, index: nextIndex, domCount } = collectMediaFromContainer(
+    post,
+    shortcode,
+    preference,
+  );
   let index = nextIndex;
 
   // If the DOM only offered one piece of media, check webRequest captures for more.
@@ -508,7 +516,9 @@ async function resolveAll(target, pathname) {
   }
 
   return {
-    items: merged.length > 0 ? merged : resolveSingle(target?.src || '', target, pathname),
+    items: merged.length > 0
+      ? merged
+      : resolveSingle(target?.src || '', target, pathname, preference),
     shortcode,
   };
 }
@@ -529,8 +539,11 @@ function initContentScript() {
 
       Promise.resolve()
         .then(() => (message.type === 'single'
-          ? { items: resolveSingle(message.srcUrl, target, pathname), shortcode: null }
-          : resolveAll(target, pathname)))
+          ? {
+              items: resolveSingle(message.srcUrl, target, pathname, message.preference),
+              shortcode: null,
+            }
+          : resolveAll(target, pathname, message.preference)))
         .then((result) => {
           sendResponse({ urls: result.items || [], platform: 'instagram', shortcode: result.shortcode || null });
         })

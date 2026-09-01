@@ -67,10 +67,25 @@ export function pickBestVideo(versions, preference = 'largest') {
   return selectByQuality(versions, (v) => v.width || 0, preference);
 }
 
+// Convert the options-page value into the selector's existing preference shape.
+// Unknown or old stored values stay on the historical largest-file behavior.
+export function qualityPreferenceFromSetting(value) {
+  if (value === '1080') return { maxWidth: 1080 };
+  if (value === '720') return { maxWidth: 720 };
+  return 'largest';
+}
+
 // Build one media item from a post/carousel node. isCarousel controls naming.
-function mediaFromNode(node, shortcode, index, isCarousel, username = null) {
+function mediaFromNode(
+  node,
+  shortcode,
+  index,
+  isCarousel,
+  username = null,
+  preference = 'largest',
+) {
   if (Array.isArray(node.video_versions) && node.video_versions.length) {
-    const url = pickBestVideo(node.video_versions);
+    const url = pickBestVideo(node.video_versions, preference);
     if (!url) return null;
     const filename = isCarousel ? `post_${shortcode}_${index}` : `reel_${shortcode}`;
     return withItemMeta(
@@ -78,7 +93,7 @@ function mediaFromNode(node, shortcode, index, isCarousel, username = null) {
       { postId: shortcode, username },
     );
   }
-  const url = pickBestCandidate(node?.image_versions2?.candidates);
+  const url = pickBestCandidate(node?.image_versions2?.candidates, preference);
   if (!url) return null;
   const filename = isCarousel ? `post_${shortcode}_${index}` : `post_${shortcode}`;
   return withItemMeta(
@@ -88,16 +103,16 @@ function mediaFromNode(node, shortcode, index, isCarousel, username = null) {
 }
 
 // Enumerate all media in a post response (single image/video or full carousel).
-export function parsePostMedia(apiJson, shortcode) {
+export function parsePostMedia(apiJson, shortcode, preference = 'largest') {
   const item = apiJson?.items?.[0];
   if (!item) return [];
   const username = item.user?.username || null;
   if (Array.isArray(item.carousel_media) && item.carousel_media.length) {
     return item.carousel_media
-      .map((node, i) => mediaFromNode(node, shortcode, i + 1, true, username))
+      .map((node, i) => mediaFromNode(node, shortcode, i + 1, true, username, preference))
       .filter(Boolean);
   }
-  const single = mediaFromNode(item, shortcode, 1, false, username);
+  const single = mediaFromNode(item, shortcode, 1, false, username, preference);
   return single ? [single] : [];
 }
 
@@ -129,7 +144,10 @@ export function extractHighlightRef(pathname) {
 
 // Enumerate story items from a reels_media response. If storyId matches an
 // item pk, return only that one; otherwise return the whole active tray.
-export function parseStoryTray(apiJson, { storyId, username = null } = {}) {
+export function parseStoryTray(
+  apiJson,
+  { storyId, username = null, preference = 'largest' } = {},
+) {
   const reel = apiJson?.reels_media?.[0];
   const items = reel?.items || [];
   // A highlight skips the username -> user-id lookup, so its caller has no owner
@@ -146,7 +164,7 @@ export function parseStoryTray(apiJson, { storyId, username = null } = {}) {
     const pk = it.id != null ? String(it.id).split('_')[0] : String(it.pk ?? i);
     const base = { pk, id: it.id, index: i + 1 };
     if (Array.isArray(it.video_versions) && it.video_versions.length) {
-      const url = pickBestVideo(it.video_versions);
+      const url = pickBestVideo(it.video_versions, preference);
       return url ? withItemMeta(
         {
           url,
@@ -159,7 +177,7 @@ export function parseStoryTray(apiJson, { storyId, username = null } = {}) {
         { postId: base.pk, username: owner },
       ) : null;
     }
-    const url = pickBestCandidate(it?.image_versions2?.candidates);
+    const url = pickBestCandidate(it?.image_versions2?.candidates, preference);
     return url ? withItemMeta(
       {
         url,

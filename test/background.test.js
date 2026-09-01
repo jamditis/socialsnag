@@ -896,11 +896,16 @@ describe('context menu click — Instagram DOM fallback', () => {
       'https://scontent.cdninstagram.com/a.jpg',
       'https://scontent.cdninstagram.com/b.jpg',
     ];
+    await globalThis.chrome.storage.sync.set({ downloadQuality: '720' });
+    let resolveMessage = null;
     const origSend = globalThis.chrome.tabs.sendMessage;
-    globalThis.chrome.tabs.sendMessage = async () => ({
-      platform: 'instagram',
-      urls: domUrls.map((url, i) => ({ url, type: 'image', filename: `post_ABC_${i + 1}` })),
-    });
+    globalThis.chrome.tabs.sendMessage = async (_tabId, message) => {
+      if (message.action === 'resolve') resolveMessage = message;
+      return {
+        platform: 'instagram',
+        urls: domUrls.map((url, i) => ({ url, type: 'image', filename: `post_ABC_${i + 1}` })),
+      };
+    };
 
     const downloaded = [];
     const origDownload = globalThis.chrome.downloads.download;
@@ -915,9 +920,11 @@ describe('context menu click — Instagram DOM fallback', () => {
     } finally {
       globalThis.chrome.tabs.sendMessage = origSend;
       globalThis.chrome.downloads.download = origDownload;
+      await globalThis.chrome.storage.sync.remove('downloadQuality');
     }
 
     expect(downloaded).toEqual(domUrls);
+    expect(resolveMessage.preference).toEqual({ maxWidth: 720 });
   });
 });
 
@@ -2771,6 +2778,29 @@ describe('submitted URL external bridge', () => {
     const { downloadHistory } = await chrome.storage.local.get({ downloadHistory: [] });
     expect(downloadHistory).toHaveLength(2);
     expect(downloadHistory.every((entry) => !('url' in entry))).toBe(true);
+  });
+
+  it('uses the stored Instagram quality cap for a submitted download', async () => {
+    await chrome.storage.sync.set({ downloadQuality: '720' });
+    installFetch((url) => url.includes('i.instagram.com') ? {
+      status: 200,
+      json: { items: [{ image_versions2: { candidates: [
+        { url: 'https://cdn.cdninstagram.com/720.jpg', width: 720, height: 720 },
+        { url: 'https://cdn.cdninstagram.com/1440.jpg', width: 1440, height: 1440 },
+      ] } }] },
+    } : null);
+    const download = vi.fn(async () => 44);
+    chrome.downloads.download = download;
+    chrome.downloads.search = async () => [{
+      id: 44, state: 'complete', filename: '/downloads/post_ABC.jpg',
+    }];
+
+    const result = await orchestrateSubmittedDownload('https://www.instagram.com/p/ABC/');
+
+    expect(result).toEqual({ ok: true, code: 'ok', platform: 'instagram', count: 1 });
+    expect(download).toHaveBeenCalledWith(expect.objectContaining({
+      url: 'https://cdn.cdninstagram.com/720.jpg',
+    }));
   });
 
   it('does not count a submitted download that is already terminally interrupted', async () => {
