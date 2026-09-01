@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { shortcodeToMediaId, pickBestCandidate, pickBestVideo, selectByQuality } from '../src/platforms/instagram-api.js';
+import {
+  shortcodeToMediaId,
+  pickBestCandidate,
+  pickBestVideo,
+  selectByQuality,
+  qualityPreferenceFromSetting,
+} from '../src/platforms/instagram-api.js';
 
 describe('shortcodeToMediaId', () => {
   it('converts a known shortcode to its media id', () => {
@@ -109,6 +115,19 @@ describe('pickBest* honor a resolution cap', () => {
   });
 });
 
+describe('qualityPreferenceFromSetting', () => {
+  it('maps supported stored widths to selector caps', () => {
+    expect(qualityPreferenceFromSetting('1080')).toEqual({ maxWidth: 1080 });
+    expect(qualityPreferenceFromSetting('720')).toEqual({ maxWidth: 720 });
+  });
+
+  it('keeps unknown or missing settings on largest', () => {
+    expect(qualityPreferenceFromSetting('largest')).toBe('largest');
+    expect(qualityPreferenceFromSetting('old-value')).toBe('largest');
+    expect(qualityPreferenceFromSetting()).toBe('largest');
+  });
+});
+
 import { parsePostMedia } from '../src/platforms/instagram-api.js';
 
 const imgSlide = (u) => ({ media_type: 1, image_versions2: { candidates: [{ url: u, width: 1080, height: 1080 }] } });
@@ -155,6 +174,22 @@ describe('parsePostMedia', () => {
     expect(out.map((o) => o.url)).toEqual(['i1', 'v2', 'i3']);
     expect(out.map((o) => o.type)).toEqual(['image', 'video', 'image']);
     expect(out.map((o) => o.filename)).toEqual(['post_XYZ_1', 'post_XYZ_2', 'post_XYZ_3']);
+  });
+  it('applies a resolution cap to every carousel item', () => {
+    const image = {
+      image_versions2: { candidates: [
+        { url: 'i720', width: 720, height: 720 },
+        { url: 'i1440', width: 1440, height: 1440 },
+      ] },
+    };
+    const video = { video_versions: [
+      { url: 'v720', width: 720 },
+      { url: 'v1080', width: 1080 },
+    ] };
+    const json = { items: [{ carousel_media: [image, video] }] };
+
+    expect(parsePostMedia(json, 'XYZ', { maxWidth: 720 }).map((item) => item.url))
+      .toEqual(['i720', 'v720']);
   });
   it('returns empty array for empty response', () => {
     expect(parsePostMedia({ items: [] }, 'ABC')).toEqual([]);
@@ -220,6 +255,21 @@ describe('parseStoryTray', () => {
       { postId: '111', username: 'natgeo' },
       { postId: '222', username: 'natgeo' },
     ]);
+  });
+  it('applies a resolution cap to story images and videos', () => {
+    const sizedTray = { reels_media: [{ items: [
+      { pk: '111', image_versions2: { candidates: [
+        { url: 'i720', width: 720, height: 1280 },
+        { url: 'i1080', width: 1080, height: 1920 },
+      ] } },
+      { pk: '222', video_versions: [
+        { url: 'v720', width: 720 },
+        { url: 'v1080', width: 1080 },
+      ] },
+    ] }] };
+
+    expect(parseStoryTray(sizedTray, { preference: { maxWidth: 720 } }).map((item) => item.url))
+      .toEqual(['i720', 'v720']);
   });
   it('returns only the matching story when storyId given', () => {
     const out = parseStoryTray(tray, { storyId: '222' });

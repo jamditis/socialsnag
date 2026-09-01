@@ -61,6 +61,7 @@ if (typeof document !== 'undefined') {
     settings.showNotifications = document.getElementById('notifications-toggle').checked;
     settings.zipMultiPosts = document.getElementById('zip-toggle').checked;
     settings.resolverDebug = document.getElementById('resolver-debug-toggle').checked;
+    settings.downloadQuality = document.getElementById('download-quality').value;
 
     // Refuse to persist an invalid template: keep the last good value stored so a
     // typo mid-edit does not overwrite a working setting. chrome.storage.sync.set
@@ -109,6 +110,7 @@ if (typeof document !== 'undefined') {
       filenameTemplate: '',
       zipMultiPosts: false,
       resolverDebug: false,
+      downloadQuality: 'largest',
     };
     PLATFORMS.forEach((p) => { defaults[`platform_${p}`] = true; });
 
@@ -117,6 +119,7 @@ if (typeof document !== 'undefined') {
       document.getElementById('notifications-toggle').checked = items.showNotifications;
       document.getElementById('zip-toggle').checked = items.zipMultiPosts;
       document.getElementById('resolver-debug-toggle').checked = items.resolverDebug;
+      document.getElementById('download-quality').value = items.downloadQuality;
       document.getElementById('download-path').value = items.downloadPath;
       document.getElementById('filename-template').value = items.filenameTemplate;
       PLATFORMS.forEach((p) => {
@@ -213,6 +216,7 @@ if (typeof document !== 'undefined') {
     document.getElementById('notifications-toggle').addEventListener('change', saveSettings);
     document.getElementById('zip-toggle').addEventListener('change', saveSettings);
     document.getElementById('resolver-debug-toggle').addEventListener('change', saveSettings);
+    document.getElementById('download-quality').addEventListener('change', saveSettings);
     document.getElementById('download-path').addEventListener('input', () => onTemplateInput(updatePathPreview));
     document.getElementById('filename-template').addEventListener('input', () => onTemplateInput(updateFilenamePreview));
     document.getElementById('open-downloads').addEventListener('click', () => {

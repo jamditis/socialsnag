@@ -82,6 +82,15 @@
             <p class="field-error" id="filename-template-error" hidden></p>
             <p class="path-preview" id="filename-preview">tweet_1234567890.jpg</p>
           </div>
+          <div class="toggle-row" style="flex-direction: column; align-items: stretch;">
+            <label class="toggle-label" for="download-quality">Instagram download quality</label>
+            <p class="toggle-description">Choose the largest file or cap its width when Instagram supplies more than one size. Other platforms still use their largest available file.</p>
+            <select id="download-quality" class="select-input">
+              <option value="largest">Largest available</option>
+              <option value="1080">Up to 1080 px wide</option>
+              <option value="720">Up to 720 px wide</option>
+            </select>
+          </div>
           <div class="toggle-row">
             <div>
               <span class="toggle-label">Show download notifications</span>

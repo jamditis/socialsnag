@@ -34,3 +34,16 @@ describe('options page filename template', () => {
     expect(html).toContain('<script src="options.js"></script>');
   });
 });
+
+describe('options page download quality', () => {
+  it('offers the supported Instagram widths and persists the choice', () => {
+    expect(html).toContain('id="download-quality"');
+    expect(html).toContain('<option value="largest">Largest available</option>');
+    expect(html).toContain('<option value="1080">Up to 1080 px wide</option>');
+    expect(html).toContain('<option value="720">Up to 720 px wide</option>');
+    expect(js).toContain("downloadQuality: 'largest'");
+    expect(js).toContain("settings.downloadQuality = document.getElementById('download-quality').value");
+    expect(js).toContain("document.getElementById('download-quality').value = items.downloadQuality");
+    expect(js).toContain("document.getElementById('download-quality').addEventListener('change', saveSettings)");
+  });
+});
