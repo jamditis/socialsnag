@@ -4,6 +4,7 @@ import {
   extractShortcode,
   parseMediaFromJson,
   extractVideoUrlFromScripts,
+  extractFromPageJson,
   shortcodeFromContainer,
   buildImageItems,
   mergeCapturedImages,
@@ -150,6 +151,19 @@ describe('extractVideoUrlFromScripts', () => {
     expect(result).toBe('https://scontent.cdninstagram.com/v/t50/hd_video.mp4');
   });
 
+  it('selects a capped video_versions candidate before the top-level video_url', () => {
+    const scriptText = JSON.stringify({
+      video_url: 'https://scontent.cdninstagram.com/largest.mp4',
+      video_versions: [
+        { url: 'https://scontent.cdninstagram.com/1080.mp4', width: 1080 },
+        { url: 'https://scontent.cdninstagram.com/640.mp4', width: 640 },
+      ],
+    });
+
+    expect(extractVideoUrlFromScripts([scriptText], { maxWidth: 720 }))
+      .toBe('https://scontent.cdninstagram.com/640.mp4');
+  });
+
   it('unescapes forward slashes in extracted URLs', () => {
     const scriptText = 'window.__data={"video_url":"https:\\/\\/scontent-lax3-1.cdninstagram.com\\/v\\/t50.2886-16\\/abc123.mp4?efg=abc\\u0026oh=def"}';
     const result = extractVideoUrlFromScripts([scriptText]);
@@ -271,6 +285,35 @@ describe('resolveSingle', () => {
         type: 'video',
         filename: 'reel_CxPage',
       }]);
+    } finally {
+      globalThis.document = originalDocument;
+    }
+  });
+
+  it('applies the preference to a script-resolved blob video', () => {
+    const originalDocument = globalThis.document;
+    const target = {
+      tagName: 'VIDEO',
+      src: 'blob:https://www.instagram.com/video',
+      parentElement: null,
+      closest: () => null,
+    };
+    globalThis.document = {
+      querySelectorAll: (selector) => selector === 'script'
+        ? [{
+            textContent: JSON.stringify({
+              video_versions: [
+                { url: 'https://scontent.cdninstagram.com/1080.mp4', width: 1080 },
+                { url: 'https://scontent.cdninstagram.com/640.mp4', width: 640 },
+              ],
+            }),
+          }]
+        : [],
+    };
+
+    try {
+      expect(resolveSingle('', target, '/reel/CxPage/', { maxWidth: 720 })[0].url)
+        .toBe('https://scontent.cdninstagram.com/640.mp4');
     } finally {
       globalThis.document = originalDocument;
     }
@@ -578,6 +621,51 @@ describe('mergeCapturedImages', () => {
 
     expect(items).toEqual(original);
     expect(items).not.toBe(original);
+  });
+
+  it('keeps the best captured rendition under the selected cap', () => {
+    const captured = [
+      { url: `${CDN}/s1080x1080/BBB_n.jpg`, type: 'image' },
+      { url: `${CDN}/s640x640/BBB_n.jpg`, type: 'image' },
+    ];
+
+    const { items } = mergeCapturedImages(
+      [],
+      captured,
+      'CxYz1',
+      1,
+      10,
+      { maxWidth: 720 },
+    );
+
+    expect(items[0].url).toBe(`${CDN}/s640x640/BBB_n.jpg`);
+  });
+});
+
+describe('extractFromPageJson', () => {
+  it('uses a matching DOM srcset to cap a JSON-LD image', () => {
+    const originalDocument = globalThis.document;
+    const jsonUrl = `${CDN}/AAA_n.jpg`;
+    const image = {
+      src: `${CDN}/s640x640/AAA_n.jpg`,
+      srcset: `${CDN}/s640x640/AAA_n.jpg 640w, ${CDN}/s1080x1080/AAA_n.jpg 1080w`,
+    };
+    globalThis.document = {
+      querySelectorAll: (selector) => {
+        if (selector === 'script[type="application/ld+json"]') {
+          return [{ textContent: JSON.stringify({ image: jsonUrl }) }];
+        }
+        if (selector === 'img[src*="cdninstagram.com"]') return [image];
+        return [];
+      },
+    };
+
+    try {
+      expect(extractFromPageJson('/p/CxYz1/', { maxWidth: 720 })[0].url)
+        .toBe(`${CDN}/s640x640/AAA_n.jpg`);
+    } finally {
+      globalThis.document = originalDocument;
+    }
   });
 });
 

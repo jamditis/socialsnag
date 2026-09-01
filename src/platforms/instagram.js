@@ -108,9 +108,9 @@ export function buildImageItems(images, shortcode, startIndex = 1, preference = 
  * The same dedupe as buildImageItems, for the same reason, on the other half of the
  * enumeration #46 is about. The old guard compared a raw captured URL against the
  * upgraded URLs already in `items`, so it never matched: one photo could arrive as its
- * DOM entry plus two captured renditions and save three times, two of them at the
- * thumbnail resolution the upgrade exists to get past. Normalizing first makes the
- * comparison meaningful and the saved file the full-size one.
+ * DOM entry plus two captured renditions and save three times. Normalizing an identity
+ * first makes the comparison meaningful; the historical setting removes the size
+ * segment, while a capped setting selects from the captured renditions.
  *
  * upgradeImageUrl also carries the host check, which is stricter than the substring
  * test this replaced: `evilcdninstagram.com` contains `cdninstagram.com`. Nothing was
@@ -135,17 +135,25 @@ export function buildImageItems(images, shortcode, startIndex = 1, preference = 
  * time. Passing null for the element runs both through the stripping branch, which
  * leaves the per-media id intact, so two different photos still read as different.
  * The asymmetry belongs to the normalizer and is filed as #70; this function only keeps
- * it out of the comparison, and the URL it stores is still the one the DOM or capture gave.
+ * it out of the comparison. A capped result still uses a URL Chrome actually captured.
  *
  * @param {Array<object>} items items already found in the DOM
  * @param {Array<{url: string, type: string}>} captured page-wide captures
  * @param {string|null} shortcode post shortcode, for the filename
  * @param {number} startIndex first filename suffix to use
  * @param {number} limit most captures to append
+ * @param {'largest'|{maxWidth: number}} preference requested image quality
  * @returns {{items: Array<object>, index: number, dropped: number}} merged list, next
  *   free index, and how many distinct captures the cap left out
  */
-export function mergeCapturedImages(items, captured, shortcode, startIndex = 1, limit = 10) {
+export function mergeCapturedImages(
+  items,
+  captured,
+  shortcode,
+  startIndex = 1,
+  limit = 10,
+  preference = 'largest',
+) {
   const seen = new Set(items.map((i) => upgradeImageUrl(i.url, null)).filter(Boolean));
   // A Map keeps insertion order, so deleting before setting moves a repeated capture to
   // the end and leaves the keys in last-seen order.
@@ -153,19 +161,31 @@ export function mergeCapturedImages(items, captured, shortcode, startIndex = 1, 
 
   for (const c of captured) {
     if (c?.type !== 'image') continue;
-    const url = upgradeImageUrl(c.url, null);
-    if (!url) continue;
-    if (seen.has(url)) continue;
-    lastSeen.delete(url);
-    lastSeen.set(url, true);
+    const identity = upgradeImageUrl(c.url, null);
+    if (!identity) continue;
+    if (seen.has(identity)) continue;
+
+    const variants = lastSeen.get(identity) || [];
+    if (!variants.some((variant) => variant.url === c.url)) {
+      const width = Number(c.url.match(/\/s(\d+)x\d+\//)?.[1]) || Infinity;
+      variants.push({ url: c.url, width });
+    }
+    lastSeen.delete(identity);
+    lastSeen.set(identity, variants);
   }
 
-  const distinct = [...lastSeen.keys()];
+  const distinct = [...lastSeen.entries()];
   const kept = distinct.slice(-limit);
 
   let index = startIndex;
   const merged = [...items];
-  for (const url of kept) {
+  for (const [identity, variants] of kept) {
+    // The historical "largest" behavior removes the size segment. A capped
+    // preference instead chooses among the renditions Chrome actually captured;
+    // inventing a CDN size that was never observed would make the URL unreliable.
+    const url = preference === 'largest'
+      ? identity
+      : selectByQuality(variants, (variant) => variant.width, preference);
     merged.push({
       url,
       type: 'image',
@@ -223,9 +243,22 @@ function decodeJsonString(str) {
     .replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
 }
 
-export function extractVideoUrlFromScripts(scriptTexts) {
+export function extractVideoUrlFromScripts(scriptTexts, preference = 'largest') {
   for (const text of scriptTexts) {
     if (!text) continue;
+
+    // video_versions carries the candidate widths needed to honor a cap. Prefer
+    // it over video_url when both appear in the same payload.
+    if (text.includes('video_versions')) {
+      const arrayMatch = text.match(/"video_versions"\s*:\s*\[([\s\S]*?)\]/);
+      const versions = (arrayMatch?.[1].match(/\{[^{}]*\}/g) || []).map((entry) => {
+        const url = entry.match(/"url"\s*:\s*"(https?:[^"]+)"/)?.[1];
+        const width = Number(entry.match(/"width"\s*:\s*(\d+)/)?.[1]) || 0;
+        return url ? { url: decodeJsonString(url), width } : null;
+      }).filter(Boolean);
+      const selected = selectByQuality(versions, (version) => version.width, preference);
+      if (selected) return selected;
+    }
 
     // Match "video_url":"https://...cdninstagram.com/..."
     if (text.includes('video_url')) {
@@ -235,30 +268,34 @@ export function extractVideoUrlFromScripts(scriptTexts) {
       }
     }
 
-    // Match "video_versions":[{"url":"https://..."}]
-    if (text.includes('video_versions')) {
-      const match = text.match(/"video_versions"\s*:\s*\[\s*\{\s*"url"\s*:\s*"(https?:[^"]+)"/);
-      if (match) {
-        return decodeJsonString(match[1]);
-      }
-    }
   }
   return null;
 }
 
 // --- Browser wiring (not exported) ---
 
-function extractFromPageJson(pathname) {
+export function extractFromPageJson(pathname, preference = 'largest') {
   const scripts = document.querySelectorAll('script[type="application/ld+json"]');
   const jsonStrings = Array.from(scripts).map((s) => s.textContent);
   const parsed = parseMediaFromJson(jsonStrings);
   const shortcode = extractShortcode(pathname);
+  const domImages = Array.from(document.querySelectorAll('img[src*="cdninstagram.com"]'));
 
-  return parsed.map((item) => withItemMeta({
-    url: item.url,
-    type: item.type,
-    filename: shortcode ? `post_${shortcode}_${item.index}` : null,
-  }, { postId: shortcode }));
+  return parsed.map((item) => {
+    const identity = upgradeImageUrl(item.url, null);
+    const matchingImage = identity && domImages.find(
+      (image) => upgradeImageUrl(image?.src, null) === identity,
+    );
+    const url = matchingImage
+      ? upgradeImageUrl(item.url, matchingImage, preference)
+      : item.url;
+
+    return withItemMeta({
+      url,
+      type: item.type,
+      filename: shortcode ? `post_${shortcode}_${item.index}` : null,
+    }, { postId: shortcode });
+  });
 }
 
 export function resolveSingle(srcUrl, target, pathname, preference = 'largest') {
@@ -310,7 +347,7 @@ export function resolveSingle(srcUrl, target, pathname, preference = 'largest') 
     // blob: URL — try to extract the real CDN URL from page scripts
     const scripts = document.querySelectorAll('script');
     const scriptTexts = Array.from(scripts).map((s) => s.textContent);
-    const cdnUrl = extractVideoUrlFromScripts(scriptTexts);
+    const cdnUrl = extractVideoUrlFromScripts(scriptTexts, preference);
     if (cdnUrl) {
       return [{
         url: cdnUrl,
@@ -372,7 +409,7 @@ export function collectMediaFromContainer(container, shortcode, preference = 'la
       }
     } else if (src && src.startsWith('blob:')) {
       // blob: URL — try to extract real CDN URL from page scripts
-      const cdnUrl = extractVideoUrlFromScripts(getScriptTexts());
+      const cdnUrl = extractVideoUrlFromScripts(getScriptTexts(), preference);
       if (cdnUrl && !usedVideoUrls.has(cdnUrl)) {
         usedVideoUrls.add(cdnUrl);
         items.push({
@@ -454,7 +491,7 @@ async function resolveAll(target, pathname, preference = 'largest') {
   const urlShortcode = extractShortcode(pathname);
 
   // Try JSON extraction first for carousel data
-  const jsonItems = extractFromPageJson(pathname);
+  const jsonItems = extractFromPageJson(pathname, preference);
   if (jsonItems.length > 0) return { items: jsonItems, shortcode: urlShortcode };
 
   // Fall back to DOM collection
@@ -505,7 +542,14 @@ async function resolveAll(target, pathname, preference = 'largest') {
   if (domCount <= 1) {
     const captured = await getCapturedMedia();
     let dropped = 0;
-    ({ items: merged, index, dropped } = mergeCapturedImages(items, captured, shortcode, index));
+    ({ items: merged, index, dropped } = mergeCapturedImages(
+      items,
+      captured,
+      shortcode,
+      index,
+      10,
+      preference,
+    ));
     if (dropped > 0) {
       // The user has no other way to tell page-wide capture noise from this post's media.
       console.info(
