@@ -24,6 +24,7 @@ import {
   clearDownloadHistory,
   resolveItemUrl,
   resolveViaApi,
+  selectTwitterVideoVariant,
   parseSubmittedPageUrl,
   orchestrateSubmittedDownload,
 } from '../src/background.js';
@@ -699,6 +700,54 @@ describe('resolveItemUrl', () => {
 
     expect(url).toBe('https://cdn.cdninstagram.com/reel.mp4');
     expect(item.meta).toEqual({ postId: 'CxClicked' });
+  });
+});
+
+describe('selectTwitterVideoVariant', () => {
+  const variants = [
+    {
+      content_type: 'video/mp4',
+      url: 'https://video.twimg.com/ext_tw_video/1/pu/vid/320x180/low.mp4',
+      bitrate: 256000,
+    },
+    {
+      content_type: 'video/mp4',
+      url: 'https://video.twimg.com/ext_tw_video/1/pu/vid/1280x720/high.mp4',
+      bitrate: 2176000,
+    },
+    {
+      content_type: 'video/mp4',
+      url: 'https://video.twimg.com/ext_tw_video/1/pu/vid/640x360/mid.mp4',
+      bitrate: 832000,
+    },
+    {
+      content_type: 'video/mp4',
+      url: 'https://video.twimg.com/ext_tw_video/1/pu/vid/720x1280/portrait.mp4',
+      bitrate: 1500000,
+    },
+  ];
+
+  it('keeps the highest-bitrate variant as the default', () => {
+    expect(selectTwitterVideoVariant(variants)?.url).toContain('/1280x720/');
+  });
+
+  it('chooses the widest variant within the requested cap', () => {
+    expect(selectTwitterVideoVariant(variants, { maxWidth: 720 })?.url)
+      .toContain('/720x1280/');
+  });
+
+  it('uses the smallest known variant when none fits the cap', () => {
+    expect(selectTwitterVideoVariant(variants, { maxWidth: 200 })?.url)
+      .toContain('/320x180/');
+  });
+
+  it('keeps the highest-bitrate fallback when URLs have no dimensions', () => {
+    const withoutDimensions = variants.map((variant, index) => ({
+      ...variant,
+      url: `https://video.twimg.com/${index}.mp4`,
+    }));
+    expect(selectTwitterVideoVariant(withoutDimensions, { maxWidth: 720 })?.bitrate)
+      .toBe(2176000);
   });
 });
 
@@ -2934,6 +2983,53 @@ describe('submitted URL external bridge', () => {
     expect(remove).toHaveBeenCalledWith(77);
     const { downloadHistory } = await chrome.storage.local.get({ downloadHistory: [] });
     expect(downloadHistory).toHaveLength(2);
+  });
+
+  it('uses the stored quality cap for a submitted X video lookup', async () => {
+    await chrome.storage.sync.set({ downloadQuality: '720' });
+    installFetch((url) => url.includes('syndication.twimg.com') ? {
+      status: 200,
+      json: { mediaDetails: [{
+        type: 'video',
+        video_info: { variants: [
+          {
+            content_type: 'video/mp4',
+            bitrate: 2176000,
+            url: 'https://video.twimg.com/ext_tw_video/1/pu/vid/1280x720/high.mp4',
+          },
+          {
+            content_type: 'video/mp4',
+            bitrate: 832000,
+            url: 'https://video.twimg.com/ext_tw_video/1/pu/vid/640x360/mid.mp4',
+          },
+        ] },
+      }] },
+    } : null);
+    chrome.tabs.create = vi.fn(async () => ({ id: 78, status: 'complete' }));
+    chrome.tabs.get = vi.fn(async () => ({
+      id: 78, status: 'complete', url: 'https://x.com/user/status/123',
+    }));
+    chrome.tabs.remove = vi.fn();
+    chrome.tabs.sendMessage = vi.fn(async () => ({
+      platform: 'twitter',
+      urls: [{
+        type: 'video',
+        filename: 'tweet_123',
+        tweetId: '123',
+        needsVideoLookup: true,
+      }],
+    }));
+    chrome.downloads.download = vi.fn(async () => 53);
+    chrome.downloads.search = async () => [{
+      id: 53, state: 'complete', filename: '/downloads/tweet_123.mp4',
+    }];
+
+    const result = await orchestrateSubmittedDownload('https://x.com/user/status/123');
+
+    expect(result).toEqual({ ok: true, code: 'ok', platform: 'twitter', count: 1 });
+    expect(chrome.downloads.download).toHaveBeenCalledWith(expect.objectContaining({
+      url: 'https://video.twimg.com/ext_tw_video/1/pu/vid/640x360/mid.mp4',
+    }));
   });
 
   it.each([

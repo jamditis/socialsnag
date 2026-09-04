@@ -273,4 +273,37 @@ describe('resolver caching', () => {
     expect(second.item.url).toBe('https://video.twimg.com/a.mp4');
     expect(calls()).toBe(1);
   });
+
+  it('keeps capped and largest tweet variants in separate entries', async () => {
+    const calls = countingFetch({
+      status: 200,
+      json: {
+        mediaDetails: [{
+          type: 'video',
+          video_info: { variants: [
+            {
+              content_type: 'video/mp4',
+              bitrate: 2176000,
+              url: 'https://video.twimg.com/ext_tw_video/1/pu/vid/1280x720/high.mp4',
+            },
+            {
+              content_type: 'video/mp4',
+              bitrate: 832000,
+              url: 'https://video.twimg.com/ext_tw_video/1/pu/vid/640x360/mid.mp4',
+            },
+          ] },
+        }],
+      },
+    });
+
+    const url = 'https://twitter.com/u/status/54321';
+    const largest = await resolveViaApi('twitter', url);
+    expect(largest.item.url).toContain('/1280x720/');
+    const capped = await resolveViaApi('twitter', url, { preference: { maxWidth: 720 } });
+    expect(capped.item.url).toContain('/640x360/');
+    expect(calls()).toBe(2);
+
+    await resolveViaApi('twitter', url, { preference: { maxWidth: 720 } });
+    expect(calls()).toBe(2);
+  });
 });

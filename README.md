@@ -26,7 +26,7 @@ The GitHub Pages site deployment and the Chrome Web Store extension update are s
 
 - **Right-click download:** Use the context menu on any supported page
 - **Direct post-link download:** Paste a supported post link into the landing page and delegate the download to the installed extension
-- **HD quality** — rewrites CDN URLs to fetch the highest available resolution
+- **Download quality** — chooses the largest available file or caps Instagram media and X videos at a selected width
 - **Multi-image posts** — download every slide of an Instagram carousel, in order, resolved through Instagram's media API
 - **Instagram stories** — download the story you're viewing, or the user's whole active tray
 - **Video downloads** — Instagram reels and Twitter/X videos via platform API resolution

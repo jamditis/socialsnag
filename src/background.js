@@ -642,7 +642,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     zipMultiPosts: false,
     downloadQuality: 'largest',
   });
-  const instagramOptions = {
+  const resolveOptions = {
     preference: qualityPreferenceFromSetting(platformSettings.downloadQuality),
   };
 
@@ -659,7 +659,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       const shortcode = pageUrl.match(/\/(p|reel|tv)\/([A-Za-z0-9_-]+)/)?.[2];
       if (shortcode) {
         triedIgPostApi = true;
-        const post = await resolveInstagramPost(shortcode, instagramOptions);
+        const post = await resolveInstagramPost(shortcode, resolveOptions);
         if (post.items) {
           response = { urls: post.items, platform };
         } else if (post.error) {
@@ -678,13 +678,13 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       if (storyRef) {
         // "single" grabs the viewed story; "all" grabs the whole tray.
         const ref = type === 'all' ? { ...storyRef, storyId: null } : storyRef;
-        const stories = await resolveInstagramStories(ref, instagramOptions);
+        const stories = await resolveInstagramStories(ref, resolveOptions);
         if (stories.items) response = { urls: stories.items, platform };
         else if (stories.error) igError = stories.error;
       } else if (highlightRef) {
         // "single" grabs the viewed item; "all" grabs the whole highlight.
         const ref = type === 'all' ? { ...highlightRef, itemId: null } : highlightRef;
-        const highlights = await resolveInstagramHighlights(ref, instagramOptions);
+        const highlights = await resolveInstagramHighlights(ref, resolveOptions);
         if (highlights.items) response = { urls: highlights.items, platform };
         else if (highlights.error) igError = highlights.error;
       }
@@ -697,7 +697,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       // only repeat the identical i.instagram.com fetch for the same shortcode.
       const apiResult = triedIgPostApi
         ? null
-        : await resolveViaApi(platform, pageUrl, instagramOptions);
+        : await resolveViaApi(platform, pageUrl, resolveOptions);
       if (apiResult?.error) igError = apiResult.error;
       if (apiResult?.item) {
         // API found a video — use it directly
@@ -710,7 +710,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
             type: type,
             srcUrl: info.srcUrl || '',
             pageUrl: pageUrl,
-            preference: instagramOptions.preference,
+            preference: resolveOptions.preference,
           });
           await traceResolver({
             platform,
@@ -733,7 +733,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
               type: type,
               srcUrl: info.srcUrl || '',
               pageUrl: pageUrl,
-              preference: instagramOptions.preference,
+              preference: resolveOptions.preference,
             });
             await traceResolver({
               platform,
@@ -758,7 +758,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     // the fallback when the API comes up empty.
     if (platform === 'instagram' && type === 'all' && !triedIgPostApi
         && response && response.shortcode) {
-      const post = await resolveInstagramPost(response.shortcode, instagramOptions);
+      const post = await resolveInstagramPost(response.shortcode, resolveOptions);
       if (post.items) {
         response = { urls: post.items, platform };
       } else if (post.error) {
@@ -778,7 +778,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     if (isCopy) {
       // Resolve a lookup placeholder (e.g. a Twitter/X timeline video identified
       // only by id) to a real URL first, the same way the download path does.
-      const firstUrl = await resolveItemUrl(response.urls[0], instagramOptions);
+      const firstUrl = await resolveItemUrl(response.urls[0], resolveOptions);
       const validation = validateDownloadUrl(firstUrl);
       if (!validation.valid) {
         console.warn(`SocialSnag: refused to copy ${validation.reason}`);
@@ -823,7 +823,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     for (const [position, item] of response.urls.entries()) {
       let saved = null;
       try {
-        saved = await downloadMedia(item, response.platform, position + 1, instagramOptions);
+        saved = await downloadMedia(item, response.platform, position + 1, resolveOptions);
       } catch {
         // One resolver or settings failure must not strand the rest of the
         // batch. Keep the warning URL-free and account for this slot below.
@@ -894,7 +894,7 @@ export async function resolveViaApi(platform, pageUrl, options = {}) {
     if (match) {
       foundId = true;
       const tweetId = match[1];
-      const videoUrl = await resolveTwitterVideo(tweetId);
+      const videoUrl = await resolveTwitterVideo(tweetId, options);
       if (videoUrl) {
         let username = null;
         try {
@@ -952,11 +952,49 @@ export async function resolveViaApi(platform, pageUrl, options = {}) {
 
 // --- API-based video resolvers ---
 
+// X exposes MP4 dimensions in the CDN path rather than as variant fields. Keep
+// bitrate as the historical ranking and use the path width only when the user
+// asked for a cap. If X changes that path shape, fall back to the largest bitrate
+// instead of guessing which opaque URL fits the cap.
+export function selectTwitterVideoVariant(variants, preference = 'largest') {
+  const mp4s = (Array.isArray(variants) ? variants : [])
+    .filter((variant) => variant?.content_type === 'video/mp4' && variant.url)
+    .sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
+  if (mp4s.length === 0) return null;
+
+  const maxWidth = preference && typeof preference === 'object'
+    && Number.isFinite(preference.maxWidth)
+    ? preference.maxWidth
+    : null;
+  if (maxWidth === null) return mp4s[0];
+
+  const sized = mp4s.flatMap((variant) => {
+    try {
+      const match = new URL(variant.url).pathname.match(/\/(\d+)x\d+\//);
+      return match ? [{ variant, width: Number(match[1]) }] : [];
+    } catch {
+      return [];
+    }
+  });
+  if (sized.length === 0) return mp4s[0];
+
+  const underCap = sized.filter(({ width }) => width <= maxWidth);
+  if (underCap.length === 0) {
+    return sized.sort((a, b) => (
+      a.width - b.width || (b.variant.bitrate || 0) - (a.variant.bitrate || 0)
+    ))[0].variant;
+  }
+  return underCap.sort((a, b) => (
+    b.width - a.width || (b.variant.bitrate || 0) - (a.variant.bitrate || 0)
+  ))[0].variant;
+}
+
 async function resolveTwitterVideo(
   tweetId,
-  { fetchImpl = globalThis.fetch, signal } = {},
+  { fetchImpl = globalThis.fetch, signal, preference = 'largest' } = {},
 ) {
-  const cached = getResolved('twitter_video', tweetId);
+  const cacheId = qualityCacheId(tweetId, preference);
+  const cached = getResolved('twitter_video', cacheId);
   if (cached) return cached;
   try {
     const resp = await fetchImpl(
@@ -984,21 +1022,19 @@ async function resolveTwitterVideo(
       return null;
     }
 
-    // Pick the highest bitrate MP4 variant
-    const mp4s = videoMedia.video_info.variants
-      .filter((v) => v.content_type === 'video/mp4' && v.url)
-      .sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
-
-    if (mp4s.length > 0) {
+    const selected = selectTwitterVideoVariant(videoMedia.video_info.variants, preference);
+    if (selected) {
       await traceResolver({
         platform: 'twitter',
         path: 'syndication',
         outcome: 'ok',
         status: resp.status,
-        itemCount: mp4s.length,
+        itemCount: videoMedia.video_info.variants.filter((variant) => (
+          variant?.content_type === 'video/mp4' && variant.url
+        )).length,
       });
-      setResolved('twitter_video', tweetId, mp4s[0].url);
-      return mp4s[0].url;
+      setResolved('twitter_video', cacheId, selected.url);
+      return selected.url;
     }
     console.warn('SocialSnag: no MP4 variants in syndication response');
     await traceResolver({
@@ -1033,7 +1069,7 @@ async function resolveTwitterVideo(
 
 // Fetch and enumerate every media item in an Instagram post (single image/video
 // or full carousel) via the private web API.
-function instagramQualityCacheId(id, preference) {
+function qualityCacheId(id, preference) {
   const maxWidth = preference && typeof preference === 'object'
     && Number.isFinite(preference.maxWidth)
     ? preference.maxWidth
@@ -1048,7 +1084,7 @@ export async function resolveInstagramPost(
   shortcode,
   { fetchImpl = globalThis.fetch, signal, preference = 'largest' } = {},
 ) {
-  const cacheId = instagramQualityCacheId(shortcode, preference);
+  const cacheId = qualityCacheId(shortcode, preference);
   const cached = getResolved('instagram_post', cacheId);
   if (cached) return { items: cached };
   try {
@@ -1181,7 +1217,7 @@ export async function resolveInstagramStories(
 ) {
   // Checked before the user-id lookup, not after: that lookup is itself a request,
   // so testing the cache later would still spend one call per re-download.
-  const storyKey = instagramQualityCacheId(
+  const storyKey = qualityCacheId(
     `${username}_${storyId ?? 'tray'}`,
     preference,
   );
@@ -1209,7 +1245,7 @@ export async function resolveInstagramHighlights(
   { highlightId, itemId = null },
   { fetchImpl = globalThis.fetch, signal, preference = 'largest' } = {},
 ) {
-  const highlightKey = instagramQualityCacheId(
+  const highlightKey = qualityCacheId(
     `highlight_${highlightId}_${itemId ?? 'all'}`,
     preference,
   );
@@ -2041,15 +2077,16 @@ export async function orchestrateSubmittedDownload(rawUrl, options = {}) {
       return submittedDownloadResult(false, 'platform_disabled', platform);
     }
 
+    let preference = options.preference;
+    if ((platform === 'instagram' || platform === 'twitter') && preference === undefined) {
+      const { downloadQuality } = await chrome.storage.sync.get({
+        downloadQuality: 'largest',
+      });
+      preference = qualityPreferenceFromSetting(downloadQuality);
+    }
+
     let resolved;
     if (platform === 'instagram') {
-      let preference = options.preference;
-      if (preference === undefined) {
-        const { downloadQuality } = await chrome.storage.sync.get({
-          downloadQuality: 'largest',
-        });
-        preference = qualityPreferenceFromSetting(downloadQuality);
-      }
       resolved = await runSubmittedWithDeadline(
         (signal) => resolveSubmittedInstagram(parsed, {
           fetchImpl: submittedFetch,
@@ -2152,7 +2189,7 @@ export async function orchestrateSubmittedDownload(rawUrl, options = {}) {
       let downloadItem = item;
       if (item.needsVideoLookup) {
         const resolvedItem = await runSubmittedWithDeadline(
-          (signal) => resolveItem(item, { fetchImpl: submittedFetch, signal }),
+          (signal) => resolveItem(item, { fetchImpl: submittedFetch, signal, preference }),
           operationTimeoutMs,
           { abort: true },
         );
