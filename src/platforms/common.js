@@ -355,8 +355,89 @@ const PLATFORM_LABELS = {
   youtube: 'YouTube',
 };
 
+const TRANSIENT_REMOTE_INTERRUPTS = new Set([
+  'NETWORK_FAILED',
+  'NETWORK_TIMEOUT',
+  'NETWORK_DISCONNECTED',
+  'NETWORK_SERVER_DOWN',
+  'SERVER_FAILED',
+  'SERVER_NO_RANGE',
+  'SERVER_UNREACHABLE',
+  'SERVER_CONTENT_LENGTH_MISMATCH',
+]);
+
+const TRANSIENT_LOCAL_INTERRUPTS = new Set([
+  'FILE_TRANSIENT_ERROR',
+  'FILE_TOO_SHORT',
+  'FILE_HASH_MISMATCH',
+]);
+
+const BLOCKED_DOWNLOAD_INTERRUPTS = new Set([
+  'FILE_VIRUS_INFECTED',
+  'FILE_BLOCKED',
+  'FILE_SECURITY_CHECK_FAILED',
+]);
+
+const DOWNLOAD_FOLDER_INTERRUPTS = new Set([
+  'FILE_FAILED',
+  'FILE_ACCESS_DENIED',
+]);
+
+const INVALID_REMOTE_INTERRUPTS = new Set([
+  'NETWORK_INVALID_REQUEST',
+  'SERVER_BAD_CONTENT',
+  'SERVER_CERT_PROBLEM',
+  'SERVER_CROSS_ORIGIN_REDIRECT',
+]);
+
 export function platformLabel(platform) {
   return PLATFORM_LABELS[platform] || 'this site';
+}
+
+function classifyDownloadInterruption(label, reason) {
+  const terminal = (message) => ({ message, retry: 'terminal' });
+  const transient = (message) => ({ message, retry: 'transient' });
+
+  if (reason === 'SERVER_UNAUTHORIZED' || reason === 'SERVER_FORBIDDEN') {
+    return terminal('This media link expired. Refresh the page and try again.');
+  }
+  if (TRANSIENT_REMOTE_INTERRUPTS.has(reason)) {
+    return transient(`Network problem reaching ${label}. Try again.`);
+  }
+  if (TRANSIENT_LOCAL_INTERRUPTS.has(reason)) {
+    return transient('Chrome could not save this download. Try again.');
+  }
+  if (reason === 'CRASH') {
+    return transient('Chrome stopped this download. Try again.');
+  }
+  if (reason === 'FILE_NO_SPACE') {
+    return terminal('Not enough space to save this download.');
+  }
+  if (reason === 'FILE_NAME_TOO_LONG') {
+    return terminal('The download name is too long. Shorten the filename template and try again.');
+  }
+  if (reason === 'FILE_TOO_LARGE') {
+    return terminal('This file is too large for Chrome to save.');
+  }
+  if (BLOCKED_DOWNLOAD_INTERRUPTS.has(reason)) {
+    return terminal('Chrome blocked this download for safety.');
+  }
+  if (DOWNLOAD_FOLDER_INTERRUPTS.has(reason)) {
+    return terminal('Chrome could not save this download. Check the download folder and try again.');
+  }
+  if (reason === 'FILE_SAME_AS_SOURCE') {
+    return terminal('Chrome cannot save this download over its source file.');
+  }
+  if (reason === 'USER_CANCELED') {
+    return terminal('Download canceled.');
+  }
+  if (reason === 'USER_SHUTDOWN') {
+    return terminal('Chrome closed before this download finished. Try again.');
+  }
+  if (INVALID_REMOTE_INTERRUPTS.has(reason)) {
+    return terminal(`${label} did not return a downloadable file. Refresh the page and try again.`);
+  }
+  return terminal(`${label} download failed. Try refreshing the page.`);
 }
 
 // Classify a failed download step into a user-facing message plus a retry verdict.
@@ -365,6 +446,7 @@ export function platformLabel(platform) {
 // can't pass a bogus number and inherit an HTTP message it never earned:
 //   { kind: 'http', status }    an HTTP status read from a response
 //   { kind: 'reason', reason }  a non-HTTP failure: 'login-required' | 'no-media'
+//   { kind: 'download', reason } a Chrome downloads.InterruptReason
 // `phase` splits a resolver failure (page -> media URL) from a download failure
 // (media URL -> file): a 401/403 means "log in" at the resolver but "the signed
 // link expired, refresh" once we already hold a URL and the fetch is rejected.
@@ -372,11 +454,11 @@ export function platformLabel(platform) {
 // Returns { message, retry } where retry is 'transient' (server/transport fault,
 // safe to retry) or 'terminal' (the user's problem, or unrecoverable — surface now).
 //
-// Only a 5xx and a 429 are transient. Instagram's resolvers reuse status 0 as an
-// "HTTP 200 but parsed to no items" sentinel (an aged-out story, an empty post —
-// see background.js), which is NOT a transport failure: it must fall through to
-// the terminal generic message, never a "network, try again" prompt for a
-// request that will keep coming back empty.
+// For HTTP outcomes, only a 5xx and a 429 are transient. Instagram's resolvers
+// reuse status 0 as an "HTTP 200 but parsed to no items" sentinel (an aged-out
+// story or empty post — see background.js), which is NOT a transport failure:
+// it must fall through to the terminal generic message, never a "network, try
+// again" prompt for a request that will keep coming back empty.
 export function classifyFailure({ platform, phase = 'resolve', outcome } = {}) {
   const label = platformLabel(platform);
   const terminal = (message) => ({ message, retry: 'terminal' });
@@ -388,6 +470,10 @@ export function classifyFailure({ platform, phase = 'resolve', outcome } = {}) {
     }
     // 'no-media' and any unrecognized reason: nothing on the element to grab.
     return terminal('Could not find downloadable media on this element.');
+  }
+
+  if (outcome && outcome.kind === 'download') {
+    return classifyDownloadInterruption(label, outcome.reason);
   }
 
   const status = outcome && outcome.kind === 'http' ? outcome.status : undefined;
