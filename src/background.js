@@ -5,6 +5,8 @@ import {
   sanitizeFilename,
   renderTemplate,
   withItemMeta,
+  classifyFailure,
+  platformLabel,
 } from './platforms/common.js';
 import {
   IG_APP_ID,
@@ -1432,25 +1434,29 @@ export async function createDownloadBatch({
 
 function notifyDownloadBatch(batch) {
   if (!batch?.notify) return;
+  const label = platformLabel(batch.platform);
   if (batch.failed === 0) {
     const message = batch.zipFellBack
-      ? `Zip failed; saved ${batch.successLabel} individually from ${batch.platform}.`
-      : `Downloaded ${batch.successLabel} from ${batch.platform}.`;
+      ? `Zip failed; saved ${batch.successLabel} individually from ${label}.`
+      : `Downloaded ${batch.successLabel} from ${label}.`;
     showNotification(message);
   } else if (batch.completed === 0) {
-    showNotification(`SocialSnag: download failed for ${batch.platform}.`);
+    showNotification(batch.failureMessage || `SocialSnag: download failed for ${label}.`);
   } else {
     const completedLabel = batch.completed === 1 ? 'download' : 'downloads';
     showNotification(
-      `${batch.completed} ${completedLabel} completed; ${batch.failed} failed from ${batch.platform}.`,
+      `${batch.completed} ${completedLabel} completed; ${batch.failed} failed from ${label}.`,
     );
   }
 }
 
-function applyDownloadBatchOutcome(batches, batchId, outcome) {
+function applyDownloadBatchOutcome(batches, batchId, outcome, failure = null) {
   const batch = batches[batchId];
   if (!batch) return null;
   batch[outcome === 'complete' || outcome === 'history_failed' ? 'completed' : 'failed'] += 1;
+  if (outcome === 'failed' && failure?.message && !batch.failureMessage) {
+    batch.failureMessage = failure.message;
+  }
   if (!batch.registrationComplete || batch.completed + batch.failed < batch.total) return null;
   delete batches[batchId];
   return { ...batch };
@@ -1503,11 +1509,19 @@ async function pendingDownload(downloadId) {
   return pending[String(downloadId)] || null;
 }
 
-async function performTerminalSettlement(downloadId, outcome) {
+async function performTerminalSettlement(downloadId, outcome, interruptReason) {
   const key = String(downloadId);
   const historyDownloadId = Number.isFinite(Number(downloadId)) ? Number(downloadId) : downloadId;
   const tracked = await pendingDownload(downloadId);
   if (!tracked) return null;
+
+  const failure = outcome === 'failed' && interruptReason
+    ? classifyFailure({
+      platform: tracked.platform,
+      phase: 'download',
+      outcome: { kind: 'download', reason: interruptReason },
+    })
+    : null;
 
   let finalOutcome = outcome;
   if (outcome === 'complete') {
@@ -1526,18 +1540,20 @@ async function performTerminalSettlement(downloadId, outcome) {
     const current = pending[key];
     if (!current) return null;
     delete pending[key];
-    return applyDownloadBatchOutcome(batches, current.batchId, finalOutcome);
+    return applyDownloadBatchOutcome(batches, current.batchId, finalOutcome, failure);
   });
   notifyDownloadBatch(settledBatch);
   return finalOutcome;
 }
 
-async function settleTerminalDownload(downloadId, outcome) {
+async function settleTerminalDownload(downloadId, outcome, interruptReason = null) {
   const key = String(downloadId);
   if (settlingDownloads.has(key)) return null;
   settlingDownloads.add(key);
   try {
-    return await queueTerminalLifecycle(() => performTerminalSettlement(downloadId, outcome));
+    return await queueTerminalLifecycle(
+      () => performTerminalSettlement(downloadId, outcome, interruptReason),
+    );
   } catch (error) {
     // The download was already staged. Leave it pending for reconciliation
     // instead of throwing to a caller that would count the same slot as failed.
@@ -1576,7 +1592,7 @@ export async function trackTerminalDownload({ batchId, downloadId, item, platfor
   if (current?.state === 'complete') {
     return settleTerminalDownload(downloadId, 'complete');
   } else if (current?.state === 'interrupted' && !current.canResume) {
-    return settleTerminalDownload(downloadId, 'failed');
+    return settleTerminalDownload(downloadId, 'failed', current.error);
   }
   return 'pending';
 }
@@ -1598,7 +1614,7 @@ export async function reconcilePendingDownloads() {
     if (current?.state === 'complete') {
       await settleTerminalDownload(downloadId, 'complete');
     } else if (isTerminalDownload(current)) {
-      await settleTerminalDownload(downloadId, 'failed');
+      await settleTerminalDownload(downloadId, 'failed', current?.error);
     }
   }
   const settledBatches = await updatePendingDownloads((_pending, batches) => {
@@ -1711,7 +1727,7 @@ chrome.downloads.onChanged.addListener(async (delta) => {
   if (isTerminalDownload(item)) {
     await Promise.all([
       revokePendingBlob(delta.id),
-      settleTerminalDownload(delta.id, 'failed'),
+      settleTerminalDownload(delta.id, 'failed', item?.error || delta.error?.current),
     ]);
   }
 });

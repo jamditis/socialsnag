@@ -1112,7 +1112,7 @@ describe('zip download flow', () => {
       await downloadItemsAsZip(imgItems, 'bluesky');
       expect(notes).toEqual([
         'Started a .zip with 2 files from bluesky.',
-        'Downloaded 2 files as a .zip from bluesky.',
+        'Downloaded 2 files as a .zip from Bluesky.',
       ]);
     } finally {
       globalThis.chrome.downloads.download = origDownload;
@@ -1306,7 +1306,7 @@ describe('zip download flow', () => {
         { menuItemId: 'socialsnag-download-zip', pageUrl: 'https://bsky.app/profile/x/post/1' },
         { id: 5, url: 'https://bsky.app/profile/x/post/1' },
       );
-      expect(notes).toContain('Zip failed; saved 2 files individually from bluesky.');
+      expect(notes).toContain('Zip failed; saved 2 files individually from Bluesky.');
     } finally {
       globalThis.chrome.tabs.sendMessage = originalSend;
       globalThis.chrome.downloads.download = originalDownload;
@@ -1699,7 +1699,7 @@ describe('terminal download state', () => {
     expect(globalThis.chrome.storage.local._data().downloadHistory).toEqual([
       expect.objectContaining({ downloadId: 101, filename: 'facebook_101.jpg' }),
     ]);
-    expect(notifications).toContain('Downloaded 1 file from facebook.');
+    expect(notifications).toContain('Downloaded 1 file from Facebook.');
   });
 
   it('removes a terminal item and settles its batch in one lifecycle write', async () => {
@@ -1770,7 +1770,22 @@ describe('terminal download state', () => {
     await terminate(103);
 
     expect(globalThis.chrome.storage.local._data().downloadHistory).toBeUndefined();
-    expect(notifications).toContain('SocialSnag: download failed for facebook.');
+    expect(notifications).toContain('SocialSnag: download failed for Facebook.');
+  });
+
+  it('surfaces Chrome\'s reason when a media download is rejected', async () => {
+    const batchId = await begin();
+    await track(batchId, 106);
+    await finishDownloadBatchRegistration(batchId);
+    globalThis.chrome.downloads.search = async () => [];
+
+    await fireChanged({
+      id: 106,
+      state: { current: 'interrupted' },
+      error: { current: 'SERVER_FORBIDDEN' },
+    });
+
+    expect(notifications).toContain('This media link expired. Refresh the page and try again.');
   });
 
   it('reconciles persistent terminal IDs after a worker or browser restart', async () => {
@@ -1781,7 +1796,7 @@ describe('terminal download state', () => {
     globalThis.chrome.downloads.search = async ({ id }) => (
       id === 104
         ? [{ id, state: 'complete' }]
-        : [{ id, state: 'interrupted', canResume: false }]
+        : [{ id, state: 'interrupted', canResume: false, error: 'NETWORK_TIMEOUT' }]
     );
 
     await reconcilePendingDownloads();
@@ -1790,6 +1805,7 @@ describe('terminal download state', () => {
       expect.objectContaining({ downloadId: 104 }),
     ]);
     expect((await globalThis.chrome.storage.local.get(PENDING_KEY))[PENDING_KEY]).toEqual({});
+    expect(notifications).toContain('Network problem reaching Facebook. Try again.');
   });
 
   it('fails unregistered slots when a restart interrupts batch registration', async () => {
@@ -1979,7 +1995,7 @@ describe('terminal download state', () => {
     expect(settled[PENDING_KEY]).toEqual({});
     expect(settled[BATCH_KEY]).toEqual({});
     expect(globalThis.chrome.storage.local._data().downloadHistory).toHaveLength(1);
-    expect(notifications).toContain('Downloaded 1 file from facebook.');
+    expect(notifications).toContain('Downloaded 1 file from Facebook.');
   });
 
   it('keeps a completed transfer successful when history storage fails', async () => {
@@ -1994,7 +2010,7 @@ describe('terminal download state', () => {
 
     try {
       await fireChanged({ id: 204, state: { current: 'complete' } });
-      expect(notifications).toContain('Downloaded 1 file from facebook.');
+      expect(notifications).toContain('Downloaded 1 file from Facebook.');
     } finally {
       globalThis.chrome.storage.local.set = originalSet;
     }
@@ -2014,7 +2030,7 @@ describe('terminal download state', () => {
     await fireChanged({ id: 107, state: { current: 'interrupted' } });
 
     expect(globalThis.chrome.storage.local._data().downloadHistory).toHaveLength(1);
-    expect(notifications).toContain('1 download completed; 2 failed from facebook.');
+    expect(notifications).toContain('1 download completed; 2 failed from Facebook.');
   });
 
   it('stores lifecycle metadata without a media URL', async () => {
@@ -2528,7 +2544,7 @@ describe('context-menu download metadata', () => {
 
     expect(notes).toEqual([
       'Download started from facebook.',
-      'Downloaded 1 file from facebook.',
+      'Downloaded 1 file from Facebook.',
     ]);
   });
 

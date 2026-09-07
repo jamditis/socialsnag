@@ -515,6 +515,49 @@ describe('classifyFailure', () => {
       .toMatch(/could not find downloadable media/i);
   });
 
+  it.each([
+    ['FILE_FAILED', 'terminal', /download folder/i],
+    ['FILE_ACCESS_DENIED', 'terminal', /download folder/i],
+    ['FILE_NO_SPACE', 'terminal', /not enough space/i],
+    ['FILE_NAME_TOO_LONG', 'terminal', /filename template/i],
+    ['FILE_TOO_LARGE', 'terminal', /too large/i],
+    ['FILE_VIRUS_INFECTED', 'terminal', /blocked.*safety/i],
+    ['FILE_TRANSIENT_ERROR', 'transient', /try again/i],
+    ['FILE_BLOCKED', 'terminal', /blocked.*safety/i],
+    ['FILE_SECURITY_CHECK_FAILED', 'terminal', /blocked.*safety/i],
+    ['FILE_TOO_SHORT', 'transient', /try again/i],
+    ['FILE_HASH_MISMATCH', 'transient', /try again/i],
+    ['FILE_SAME_AS_SOURCE', 'terminal', /source file/i],
+    ['NETWORK_FAILED', 'transient', /network problem/i],
+    ['NETWORK_TIMEOUT', 'transient', /network problem/i],
+    ['NETWORK_DISCONNECTED', 'transient', /network problem/i],
+    ['NETWORK_SERVER_DOWN', 'transient', /network problem/i],
+    ['NETWORK_INVALID_REQUEST', 'terminal', /downloadable file/i],
+    ['SERVER_FAILED', 'transient', /network problem/i],
+    ['SERVER_NO_RANGE', 'transient', /network problem/i],
+    ['SERVER_BAD_CONTENT', 'terminal', /downloadable file/i],
+    ['SERVER_UNAUTHORIZED', 'terminal', /link expired/i],
+    ['SERVER_CERT_PROBLEM', 'terminal', /downloadable file/i],
+    ['SERVER_FORBIDDEN', 'terminal', /link expired/i],
+    ['SERVER_UNREACHABLE', 'transient', /network problem/i],
+    ['SERVER_CONTENT_LENGTH_MISMATCH', 'transient', /network problem/i],
+    ['SERVER_CROSS_ORIGIN_REDIRECT', 'terminal', /downloadable file/i],
+    ['USER_CANCELED', 'terminal', /canceled/i],
+    ['USER_SHUTDOWN', 'terminal', /chrome closed/i],
+    ['CRASH', 'transient', /chrome stopped/i],
+  ])('classifies Chrome interruption %s as %s', (reason, retry, messagePattern) => {
+    const classify = (reason) => classifyFailure({
+      platform: 'facebook',
+      phase: 'download',
+      outcome: { kind: 'download', reason },
+    });
+
+    expect(classify(reason)).toEqual({
+      message: expect.stringMatching(messagePattern),
+      retry,
+    });
+  });
+
   it('falls back to a usable message for an unknown status or missing outcome', () => {
     expect(msg({ platform: 'instagram', outcome: { kind: 'http', status: 418 } }))
       .toBe('Instagram did not return this media. Try refreshing the page.');
