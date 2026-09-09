@@ -33,7 +33,6 @@ export default [
       'dist/',
       'node_modules/',
       'docs/',
-      'src/platforms/tiktok.js',
       'src/platforms/youtube.js',
     ],
   },
