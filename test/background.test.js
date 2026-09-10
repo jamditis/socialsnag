@@ -1498,6 +1498,11 @@ describe('context menu registration', () => {
 
 describe('optional content script registration', () => {
   const LINKEDIN_ORIGINS = ['*://*.linkedin.com/*', '*://*.media.licdn.com/*'];
+  const TIKTOK_ORIGINS = [
+    '*://*.tiktok.com/*',
+    '*://*.tiktokcdn.com/*',
+    '*://*.tiktokcdn-us.com/*',
+  ];
 
   const withGrant = async (origins, fn) => {
     const orig = globalThis.chrome.permissions.getAll;
@@ -1553,6 +1558,10 @@ describe('optional content script registration', () => {
   it('registers nothing when no optional origin is granted', () => {
     expect(contentScriptRegistrations([])).toEqual([]);
     expect(contentScriptRegistrations(undefined)).toEqual([]);
+  });
+
+  it('keeps TikTok inert even when its reserved origins are granted', () => {
+    expect(contentScriptRegistrations(TIKTOK_ORIGINS)).toEqual([]);
   });
 
   it('registers linkedin once both of its origins are granted', () => {

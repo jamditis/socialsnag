@@ -22,7 +22,7 @@ src/
   platforms/facebook.js  — Facebook resolver (fbcdn upgrade, video extraction from scripts)
   platforms/bluesky.js   — Bluesky resolver (feed_fullsize upgrade, avatar upgrade, direct video URLs)
   platforms/linkedin.js  — LinkedIn resolver (media.licdn.com host gate, chrome-rendition filter, activity-id extraction); optional platform, off until the user grants site access in options
-  platforms/tiktok.js    — TikTok resolver — NOT in manifest, needs ESM conversion
+  platforms/tiktok.js    — TikTok ESM resolver and parser — not bundled pending download transport proof
   platforms/youtube.js   — YouTube resolver — NOT in manifest, fully excluded
   popup.html/js/css      — popup UI: dark theme, platform status grid, download history with SVG icons
   options.html/js/css    — settings: card layout, custom toggle switches, save on change
@@ -113,7 +113,7 @@ The flow, which any further opt-in platform should copy:
 
 ### Platforms excluded
 - **YouTube** — fully removed. Google removes YT download extensions.
-- **TikTok** — code in repo, `optional_host_permissions`. Still the legacy global pattern, needs ESM conversion plus the Referer-stripped fetch path. Medium-high rejection risk.
+- **TikTok** — ESM resolver code and parser tests are in the repo, but the resolver is not bundled. The download transport still needs proof before it can copy the LinkedIn opt-in flow: the removed branch called `URL.createObjectURL()` from the MV3 service worker, where that API is unavailable. Medium-high CWS rejection risk.
 
 ### Permission model
 - Core: `contextMenus`, `downloads`, `activeTab`, `storage`, `notifications`, `scripting`, `offscreen`
@@ -214,5 +214,5 @@ This works without advanced mode (webRequest) enabled.
 - Upload social preview image in GitHub Settings > General > Social preview
 
 ### Future work
-- TikTok as an optional platform, on the LinkedIn pattern, after CWS approval
+- TikTok as an optional platform after its CDN download transport is proven, then wired on the LinkedIn pattern
 - Automated E2E tests with Playwright
