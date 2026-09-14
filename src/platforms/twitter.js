@@ -7,6 +7,7 @@ import {
   hostMatches,
   withItemMeta,
 } from './common.js';
+import { selectByQuality } from './instagram-api.js';
 
 // A tweet's outer boundary. All three of the old id/video/media lookups kept
 // their own copy of this list and had drifted apart, so the same click could
@@ -60,6 +61,42 @@ export function filterCapturedVideos(captured) {
   return captured
     .filter((c) => c.url.includes('video.twimg.com') && c.url.includes('.mp4'))
     .sort((a, b) => b.timestamp - a.timestamp);
+}
+
+// Match only known CDN asset identifiers. A tweet id is not a video asset id.
+function capturedAsset(url) {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== 'https:') return null;
+    const pattern = parsed.hostname === 'video.twimg.com'
+      ? /^\/(ext_tw_video|amplify_video)\/(\d+)\//
+      : parsed.hostname === 'pbs.twimg.com'
+        ? /^\/(ext_tw_video|amplify_video)_thumb\/(\d+)\// : null;
+    const match = pattern && parsed.pathname.match(pattern);
+    return match ? `${match[1]}/${match[2]}` : null;
+  } catch { return null; }
+}
+
+export function selectCapturedVideo(captured, target, preference = 'largest') {
+  const mp4s = filterCapturedVideos(captured);
+  const fallback = mp4s[0]?.url || null;
+  if (!Number.isFinite(preference?.maxWidth)) return fallback;
+  const found = findTweetScope(target);
+  const videos = found
+    ? [...found.scope.querySelectorAll('video')].filter((video) => imageInScope(video, found))
+    : target?.tagName === 'VIDEO' ? [target] : [];
+  // More than one video in this scope is ambiguous. Preserve the capture fallback.
+  if (videos.length !== 1) return fallback;
+  const video = videos[0];
+  const asset = capturedAsset(video.currentSrc) || capturedAsset(video.src)
+    || capturedAsset(video.poster);
+  if (!asset) return fallback;
+  const variants = mp4s.flatMap(({ url }) => {
+    if (capturedAsset(url) !== asset) return [];
+    const dimensions = new URL(url).pathname.match(/\/(\d+)x\d+\//);
+    return dimensions ? [{ url, width: Number(dimensions[1]) }] : [];
+  });
+  return selectByQuality(variants, (item) => item.width, preference) || fallback;
 }
 
 // A genuine Twitter/X status permalink, told apart from a link-preview card whose
@@ -216,7 +253,7 @@ function targetHasVideo(target) {
 export function resolveSingle(
   srcUrl,
   target,
-  { allowFallback = true, allowCapturedVideos = true } = {},
+  { allowFallback = true, allowCapturedVideos = true, preference = 'largest' } = {},
 ) {
   // Check if this tweet contains a video — if so, prioritize video download
   // (Twitter blocks right-click on videos, so users right-click the tweet text instead)
@@ -225,7 +262,7 @@ export function resolveSingle(
     const isProfilePic = srcUrl && srcUrl.includes('/profile_images/');
     const isMediaImage = srcUrl && srcUrl.includes('/media/');
     if (!isMediaImage || isProfilePic || !srcUrl) {
-      return resolveVideo(target, { allowCaptured: allowCapturedVideos });
+      return resolveVideo(target, { allowCaptured: allowCapturedVideos, preference });
     }
   }
 
@@ -270,22 +307,22 @@ export function resolveSingle(
         }
       }
       if (nearestMedia.tagName === 'VIDEO' || nearestMedia.closest?.('[data-testid="videoComponent"]')) {
-        return resolveVideo(target, { allowCaptured: allowCapturedVideos });
+        return resolveVideo(target, { allowCaptured: allowCapturedVideos, preference });
       }
     }
   }
 
   if (target?.tagName === 'VIDEO' || target?.closest('video') || target?.closest('[data-testid="videoComponent"]')) {
-    return resolveVideo(target, { allowCaptured: allowCapturedVideos });
+    return resolveVideo(target, { allowCaptured: allowCapturedVideos, preference });
   }
 
   // Last resort: try to find any media in the parent tweet. Skipped when
   // resolveAll is the caller, so a scoped-empty sweep terminates here instead of
   // re-entering resolveAll and looping.
-  return allowFallback ? resolveAll(target, { allowCapturedVideos }) : [];
+  return allowFallback ? resolveAll(target, { allowCapturedVideos, preference }) : [];
 }
 
-export function resolveAll(target, { allowCapturedVideos = true } = {}) {
+export function resolveAll(target, { allowCapturedVideos = true, preference = 'largest' } = {}) {
   const found = findTweetScope(target);
   // Off any tweet: let resolveSingle try the click target itself, but with the
   // guard off so its last resort does not bounce back here and loop.
@@ -293,6 +330,7 @@ export function resolveAll(target, { allowCapturedVideos = true } = {}) {
     return resolveSingle(target?.src || '', target, {
       allowFallback: false,
       allowCapturedVideos,
+      preference,
     });
   }
 
@@ -317,6 +355,7 @@ export function resolveAll(target, { allowCapturedVideos = true } = {}) {
   return items.length > 0 ? items : resolveSingle(target?.src || '', target, {
     allowFallback: false,
     allowCapturedVideos,
+    preference,
   });
 }
 
@@ -375,23 +414,23 @@ export async function resolveContentMessage(message, lastTarget, root = document
   if (message.action === 'resolvePage') return resolvePage(root, message.pageUrl);
   if (message.action !== 'resolve') return [];
   return message.type === 'single'
-    ? resolveSingle(message.srcUrl, lastTarget)
-    : resolveAll(lastTarget);
+    ? resolveSingle(message.srcUrl, lastTarget, { preference: message.preference })
+    : resolveAll(lastTarget, { preference: message.preference });
 }
 
-async function resolveVideo(target, { allowCaptured = true } = {}) {
+async function resolveVideo(target, { allowCaptured = true, preference = 'largest' } = {}) {
   const meta = tweetMetaFor(target);
 
   // First try webRequest captures (advanced mode)
   if (allowCaptured) {
     const captured = await getCapturedMedia();
-    const mp4s = filterCapturedVideos(captured);
+    const url = selectCapturedVideo(captured, target, preference);
 
-    if (mp4s.length > 0) {
+    if (url) {
       // Captures are page-wide and cannot be correlated to the clicked tweet.
       // Keep the capture available for private or API-inaccessible tweets, but
       // leave it untagged so another autoplaying tweet is never falsely named.
-      return [{ url: mp4s[0].url, type: 'video', filename: null }];
+      return [{ url, type: 'video', filename: null }];
     }
   }
 

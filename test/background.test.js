@@ -3744,3 +3744,36 @@ describe('options page platform copy', () => {
     expect(html).toContain('id="linkedin-toggle"');
   });
 });
+
+
+describe('whole-highlight context actions', () => {
+  afterEach(() => resetFetch());
+  it.each(['single', 'all', 'copy'])('handles %s without silently selecting the first item', async (action) => {
+    const events = [];
+    installFetch((url) => url.includes('reels_media')
+      ? { status: 200, json: { reels_media: [{ items: [
+        igStoryImg('900', 'https://cdn.cdninstagram.com/a.jpg'),
+        igStoryImg('901', 'https://cdn.cdninstagram.com/b.jpg'),
+      ] }] } } : null);
+    const notify = vi.spyOn(chrome.notifications, 'create').mockImplementation((opts) => {
+      events.push(opts.message);
+    });
+    const download = vi.spyOn(chrome.downloads, 'download').mockImplementation(async () => {
+      events.push('download');
+      return 42;
+    });
+    const menuItemId = action === 'copy' ? 'socialsnag-copy-url' : `socialsnag-download-${action}`;
+    const pageUrl = 'https://www.instagram.com/stories/highlights/7882/';
+    try {
+      await chrome.contextMenus.onClicked._listeners[0]({ menuItemId, pageUrl }, { id: 1, url: pageUrl });
+      if (action === 'copy') {
+        expect(download).not.toHaveBeenCalled();
+        expect(events[0]).toContain('Open an individual item link');
+      } else {
+        expect(download).toHaveBeenCalledTimes(2);
+        if (action === 'single') expect(events[0]).toContain('Downloading the whole highlight');
+        else expect(events).not.toContain('Cannot identify the viewed item. Downloading the whole highlight.');
+      }
+    } finally { notify.mockRestore(); download.mockRestore(); }
+  });
+});

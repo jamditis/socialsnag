@@ -1,5 +1,7 @@
 # CLAUDE.md
 
+[Project: SocialSnag maintenance](https://github.com/users/jamditis/projects/15)
+
 ## What this is
 
 SocialSnag is a Chrome extension (Manifest V3) that downloads full-resolution images and videos from social media through a right-click context menu or a direct post-link form on its GitHub Pages site.

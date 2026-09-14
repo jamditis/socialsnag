@@ -686,7 +686,14 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       } else if (highlightRef) {
         // "single" grabs the viewed item; "all" grabs the whole highlight.
         const ref = type === 'all' ? { ...highlightRef, itemId: null } : highlightRef;
+        if (type === 'single' && !ref.itemId && isCopy) {
+          showNotification('Cannot identify the viewed highlight item. Open an individual item link to copy its media URL.');
+          return;
+        }
         const highlights = await resolveInstagramHighlights(ref, resolveOptions);
+        if (type === 'single' && !ref.itemId && highlights.items?.length) {
+          showNotification('Cannot identify the viewed item. Downloading the whole highlight.');
+        }
         if (highlights.items) response = { urls: highlights.items, platform };
         else if (highlights.error) igError = highlights.error;
       }

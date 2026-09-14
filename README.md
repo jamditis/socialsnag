@@ -1,4 +1,6 @@
 ![Version](https://img.shields.io/github/v/release/jamditis/socialsnag)
+
+[Project: SocialSnag maintenance](https://github.com/users/jamditis/projects/15)
 [![Chrome Web Store](https://img.shields.io/chrome-web-store/v/llbpeneloehnlaomolbalbmhjncpmnfa)](https://chromewebstore.google.com/detail/socialsnag/llbpeneloehnlaomolbalbmhjncpmnfa)
 ![License](https://img.shields.io/github/license/jamditis/socialsnag)
 ![Manifest](https://img.shields.io/badge/manifest-v3-green)
