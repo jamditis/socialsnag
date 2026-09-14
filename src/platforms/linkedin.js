@@ -5,6 +5,8 @@ import {
   findPostContainer,
   hostMatches,
   isContentSized,
+  isAllowedDomain,
+  isHttps,
   withItemMeta,
 } from './common.js';
 
@@ -19,7 +21,7 @@ import {
 // Kept as the host gate, which is load-bearing. socialsnag#67 tracks whether any
 // client-side upgrade exists; it needs a live card, so it belongs on a browser host.
 export function upgradeUrl(url) {
-  if (!hostMatches(url, 'media.licdn.com')) return null;
+  if (!isHttps(url) || !hostMatches(url, 'media.licdn.com')) return null;
   return url.replace(/\/shrink_\d+_\d+\//, '/');
 }
 
@@ -119,7 +121,7 @@ export function resolveSingle(srcUrl, target) {
     : target?.closest('video') || (target?.tagName === 'VIDEO' ? target : null);
   if (video) {
     const src = video.src || video.querySelector('source')?.src;
-    if (src && !src.startsWith('blob:')) {
+    if (isHttps(src) && isAllowedDomain(src)) {
       const id = extractPostId(window.location.href);
       return [withItemMeta(
         { url: src, type: 'video', filename: null },
@@ -131,7 +133,7 @@ export function resolveSingle(srcUrl, target) {
   return [];
 }
 
-function resolveAll(target) {
+export function resolveAll(target) {
   const post = findPostContainer(target, [
     '.feed-shared-update-v2',
     '[data-urn]',
@@ -149,10 +151,12 @@ function resolveAll(target) {
   );
   // The video sweep below continues the image numbering.
   let index = nextIndex;
+  const seen = new Set(items.map((item) => item.url));
 
   post.querySelectorAll('video').forEach((video) => {
     const src = video.src || video.querySelector('source')?.src;
-    if (src && !src.startsWith('blob:')) {
+    if (isHttps(src) && isAllowedDomain(src) && !seen.has(src)) {
+      seen.add(src);
       items.push(withItemMeta(
         { url: src, type: 'video', filename: id ? `post_${id}_${index}` : null },
         { postId: metadataPostId },

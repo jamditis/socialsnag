@@ -113,6 +113,12 @@ The flow, which any further opt-in platform should copy:
 5. `chrome.permissions.onAdded` / `onRemoved` rebuild the menu and re-run that reconcile, so a grant or a revoke made from `chrome://extensions` takes effect without a reinstall.
 6. The options toggle requests or removes the origins and restores its checked state from `chrome.permissions.contains`. It keeps **no** mirrored `platform_<name>` flag: the grant is the state, read everywhere through `isPlatformEnabled()`. A stored copy goes stale the moment someone uses `chrome://extensions`, and the menu and the download gate then disagree.
 
+The popup reads optional platform status from the complete live permission grant.
+It adds LinkedIn when granted and removes the row when access is revoked. LinkedIn
+video collection accepts only HTTPS URLs on the existing download allowlist,
+deduplicates them, and numbers only accepted items. Other video hosts are skipped;
+this does not establish support for additional CDNs or expand permissions.
+
 ### Platforms excluded
 - **YouTube** — fully removed. Google removes YT download extensions.
 - **TikTok** — ESM resolver code and parser tests are in the repo, but the resolver is not bundled. The download transport still needs proof before it can copy the LinkedIn opt-in flow: the removed branch called `URL.createObjectURL()` from the MV3 service worker, where that API is unavailable. Medium-high CWS rejection risk.
