@@ -37,6 +37,22 @@ export function isHttps(url) {
   }
 }
 
+// Identity only: normalize the stp dimension tokens shown in issue #72. Keep
+// the transformation kind, all other query fields, and the download URL intact.
+export function imageQueryDedupeKey(url) {
+  try {
+    const parsed = new URL(url);
+    const values = parsed.searchParams.getAll('stp');
+    if (values.length !== 1) return url;
+    const normalized = values[0].replace(/(^|_)([sp])\d+x\d+(?=_|$)/g, '$1$2');
+    if (normalized === values[0]) return url;
+    parsed.searchParams.set('stp', normalized);
+    return parsed.href;
+  } catch {
+    return url;
+  }
+}
+
 export function sanitizeFilename(name) {
   if (!name) return null;
   return name

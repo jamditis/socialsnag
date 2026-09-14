@@ -526,7 +526,7 @@ describe('mergeCapturedImages', () => {
     expect(index).toBe(2);
   });
 
-  it('appends a genuinely different photo, upgraded rather than raw', () => {
+  it('appends a genuinely different photo with its raw captured URL', () => {
     const { items, index } = mergeCapturedImages(
       [domItem],
       [{ url: `${CDN}/s150x150/BBB_n.jpg`, type: 'image' }],
@@ -536,7 +536,7 @@ describe('mergeCapturedImages', () => {
 
     expect(items).toHaveLength(2);
     expect(items[1]).toEqual({
-      url: `${CDN}/BBB_n.jpg`,
+      url: `${CDN}/s150x150/BBB_n.jpg`,
       type: 'image',
       filename: 'post_CxYz1_2',
     });
@@ -549,7 +549,7 @@ describe('mergeCapturedImages', () => {
       { url: `${CDN}/s640x640/BBB_n.jpg`, type: 'image' },
     ], 'CxYz1');
 
-    expect(items.map((i) => i.url)).toEqual([`${CDN}/BBB_n.jpg`]);
+    expect(items.map((i) => i.url)).toEqual([`${CDN}/s640x640/BBB_n.jpg`]);
   });
 
   // The host check rides on upgradeImageUrl, which is stricter than the substring test
@@ -577,7 +577,7 @@ describe('mergeCapturedImages', () => {
 
     const { items } = mergeCapturedImages([], captured, 'CxYz1', 1, 2);
 
-    expect(items.map((i) => i.url)).toEqual([`${CDN}/BBB_n.jpg`, `${CDN}/CCC_n.jpg`]);
+    expect(items.map((i) => i.url)).toEqual([`${CDN}/s640x640/BBB_n.jpg`, `${CDN}/s640x640/CCC_n.jpg`]);
   });
 
   // The cap keeps the tail, so where a repeat sits decides whether it survives the cap.

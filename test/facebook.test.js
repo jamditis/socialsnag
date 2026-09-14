@@ -384,7 +384,7 @@ describe('buildCapturedItems', () => {
       cap(`${CDN}/s320x320/123456789012_n.jpg`),
       cap(`${CDN}/p720x720/123456789012_n.jpg`),
     ], 5);
-    expect(items.map((i) => i.url)).toEqual([`${CDN}/123456789012_n.jpg`]);
+    expect(items.map((i) => i.url)).toEqual([`${CDN}/p720x720/123456789012_n.jpg`]);
   });
 
   it('numbers from one, since it only runs when the DOM walk found nothing', () => {
@@ -401,7 +401,7 @@ describe('buildCapturedItems', () => {
       cap(`${CDN}/p720x720/123456789012_n.jpg?oh=BBB&oe=222`),
     ], 5);
     expect(items).toHaveLength(1);
-    expect(items[0].url).toBe(`${CDN}/123456789012_n.jpg?oh=BBB&oe=222`);
+    expect(items[0].url).toBe(`${CDN}/p720x720/123456789012_n.jpg?oh=BBB&oe=222`);
   });
 
   it('keeps the sharpest captured query variant while refreshing its recency', () => {

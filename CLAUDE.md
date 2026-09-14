@@ -164,6 +164,15 @@ npm run test:watch                 # watch mode
 ### CI
 GitHub Actions runs lint + test + build on every PR to master (`.github/workflows/ci.yml`).
 
+## Captured image identity
+
+Instagram and Facebook compare size-only `stp` dimensions through a dedupe key.
+Other transformations, signature fields and unknown query forms remain part of
+the key. Captured downloads always use an original observed URL, including its
+path and query; key normalization does not rewrite a signed download URL.
+Quality selection chooses among observed captures. This does not prove that a
+rewritten CDN path is fetchable; issue #70 retains that separate live-check need.
+
 ## Instagram video downloads
 
 Instagram videos use `blob:` URLs (MediaSource API). Direct `video.src` is always unusable. SocialSnag extracts the actual CDN video URL from Instagram's embedded page scripts:

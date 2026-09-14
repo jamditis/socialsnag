@@ -5,6 +5,7 @@ import {
   findPostContainer,
   getCapturedMedia,
   hostMatches,
+  imageQueryDedupeKey,
   isContentSized,
   withItemMeta,
 } from './common.js';
@@ -34,7 +35,7 @@ export function extractPhotoId(url) {
 // can never collide with a URL that happens to equal it.
 function photoDedupeKey(upgradedUrl) {
   const id = extractPhotoId(upgradedUrl);
-  return id ? `id:${id}` : `url:${upgradedUrl}`;
+  return id ? `id:${id}` : `url:${imageQueryDedupeKey(upgradedUrl)}`;
 }
 
 // Pixel area an fbcdn URL encodes, used to pick the sharpest render of one photo.
@@ -277,7 +278,7 @@ export function buildCapturedItems(captured, limit = 5) {
     const key = photoDedupeKey(url);
     const area = variantArea(c.url);
     const prior = lastSeen.get(key);
-    const variant = prior && prior.area > area ? prior : { url, area };
+    const variant = prior && prior.area > area ? prior : { url: c.url, area };
     lastSeen.delete(key);
     lastSeen.set(key, variant);
   }

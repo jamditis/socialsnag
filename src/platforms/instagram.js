@@ -5,6 +5,7 @@ import {
   findPostContainer,
   getCapturedMedia,
   hostMatches,
+  imageQueryDedupeKey,
   withItemMeta,
 } from './common.js';
 import { selectByQuality } from './instagram-api.js';
@@ -50,11 +51,11 @@ export function upgradeImageUrl(url, imgElement, preference = 'largest') {
  * `/s1080x1080/AAA_n.jpg` and `/AAA_n.jpg` and survive as two items. That is a
  * normalizer inconsistency, not a dedupe one (#70).
  *
- * The first variant seen wins, which keeps document order intact. Document order is
- * what makes carousel ordering stable, since querySelectorAll returns it and it
- * matches how the slides read on the page. facebook.js:buildImageItems makes the same
- * call for the same reason; its capture-order sibling deliberately breaks the tie the
- * other way, which is why this lives per platform rather than in common.js.
+ * The first variant seen fixes a photo's position, while the quality preference picks
+ * the URL saved for that photo. Document order is what makes carousel ordering stable,
+ * since querySelectorAll returns it and it matches how the slides read on the page.
+ * Selecting after grouping also prevents the first thumbnail rendition from hiding a
+ * larger rendition of the same photo.
  *
  * A carousel that carries the same picture on two slides is expected to keep both,
  * since the key is the URL and the two slides are two uploads. That rests on a CDN path
@@ -79,27 +80,37 @@ export function upgradeImageUrl(url, imgElement, preference = 'largest') {
  *   free index, and how many usable images the DOM offered before deduping
  */
 export function buildImageItems(images, shortcode, startIndex = 1, preference = 'largest') {
-  const items = [];
-  const seen = new Set();
-  let index = startIndex;
+  const variantsByIdentity = new Map();
   let considered = 0;
 
   for (const img of images) {
     const url = upgradeImageUrl(img?.src, img, preference);
     if (!url) continue;
     considered++;
-    if (seen.has(url)) continue;
-    seen.add(url);
-
-    items.push(withItemMeta({
-      url,
-      type: 'image',
-      filename: shortcode ? `post_${shortcode}_${index}` : null,
-    }, { postId: shortcode }));
-    index++;
+    const identity = imageQueryDedupeKey(url);
+    const variants = variantsByIdentity.get(identity) || [];
+    if (!variants.some((variant) => variant.url === url)) {
+      variants.push({ url, width: imageVariantWidth(url) });
+      variantsByIdentity.set(identity, variants);
+    }
   }
 
-  return { items, index, considered };
+  const items = [...variantsByIdentity.values()].map((variants, offset) => {
+    const url = selectByQuality(variants, (variant) => variant.width, preference);
+    return withItemMeta({
+      url,
+      type: 'image',
+      filename: shortcode ? `post_${shortcode}_${startIndex + offset}` : null,
+    }, { postId: shortcode });
+  });
+
+  return { items, index: startIndex + items.length, considered };
+}
+
+function imageVariantWidth(url) {
+  const parsed = new URL(url);
+  return Number(parsed.pathname.match(/\/s(\d+)x\d+\//)?.[1]
+    || parsed.searchParams.get('stp')?.match(/(?:^|_)[sp](\d+)x\d+(?=_|$)/)?.[1]) || Infinity;
 }
 
 /**
@@ -109,8 +120,8 @@ export function buildImageItems(images, shortcode, startIndex = 1, preference = 
  * enumeration #46 is about. The old guard compared a raw captured URL against the
  * upgraded URLs already in `items`, so it never matched: one photo could arrive as its
  * DOM entry plus two captured renditions and save three times. Normalizing an identity
- * first makes the comparison meaningful; the historical setting removes the size
- * segment, while a capped setting selects from the captured renditions.
+ * first makes the comparison meaningful. Only the identity key loses path sizes
+ * and stp dimensions; every quality setting selects an original captured URL.
  *
  * upgradeImageUrl also carries the host check, which is stricter than the substring
  * test this replaced: `evilcdninstagram.com` contains `cdninstagram.com`. Nothing was
@@ -135,7 +146,7 @@ export function buildImageItems(images, shortcode, startIndex = 1, preference = 
  * time. Passing null for the element runs both through the stripping branch, which
  * leaves the per-media id intact, so two different photos still read as different.
  * The asymmetry belongs to the normalizer and is filed as #70; this function only keeps
- * it out of the comparison. A capped result still uses a URL Chrome actually captured.
+ * it out of the comparison. Every result uses a URL Chrome actually captured.
  *
  * @param {Array<object>} items items already found in the DOM
  * @param {Array<{url: string, type: string}>} captured page-wide captures
@@ -154,21 +165,21 @@ export function mergeCapturedImages(
   limit = 10,
   preference = 'largest',
 ) {
-  const seen = new Set(items.map((i) => upgradeImageUrl(i.url, null)).filter(Boolean));
+  const seen = new Set(items.map((i) => upgradeImageUrl(i.url, null)).filter(Boolean).map(imageQueryDedupeKey));
   // A Map keeps insertion order, so deleting before setting moves a repeated capture to
   // the end and leaves the keys in last-seen order.
   const lastSeen = new Map();
 
   for (const c of captured) {
     if (c?.type !== 'image') continue;
-    const identity = upgradeImageUrl(c.url, null);
-    if (!identity) continue;
+    const upgraded = upgradeImageUrl(c.url, null);
+    if (!upgraded) continue;
+    const identity = imageQueryDedupeKey(upgraded);
     if (seen.has(identity)) continue;
 
     const variants = lastSeen.get(identity) || [];
     if (!variants.some((variant) => variant.url === c.url)) {
-      const width = Number(c.url.match(/\/s(\d+)x\d+\//)?.[1]) || Infinity;
-      variants.push({ url: c.url, width });
+      variants.push({ url: c.url, width: imageVariantWidth(c.url) });
     }
     lastSeen.delete(identity);
     lastSeen.set(identity, variants);
@@ -179,13 +190,9 @@ export function mergeCapturedImages(
 
   let index = startIndex;
   const merged = [...items];
-  for (const [identity, variants] of kept) {
-    // The historical "largest" behavior removes the size segment. A capped
-    // preference instead chooses among the renditions Chrome actually captured;
-    // inventing a CDN size that was never observed would make the URL unreliable.
-    const url = preference === 'largest'
-      ? identity
-      : selectByQuality(variants, (variant) => variant.width, preference);
+  for (const [, variants] of kept) {
+    // Identity normalization must never rewrite a signed URL Chrome captured.
+    const url = selectByQuality(variants, (variant) => variant.width, preference);
     merged.push({
       url,
       type: 'image',
