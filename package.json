@@ -6,6 +6,9 @@
     "itemId": "llbpeneloehnlaomolbalbmhjncpmnfa"
   },
   "type": "module",
+  "engines": {
+    "node": "^20.19.0 || ^22.13.0 || >=24.0.0"
+  },
   "scripts": {
     "build": "node build.js",
     "build:zip": "node build.js --zip",
@@ -15,12 +18,12 @@
     "publish:cws": "node publish-cws.js"
   },
   "devDependencies": {
-    "@eslint/js": "^9.0.0",
+    "@eslint/js": "^10.0.1",
     "client-zip": "^2.5.0",
-    "esbuild": "^0.24.0",
-    "eslint": "^9.0.0",
+    "esbuild": "^0.28.2",
+    "eslint": "^10.10.0",
     "fflate": "^0.8.2",
     "playwright-core": "^1.58.2",
-    "vitest": "^3.0.0"
+    "vitest": "^4.1.11"
   }
 }
