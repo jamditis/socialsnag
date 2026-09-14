@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   upgradeImageUrl,
   filterCapturedVideos,
+  selectCapturedVideo,
   isTwitterStatusHref,
   insideQuotedTweet,
   findTweetScope,
@@ -771,5 +772,45 @@ describe('resolveSingle', () => {
     const items = resolveSingle('', quotedText, { allowFallback: false });
     expect(items.some((i) => i.url.includes('MAIN.jpg'))).toBe(false);
     expect(items).toEqual([]);
+  });
+});
+
+
+describe('captured X video quality', () => {
+  const capture = (id, width, timestamp) => ({
+    url: `https://video.twimg.com/ext_tw_video/${id}/pu/vid/${width}x400/file.mp4`,
+    timestamp,
+  });
+  const captures = [capture('111', 1280, 1), capture('111', 640, 2),
+    capture('222', 1280, 3), capture('222', 320, 4)];
+  const target = () => {
+    const video = makeNode({ tag: 'VIDEO', src: 'blob:https://x.com/video' });
+    video.poster = 'https://pbs.twimg.com/ext_tw_video_thumb/111/pu/img/poster.jpg';
+    makeNode({ is: ['article[data-testid="tweet"]'], children: [video] });
+    return video;
+  };
+
+  it('caps only the clicked video asset, not a newer autoplaying tweet', () => {
+    expect(selectCapturedVideo(captures, target(), { maxWidth: 720 })).toBe(captures[1].url);
+  });
+  it('keeps largest behavior and uncorrelated private-video fallback unchanged', () => {
+    expect(selectCapturedVideo(captures, target())).toBe(captures[3].url);
+    const video = target();
+    video.poster = '';
+    expect(selectCapturedVideo(captures, video, { maxWidth: 720 })).toBe(captures[3].url);
+  });
+  it('never uses another asset to satisfy a cap below all matching renditions', () => {
+    expect(selectCapturedVideo(captures, target(), { maxWidth: 400 })).toBe(captures[1].url);
+  });
+  it('passes the saved preference through content-message resolution', async () => {
+    const original = chrome.runtime.sendMessage;
+    chrome.runtime.sendMessage = (_message, callback) => callback({ urls: captures });
+    try {
+      for (const type of ['single', 'all']) {
+        const items = await resolveContentMessage({ action: 'resolve', type,
+          preference: { maxWidth: 720 } }, target(), {});
+        expect(items[0].url).toBe(captures[1].url);
+      }
+    } finally { chrome.runtime.sendMessage = original; }
   });
 });

@@ -624,6 +624,17 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     return;
   }
 
+  if (isCopy && platform === 'instagram') {
+    let ref = null;
+    try {
+      ref = extractHighlightRef(new URL(info.pageUrl || tab.url).pathname);
+    } catch { /* The resolution path below handles invalid page URLs. */ }
+    if (ref && !ref.itemId) {
+      showNotification('Cannot identify the viewed highlight item. Open an individual item link to copy its media URL.');
+      return;
+    }
+  }
+
   // Copy needs clipboardWrite (optional, so the 1.2 update installs silently for
   // users who never copy). Request it here, BEFORE the first await: a context-menu
   // click is a user gesture, but crossing an async boundary can drop that
@@ -687,6 +698,9 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
         // "single" grabs the viewed item; "all" grabs the whole highlight.
         const ref = type === 'all' ? { ...highlightRef, itemId: null } : highlightRef;
         const highlights = await resolveInstagramHighlights(ref, resolveOptions);
+        if (type === 'single' && !ref.itemId && highlights.items?.length) {
+          showNotification('Cannot identify the viewed item. Downloading the whole highlight.');
+        }
         if (highlights.items) response = { urls: highlights.items, platform };
         else if (highlights.error) igError = highlights.error;
       }
