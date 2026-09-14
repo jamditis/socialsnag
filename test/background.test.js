@@ -3750,6 +3750,7 @@ describe('whole-highlight context actions', () => {
   afterEach(() => resetFetch());
   it.each(['single', 'all', 'copy'])('handles %s without silently selecting the first item', async (action) => {
     const events = [];
+    const permission = vi.spyOn(chrome.permissions, 'request');
     installFetch((url) => url.includes('reels_media')
       ? { status: 200, json: { reels_media: [{ items: [
         igStoryImg('900', 'https://cdn.cdninstagram.com/a.jpg'),
@@ -3768,12 +3769,13 @@ describe('whole-highlight context actions', () => {
       await chrome.contextMenus.onClicked._listeners[0]({ menuItemId, pageUrl }, { id: 1, url: pageUrl });
       if (action === 'copy') {
         expect(download).not.toHaveBeenCalled();
+        expect(permission).not.toHaveBeenCalled();
         expect(events[0]).toContain('Open an individual item link');
       } else {
         expect(download).toHaveBeenCalledTimes(2);
         if (action === 'single') expect(events[0]).toContain('Downloading the whole highlight');
         else expect(events).not.toContain('Cannot identify the viewed item. Downloading the whole highlight.');
       }
-    } finally { notify.mockRestore(); download.mockRestore(); }
+    } finally { notify.mockRestore(); download.mockRestore(); permission.mockRestore(); }
   });
 });
