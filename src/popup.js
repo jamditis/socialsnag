@@ -21,6 +21,11 @@ function initPopup() {
     { id: 'bluesky', label: 'Bluesky' },
   ];
 
+  const OPTIONAL_PLATFORMS = [
+    { id: 'linkedin', label: 'LinkedIn', origins: ['*://*.linkedin.com/*', '*://*.media.licdn.com/*'] },
+  ];
+  let statusRender = 0;
+
   function svgEl(tag, attrs, children) {
     const el = document.createElementNS(NS, tag);
     if (attrs) {
@@ -56,18 +61,33 @@ function initPopup() {
         svgEl('path', { d: 'M12 3c2.5 2 7 5.5 7 9a4 4 0 01-4.5 4c-1 0-1.8-.4-2.5-1 .7.6 1.5 1 2.5 1A4 4 0 0019 12c0-3.5-4.5-7-7-9z', fill: 'currentColor', stroke: 'none' }),
       ]);
     }
+    if (platform === 'linkedin') {
+      return svgEl('svg', { viewBox: '0 0 24 24', fill: 'currentColor' }, [
+        svgEl('circle', { cx: '5', cy: '5', r: '2' }),
+        svgEl('path', { d: 'M3 9h4v12H3zM10 9h4v2c1-2 7-4 7 4v6h-4v-6c0-3-3-3-3 0v6h-4z' }),
+      ]);
+    }
     return null;
   }
 
   async function renderStatus() {
+    const render = ++statusRender;
     const container = document.getElementById('status-grid');
     const defaults = {};
     CORE_PLATFORMS.forEach((p) => { defaults[`platform_${p.id}`] = true; });
     const settings = await chrome.storage.sync.get(defaults);
 
+    const optional = await Promise.all(OPTIONAL_PLATFORMS.map(async (platform) => {
+      try {
+        return await chrome.permissions.contains({ origins: platform.origins }) ? platform : null;
+      } catch {
+        return null;
+      }
+    }));
+    if (render !== statusRender) return;
     container.textContent = '';
-    CORE_PLATFORMS.forEach((p) => {
-      const enabled = settings[`platform_${p.id}`];
+    [...CORE_PLATFORMS, ...optional.filter(Boolean)].forEach((p) => {
+      const enabled = p.origins ? true : settings[`platform_${p.id}`];
       const item = document.createElement('div');
       item.className = `status-item${enabled ? '' : ' disabled'}`;
 
@@ -142,6 +162,8 @@ function initPopup() {
 
   document.addEventListener('DOMContentLoaded', async () => {
     document.querySelector('.version').textContent = `v${chrome.runtime.getManifest().version}`;
+    chrome.permissions.onAdded.addListener(renderStatus);
+    chrome.permissions.onRemoved.addListener(renderStatus);
     await renderStatus();
     await renderHistory();
 

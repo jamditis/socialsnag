@@ -4,6 +4,7 @@ import {
   extractPostId,
   buildImageItems,
   resolveSingle,
+  resolveAll,
 } from '../src/platforms/linkedin.js';
 
 describe('upgradeUrl', () => {
@@ -249,4 +250,52 @@ describe('resolveSingle', () => {
       globalThis.window = originalWindow;
     }
   });
+});
+
+describe('video download allowlist', () => {
+  it.each([
+    'https://dms.licdn.com/video.mp4',
+    'https://media.licdn.com.attacker.example/video.mp4',
+    'http://media.licdn.com/video.mp4',
+    'blob:https://www.linkedin.com/fixture',
+  ])('does not collect an undownloadable single video: %s', (src) => {
+    const target = { tagName: 'VIDEO', src, parentElement: null, matches: () => false, closest: () => null };
+    const priorWindow = globalThis.window;
+    globalThis.window = { location: { href: 'https://www.linkedin.com/feed/' } };
+    try { expect(resolveSingle('', target)).toEqual([]); }
+    finally { globalThis.window = priorWindow; }
+  });
+});
+
+
+it('filters and deduplicates the video sweep before assigning numbers', () => {
+  const urls = [
+    'https://dms.licdn.com/blocked.mp4',
+    'https://media.licdn.com/first.mp4',
+    'https://media.licdn.com/first.mp4',
+    'http://media.licdn.com/insecure.mp4',
+    'https://static.media.licdn.com/second.mp4',
+  ];
+  const post = {
+    matches: () => true,
+    dataset: {},
+    getAttribute: () => null,
+    querySelectorAll: (selector) => selector === 'video'
+      ? urls.map((src) => ({ src })) : selector.startsWith('img')
+        ? [{ src: 'https://media.licdn.com/photo.jpg', width: 400 }] : [],
+  };
+  const priorWindow = globalThis.window;
+  globalThis.window = { location: { href: 'https://www.linkedin.com/posts/example-activity-123-test/' } };
+  try {
+    expect(resolveAll(post).map(({ url, filename }) => ({ url, filename }))).toEqual([
+      { url: 'https://media.licdn.com/photo.jpg', filename: 'post_123_1' },
+      { url: urls[1], filename: 'post_123_2' },
+      { url: urls[4], filename: 'post_123_3' },
+    ]);
+  } finally { globalThis.window = priorWindow; }
+});
+
+
+it('rejects an insecure CDN source before classifying clicked media', () => {
+  expect(upgradeUrl('http://media.licdn.com/video.mp4')).toBeNull();
 });

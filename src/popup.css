@@ -88,6 +88,7 @@ main {
 
 .status-grid {
   display: flex;
+  flex-wrap: wrap;
   gap: 12px;
 }
 
@@ -218,6 +219,10 @@ main {
 
 .file-icon.bluesky {
   background: #0085ff;
+}
+
+.file-icon.linkedin {
+  background: #0a66c2;
 }
 
 .file-details {
