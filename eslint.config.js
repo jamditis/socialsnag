@@ -25,6 +25,7 @@ export default [
       'no-eval': 'error',
       'no-implied-eval': 'error',
       'no-control-regex': 'off',
+      'no-useless-assignment': 'off',
       'no-unused-vars': ['error', { caughtErrors: 'none' }],
     },
   },
