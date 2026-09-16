@@ -29,54 +29,31 @@ export function upgradeImageUrl(url, imgElement, preference = 'largest') {
   return url.replace(/\/s\d+x\d+\//, '/');
 }
 
+// Known Instagram photo filenames keep their path across grid and carousel renders.
+// Only the identity drops their query; the selected download URL keeps it. Unknown
+// filenames retain the caller's URL key so their existing behavior stays intact.
+function imageDedupeKey(url) {
+  const upgraded = upgradeImageUrl(url, null);
+  if (!upgraded) return null;
+  const parsed = new URL(upgraded);
+  const knownPhoto = /\/\d+_\d{10,}_\d+_n\.[a-z0-9]+$/i.test(parsed.pathname);
+  return knownPhoto ? `photo:${parsed.origin}${parsed.pathname}` : `url:${url}`;
+}
+
+function capturedImageWidth(url) {
+  const parsed = new URL(url);
+  const pathWidth = parsed.pathname.match(/\/s(\d+)x\d+\//)?.[1];
+  const queryWidth = parsed.searchParams.get('stp')?.match(/(?:^|_)[sp](\d+)x\d+(?:_|$)/)?.[1];
+  return Number(pathWidth || queryWidth) || Infinity;
+}
+
 /**
- * Turn a post's <img> elements into download items, in document order.
+ * Build image items in document order. The first rendition keeps its position
+ * and selected download URL; repeats spend no filename index.
  *
- * Deduping is the point, and it is not defensive. upgradeImageUrl is a normalizer, so
- * it manufactures the duplicates itself. Measured against the real function, both of
- * its branches collapse a carousel slide's variants to one URL:
- *
- *   no srcset   `/s150x150/AAA_n.jpg` and `/s640x640/AAA_n.jpg` both strip to
- *               `/AAA_n.jpg`, so the grid thumbnail and the full view become one URL
- *   srcset      two <img> for one slide carry the same srcset, so both return that
- *               srcset's widest candidate
- *
- * Instagram renders both for a single slide, so without a dedupe the `_${index}`
- * suffix hides the repeat: one photo saved twice reads as a two-photo carousel.
- *
- * The collapse is partial, and the seam is worth naming rather than implying. The
- * srcset branch returns its winner untouched while the fallback strips the size
- * segment, so one <img> with a srcset and one without, for the same photo, upgrade to
- * `/s1080x1080/AAA_n.jpg` and `/AAA_n.jpg` and survive as two items. That is a
- * normalizer inconsistency, not a dedupe one (#70).
- *
- * The first variant seen wins, which keeps document order intact. Document order is
- * what makes carousel ordering stable, since querySelectorAll returns it and it
- * matches how the slides read on the page. facebook.js:buildImageItems makes the same
- * call for the same reason; its capture-order sibling deliberately breaks the tie the
- * other way, which is why this lives per platform rather than in common.js.
- *
- * A carousel that carries the same picture on two slides is expected to keep both,
- * since the key is the URL and the two slides are two uploads. That rests on a CDN path
- * naming an upload rather than an image, which is an inference rather than something
- * this repo proves: facebook.js:extractPhotoId reads a per-media numeric id out of an
- * fbcdn path, and cdninstagram paths are shaped the same way. If it turns out a repeat
- * can share a URL, the collapse there is the cost of collapsing size variants, which is
- * the case that actually has a duplicate to lose.
- *
- * `considered` counts the images the DOM offered, before the dedupe. resolveAll needs
- * it: it reads a small item count as a sparse DOM and goes to the page-wide webRequest
- * captures for more, and those captures span neighbouring posts. Reading the deduped
- * count there would turn the ordinary single-photo post, the one Instagram renders at
- * two sizes, into a sparse DOM and pull a stranger's photos into the download. The
- * dedupe is allowed to change what gets saved; it is not allowed to change what the
- * page looked like.
- *
- * @param {Array<{src: string, srcset?: string}>} images
- * @param {string|null} shortcode post shortcode, for the filename
- * @param {number} startIndex first filename suffix to use
- * @returns {{items: Array<object>, index: number, considered: number}} items, the next
- *   free index, and how many usable images the DOM offered before deduping
+ * `considered` counts usable images before deduping. resolveAll uses that count
+ * for its sparse-DOM guard because page-wide captures can include other posts.
+ * Changing the download count must not change what the DOM offered.
  */
 export function buildImageItems(images, shortcode, startIndex = 1, preference = 'largest') {
   const items = [];
@@ -88,8 +65,9 @@ export function buildImageItems(images, shortcode, startIndex = 1, preference = 
     const url = upgradeImageUrl(img?.src, img, preference);
     if (!url) continue;
     considered++;
-    if (seen.has(url)) continue;
-    seen.add(url);
+    const key = imageDedupeKey(url);
+    if (seen.has(key)) continue;
+    seen.add(key);
 
     items.push(withItemMeta({
       url,
@@ -103,48 +81,13 @@ export function buildImageItems(images, shortcode, startIndex = 1, preference = 
 }
 
 /**
- * Merge page-wide webRequest captures into a DOM result that came back sparse.
+ * Merge page-wide captures into a sparse DOM result. Compare photo identities,
+ * then keep the most recently requested distinct photos within the capture cap.
+ * A repeat moves to the end without discarding its larger captured rendition.
  *
- * The same dedupe as buildImageItems, for the same reason, on the other half of the
- * enumeration #46 is about. The old guard compared a raw captured URL against the
- * upgraded URLs already in `items`, so it never matched: one photo could arrive as its
- * DOM entry plus two captured renditions and save three times. Normalizing an identity
- * first makes the comparison meaningful; the historical setting removes the size
- * segment, while a capped setting selects from the captured renditions.
- *
- * upgradeImageUrl also carries the host check, which is stricter than the substring
- * test this replaced: `evilcdninstagram.com` contains `cdninstagram.com`. Nothing was
- * downloadable from it, since background.js blocks the host at download time, but it
- * could spend a slot and surface a failed download.
- *
- * Dedupe first, then cap, so the cap is spent on distinct photos rather than on repeats
- * of one. facebook.js:buildCapturedItems orders it the same way and says why. The cap
- * exists because captures are page-wide: they include media from neighbouring posts and
- * ads, which is also why resolveAll only reaches for them when the DOM had nothing.
- *
- * Capture order is network arrival order rather than page order, so the last ones are
- * the likeliest to belong to the post just opened. That is why the cap keeps the tail,
- * and why a repeat has to move to the end rather than hold its first position: a photo
- * requested again as this post opened belongs to this post, whatever a neighbour did
- * with it earlier. The Map delete-then-set is facebook.js:buildCapturedItems' pattern.
- *
- * Both sides go through the same branch of upgradeImageUrl before they are compared.
- * A DOM item that came from the srcset branch keeps its
- * size segment, since that branch returns its winner untouched, while a capture of the
- * same photo has been stripped. Comparing those raw would append the photo a second
- * time. Passing null for the element runs both through the stripping branch, which
- * leaves the per-media id intact, so two different photos still read as different.
- * The asymmetry belongs to the normalizer and is filed as #70; this function only keeps
- * it out of the comparison. A capped result still uses a URL Chrome actually captured.
- *
- * @param {Array<object>} items items already found in the DOM
- * @param {Array<{url: string, type: string}>} captured page-wide captures
- * @param {string|null} shortcode post shortcode, for the filename
- * @param {number} startIndex first filename suffix to use
- * @param {number} limit most captures to append
- * @param {'largest'|{maxWidth: number}} preference requested image quality
- * @returns {{items: Array<object>, index: number, dropped: number}} merged list, next
- *   free index, and how many distinct captures the cap left out
+ * The historical largest setting still strips a path size from its chosen URL.
+ * Capped settings keep the raw captured URL. Query tokens stay intact in both
+ * cases; URL identity must never become the download URL.
  */
 export function mergeCapturedImages(
   items,
@@ -154,20 +97,20 @@ export function mergeCapturedImages(
   limit = 10,
   preference = 'largest',
 ) {
-  const seen = new Set(items.map((i) => upgradeImageUrl(i.url, null)).filter(Boolean));
+  const seen = new Set(items.map((i) => imageDedupeKey(upgradeImageUrl(i.url, null))).filter(Boolean));
   // A Map keeps insertion order, so deleting before setting moves a repeated capture to
   // the end and leaves the keys in last-seen order.
   const lastSeen = new Map();
 
   for (const c of captured) {
     if (c?.type !== 'image') continue;
-    const identity = upgradeImageUrl(c.url, null);
+    const identity = imageDedupeKey(upgradeImageUrl(c.url, null));
     if (!identity) continue;
     if (seen.has(identity)) continue;
 
     const variants = lastSeen.get(identity) || [];
     if (!variants.some((variant) => variant.url === c.url)) {
-      const width = Number(c.url.match(/\/s(\d+)x\d+\//)?.[1]) || Infinity;
+      const width = capturedImageWidth(c.url);
       variants.push({ url: c.url, width });
     }
     lastSeen.delete(identity);
@@ -179,13 +122,12 @@ export function mergeCapturedImages(
 
   let index = startIndex;
   const merged = [...items];
-  for (const [identity, variants] of kept) {
+  for (const [, variants] of kept) {
     // The historical "largest" behavior removes the size segment. A capped
     // preference instead chooses among the renditions Chrome actually captured;
     // inventing a CDN size that was never observed would make the URL unreliable.
-    const url = preference === 'largest'
-      ? identity
-      : selectByQuality(variants, (variant) => variant.width, preference);
+    const selected = selectByQuality(variants, (variant) => variant.width, preference);
+    const url = preference === 'largest' ? upgradeImageUrl(selected, null) : selected;
     merged.push({
       url,
       type: 'image',

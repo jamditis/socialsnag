@@ -365,6 +365,34 @@ describe('resolveSingle', () => {
 const CDN = 'https://scontent.cdninstagram.com/v/t51.2885-15';
 
 describe('buildImageItems', () => {
+  // Filename and stp shapes observed on instagram's public carousel DcgYclUEV18.
+  // Signature values are synthetic; these tests never depend on expiring URLs.
+  const photo = `${CDN}/787044904_18786834754001321_3898611995126823522_n.jpg`;
+  const thumbnail = `${photo}?stp=dst-jpg_e35_s640x640_tt6&oh=THUMB&oe=111`;
+  const full = `${photo}?stp=dst-jpg_e35_tt6&oh=FULL&oe=222`;
+
+  it('dedupes known-photo query variants without changing the first download URL or DOM count', () => {
+    const { items, index, considered } = buildImageItems([
+      { src: thumbnail }, { src: full },
+      { src: `${CDN}/786993048_18786834745001321_1238346926602814146_n.jpg?stp=dst-jpg_e35_tt6` },
+    ], 'CxYz1', 4);
+    expect(items).toHaveLength(2);
+    expect(items[0].url).toBe(thumbnail);
+    expect(items.map(item => item.filename)).toEqual(['post_CxYz1_4', 'post_CxYz1_5']);
+    expect(considered).toBe(3);
+    expect(index).toBe(6);
+  });
+
+  it('retains query-sensitive identity for unknown filenames and separate paths', () => {
+    const { items } = buildImageItems([
+      { src: `${CDN}/unknown.jpg?stp=dst-jpg_s150x150` },
+      { src: `${CDN}/unknown.jpg?stp=dst-jpg_s640x640` },
+      { src: thumbnail },
+      { src: thumbnail.replace('/v/t51.2885-15/', '/other/') },
+    ], 'CxYz1');
+    expect(items).toHaveLength(4);
+  });
+
   // The first task #46 names: find out whether upgradeImageUrl collapses Instagram's
   // size variants the way Facebook's does, since that is what decides whether the
   // missing dedupe permits duplicates or produces them. These two answer it, and the
@@ -441,8 +469,8 @@ describe('buildImageItems', () => {
   });
 
   // Two media ids stay two items. Named for the ids rather than for the pictures,
-  // because that is what this can check: whether a repeated picture reaches the DOM as
-  // two ids is a claim about the CDN, and the buildImageItems comment says so.
+  // because these fixtures check two ids, not whether a CDN gives a repeated
+  // picture two different ids.
   it('keeps two images that differ only in their media id', () => {
     const { items } = buildImageItems([
       { src: `${CDN}/s640x640/17912345678901234_n.jpg` },
@@ -505,6 +533,52 @@ describe('buildImageItems', () => {
 });
 
 describe('mergeCapturedImages', () => {
+  const photo = `${CDN}/787044904_18786834754001321_3898611995126823522_n.jpg`;
+  const thumbnail = `${photo}?stp=dst-jpg_e35_s640x640_tt6&oh=THUMB&oe=111`;
+  const full = `${photo}?stp=dst-jpg_e35_tt6&oh=FULL&oe=222`;
+
+  it('keeps the largest known-photo query rendition after a later thumbnail repeat', () => {
+    const { items } = mergeCapturedImages([], [
+      { url: thumbnail, type: 'image' },
+      { url: full, type: 'image' },
+      { url: thumbnail, type: 'image' },
+    ], 'CxYz1');
+    expect(items.map(item => item.url)).toEqual([full]);
+  });
+
+  it('selects the captured query rendition under the width cap with its signature intact', () => {
+    const { items } = mergeCapturedImages([], [
+      { url: full, type: 'image' }, { url: thumbnail, type: 'image' },
+    ], 'CxYz1', 1, 10, { maxWidth: 720 });
+    expect(items.map(item => item.url)).toEqual([thumbnail]);
+  });
+
+  it('does not re-add a DOM photo with a different query rendition', () => {
+    const dom = { url: full, type: 'image', filename: 'post_CxYz1_1' };
+    const result = mergeCapturedImages([dom], [{ url: thumbnail, type: 'image' }], 'CxYz1', 2);
+    expect(result.items).toEqual([dom]);
+    expect(result.index).toBe(2);
+  });
+
+  it('spends the capture cap on distinct query photos and keeps repeat recency', () => {
+    const second = `${CDN}/786993048_18786834745001321_1238346926602814146_n.jpg`;
+    const { items, dropped, index } = mergeCapturedImages([], [
+      { url: full, type: 'image' }, { url: second, type: 'image' },
+      { url: thumbnail, type: 'image' },
+    ], 'CxYz1', 3, 1);
+    expect(items.map(item => item.url)).toEqual([full]);
+    expect(dropped).toBe(1);
+    expect(index).toBe(4);
+  });
+
+  it('reads an encoded p-width token without rewriting its download query', () => {
+    const small = `${photo}?stp=dst-jpg%5Fp320x320%5Ftt6&oh=KEEP`;
+    const { items } = mergeCapturedImages([], [
+      { url: full, type: 'image' }, { url: small, type: 'image' },
+    ], 'CxYz1', 1, 10, { maxWidth: 720 });
+    expect(items.map(item => item.url)).toEqual([small]);
+  });
+
   const domItem = { url: `${CDN}/AAA_n.jpg`, type: 'image', filename: 'post_CxYz1_1' };
 
   // The defect this replaced: the old guard compared a raw captured URL against the
