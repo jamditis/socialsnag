@@ -371,16 +371,33 @@ describe('buildImageItems', () => {
   const thumbnail = `${photo}?stp=dst-jpg_e35_s640x640_tt6&oh=THUMB&oe=111`;
   const full = `${photo}?stp=dst-jpg_e35_tt6&oh=FULL&oe=222`;
 
-  it('dedupes known-photo query variants without changing the first download URL or DOM count', () => {
+  it('dedupes known-photo query variants while keeping the best download URL and DOM count', () => {
     const { items, index, considered } = buildImageItems([
       { src: thumbnail }, { src: full },
       { src: `${CDN}/786993048_18786834745001321_1238346926602814146_n.jpg?stp=dst-jpg_e35_tt6` },
     ], 'CxYz1', 4);
     expect(items).toHaveLength(2);
-    expect(items[0].url).toBe(thumbnail);
+    expect(items[0].url).toBe(full);
     expect(items.map(item => item.filename)).toEqual(['post_CxYz1_4', 'post_CxYz1_5']);
     expect(considered).toBe(3);
     expect(index).toBe(6);
+  });
+
+  it('keeps the best known-photo query rendition under the selected width cap', () => {
+    const { items } = buildImageItems([
+      { src: thumbnail }, { src: full },
+    ], 'CxYz1', 1, { maxWidth: 720 });
+
+    expect(items[0].url).toBe(thumbnail);
+  });
+
+  it('keeps the latest signature when the same DOM width repeats', () => {
+    const refreshed = thumbnail.replace('oh=THUMB&oe=111', 'oh=FRESH&oe=333');
+    const { items } = buildImageItems([
+      { src: thumbnail }, { src: refreshed },
+    ], 'CxYz1');
+
+    expect(items[0].url).toBe(refreshed);
   });
 
   it('retains query-sensitive identity for unknown filenames and separate paths', () => {
@@ -544,6 +561,16 @@ describe('mergeCapturedImages', () => {
       { url: thumbnail, type: 'image' },
     ], 'CxYz1');
     expect(items.map(item => item.url)).toEqual([full]);
+  });
+
+  it('keeps the latest signature when the same captured width repeats', () => {
+    const refreshed = thumbnail.replace('oh=THUMB&oe=111', 'oh=FRESH&oe=333');
+    const { items } = mergeCapturedImages([], [
+      { url: thumbnail, type: 'image' },
+      { url: refreshed, type: 'image' },
+    ], 'CxYz1');
+
+    expect(items.map(item => item.url)).toEqual([refreshed]);
   });
 
   it('selects the captured query rendition under the width cap with its signature intact', () => {

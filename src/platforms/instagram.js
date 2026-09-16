@@ -49,7 +49,8 @@ function capturedImageWidth(url) {
 
 /**
  * Build image items in document order. The first rendition keeps its position
- * and selected download URL; repeats spend no filename index.
+ * and metadata; a later repeat can replace its URL when it better matches the
+ * quality preference or refreshes an equal-width signature.
  *
  * `considered` counts usable images before deduping. resolveAll uses that count
  * for its sparse-DOM guard because page-wide captures can include other posts.
@@ -57,7 +58,7 @@ function capturedImageWidth(url) {
  */
 export function buildImageItems(images, shortcode, startIndex = 1, preference = 'largest') {
   const items = [];
-  const seen = new Set();
+  const itemIndexByIdentity = new Map();
   let index = startIndex;
   let considered = 0;
 
@@ -66,8 +67,17 @@ export function buildImageItems(images, shortcode, startIndex = 1, preference = 
     if (!url) continue;
     considered++;
     const key = imageDedupeKey(url);
-    if (seen.has(key)) continue;
-    seen.add(key);
+    if (itemIndexByIdentity.has(key)) {
+      const itemIndex = itemIndexByIdentity.get(key);
+      const currentUrl = items[itemIndex].url;
+      const selectedUrl = selectByQuality([
+        { url, width: capturedImageWidth(url) },
+        { url: currentUrl, width: capturedImageWidth(currentUrl) },
+      ], (candidate) => candidate.width, preference);
+      items[itemIndex] = { ...items[itemIndex], url: selectedUrl };
+      continue;
+    }
+    itemIndexByIdentity.set(key, items.length);
 
     items.push(withItemMeta({
       url,
@@ -109,10 +119,10 @@ export function mergeCapturedImages(
     if (seen.has(identity)) continue;
 
     const variants = lastSeen.get(identity) || [];
-    if (!variants.some((variant) => variant.url === c.url)) {
-      const width = capturedImageWidth(c.url);
-      variants.push({ url: c.url, width });
-    }
+    const width = capturedImageWidth(c.url);
+    const sameWidthIndex = variants.findIndex((variant) => variant.width === width);
+    if (sameWidthIndex === -1) variants.push({ url: c.url, width });
+    else variants[sameWidthIndex] = { url: c.url, width };
     lastSeen.delete(identity);
     lastSeen.set(identity, variants);
   }
