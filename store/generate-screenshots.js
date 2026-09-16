@@ -218,6 +218,7 @@ const optionsPage = `<!DOCTYPE html>
       <div class="toggle-row"><span class="toggle-label">Twitter / X</span><div class="switch on"><div class="knob"></div></div></div>
       <div class="toggle-row"><span class="toggle-label">Facebook</span><div class="switch on"><div class="knob"></div></div></div>
       <div class="toggle-row"><span class="toggle-label">Bluesky</span><div class="switch on"><div class="knob"></div></div></div>
+      <div class="toggle-row"><span class="toggle-label">LinkedIn <small>(asks for site access)</small></span><div class="switch"><div class="knob"></div></div></div>
     </div>
     <div class="card">
       <h2>Advanced modes</h2>
@@ -226,7 +227,7 @@ const optionsPage = `<!DOCTYPE html>
         <div class="switch"><div class="knob"></div></div>
       </div>
       <div class="toggle-row disabled">
-        <div><span class="toggle-label">LinkedIn &amp; TikTok</span><div class="coming-soon">Coming soon</div></div>
+        <div><span class="toggle-label">TikTok</span><div class="coming-soon">Coming soon</div></div>
         <div class="switch"><div class="knob"></div></div>
       </div>
     </div>
