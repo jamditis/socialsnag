@@ -47,6 +47,36 @@ function capturedImageWidth(url) {
   return Number(pathWidth || queryWidth) || Infinity;
 }
 
+// Instagram `oe` is a hex Unix timestamp. Fixture values like `oe=111` are not
+// real expiries; only timestamps in the unix-seconds range are treated as live.
+function instagramExpiryMs(url) {
+  try {
+    const oe = new URL(url).searchParams.get('oe');
+    if (!oe) return null;
+    const unix = parseInt(oe, 16);
+    if (!Number.isFinite(unix) || unix < 1_000_000_000) return null;
+    return unix * 1000;
+  } catch {
+    return null;
+  }
+}
+
+function usableVariants(variants, now = Date.now()) {
+  const live = variants.filter((variant) => {
+    const expiry = instagramExpiryMs(variant.url);
+    return expiry == null || expiry > now;
+  });
+  return live.length ? live : variants.slice(-1);
+}
+
+function selectCapturedUrl(variants, preference) {
+  return selectByQuality(
+    usableVariants(variants),
+    (variant) => variant.width,
+    preference,
+  );
+}
+
 /**
  * Build image items in document order. The first rendition keeps its position
  * and metadata; a later repeat can replace its URL when it better matches the
@@ -107,7 +137,12 @@ export function mergeCapturedImages(
   limit = 10,
   preference = 'largest',
 ) {
-  const seen = new Set(items.map((i) => imageDedupeKey(upgradeImageUrl(i.url, null))).filter(Boolean));
+  const merged = items.map((item) => ({ ...item }));
+  const itemIndexByIdentity = new Map();
+  for (let i = 0; i < merged.length; i++) {
+    const identity = imageDedupeKey(upgradeImageUrl(merged[i].url, null));
+    if (identity) itemIndexByIdentity.set(identity, i);
+  }
   // A Map keeps insertion order, so deleting before setting moves a repeated capture to
   // the end and leaves the keys in last-seen order.
   const lastSeen = new Map();
@@ -116,10 +151,20 @@ export function mergeCapturedImages(
     if (c?.type !== 'image') continue;
     const identity = imageDedupeKey(upgradeImageUrl(c.url, null));
     if (!identity) continue;
-    if (seen.has(identity)) continue;
+
+    const width = capturedImageWidth(c.url);
+    const existingIndex = itemIndexByIdentity.get(identity);
+    if (existingIndex !== undefined) {
+      const currentUrl = merged[existingIndex].url;
+      const selectedUrl = selectCapturedUrl([
+        { url: currentUrl, width: capturedImageWidth(currentUrl) },
+        { url: c.url, width },
+      ], preference);
+      merged[existingIndex] = { ...merged[existingIndex], url: selectedUrl };
+      continue;
+    }
 
     const variants = lastSeen.get(identity) || [];
-    const width = capturedImageWidth(c.url);
     const sameWidthIndex = variants.findIndex((variant) => variant.width === width);
     if (sameWidthIndex === -1) variants.push({ url: c.url, width });
     else variants[sameWidthIndex] = { url: c.url, width };
@@ -131,12 +176,11 @@ export function mergeCapturedImages(
   const kept = distinct.slice(-limit);
 
   let index = startIndex;
-  const merged = [...items];
   for (const [, variants] of kept) {
     // The historical "largest" behavior removes the size segment. A capped
     // preference instead chooses among the renditions Chrome actually captured;
     // inventing a CDN size that was never observed would make the URL unreliable.
-    const selected = selectByQuality(variants, (variant) => variant.width, preference);
+    const selected = selectCapturedUrl(variants, preference);
     const url = preference === 'largest' ? upgradeImageUrl(selected, null) : selected;
     merged.push({
       url,

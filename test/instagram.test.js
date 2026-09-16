@@ -741,6 +741,31 @@ describe('mergeCapturedImages', () => {
 
     expect(items[0].url).toBe(`${CDN}/s640x640/BBB_n.jpg`);
   });
+
+  it('discards an expired larger capture in favor of a live smaller rendition', () => {
+    const expiredOe = Math.floor((Date.now() - 3600_000) / 1000).toString(16);
+    const liveOe = Math.floor((Date.now() + 3600_000) / 1000).toString(16);
+    const expiredFull = `${photo}?stp=dst-jpg_e35_tt6&oh=OLD&oe=${expiredOe}`;
+    const liveThumb = `${photo}?stp=dst-jpg_e35_s640x640_tt6&oh=NEW&oe=${liveOe}`;
+    const { items } = mergeCapturedImages([], [
+      { url: expiredFull, type: 'image' },
+      { url: liveThumb, type: 'image' },
+    ], 'CxYz1');
+    expect(items.map((item) => item.url)).toEqual([liveThumb]);
+  });
+
+  it('refreshes a DOM thumbnail from a captured full rendition', () => {
+    const { items, index } = mergeCapturedImages(
+      [{ url: thumbnail, type: 'image', filename: 'post_CxYz1_1' }],
+      [{ url: full, type: 'image' }],
+      'CxYz1',
+      2,
+    );
+    expect(items).toEqual([
+      { url: full, type: 'image', filename: 'post_CxYz1_1' },
+    ]);
+    expect(index).toBe(2);
+  });
 });
 
 describe('extractFromPageJson', () => {
