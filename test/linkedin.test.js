@@ -1,49 +1,53 @@
 import { describe, it, expect } from 'vitest';
 import {
-  upgradeUrl,
+  validateImageUrl,
   extractPostId,
   buildImageItems,
   resolveSingle,
   resolveAll,
 } from '../src/platforms/linkedin.js';
 
-describe('upgradeUrl', () => {
+describe('validateImageUrl', () => {
   it('returns null for null input', () => {
-    expect(upgradeUrl(null)).toBeNull();
+    expect(validateImageUrl(null)).toBeNull();
   });
 
   it('returns null for a non-licdn URL', () => {
-    expect(upgradeUrl('https://example.com/photo.jpg')).toBeNull();
+    expect(validateImageUrl('https://example.com/photo.jpg')).toBeNull();
   });
 
   it('returns null when media.licdn.com appears only in the query, not the host', () => {
-    expect(upgradeUrl('https://evil.com/?u=https://media.licdn.com/x.jpg')).toBeNull();
+    expect(validateImageUrl('https://evil.com/?u=https://media.licdn.com/x.jpg')).toBeNull();
   });
 
   it('returns null for a dot-boundary lookalike host', () => {
-    expect(upgradeUrl('https://media.licdn.com.attacker.com/x.jpg')).toBeNull();
+    expect(validateImageUrl('https://media.licdn.com.attacker.com/x.jpg')).toBeNull();
   });
 
-  it('drops a /shrink_<w>_<h>/ size segment to get the full-size original', () => {
+  it('keeps a live-shaped signed high-resolution photo URL unchanged', () => {
+    const url = [
+      'https://media.licdn.com/dms/image/v2/D5622',
+      'feedshare-image-high-res/B56Z/0/1785364289867?e=1788998400&v=beta&t=signed',
+    ].join('/');
+    expect(validateImageUrl(url)).toBe(url);
+  });
+
+  it('does not rewrite a signed shrink rendition path', () => {
+    const url = [
+      'https://media.licdn.com/dms/image/v2/D5616',
+      'profile-displaybackgroundimage-shrink_200_800/B56Z/0/1780369228576?e=1788998400&v=beta&t=signed',
+    ].join('/');
+    expect(validateImageUrl(url)).toBe(url);
+  });
+
+  it('keeps a legacy bare shrink segment unchanged', () => {
     const url = 'https://media.licdn.com/dms/image/v2/D4E22/shrink_800_800/photo.jpg';
-    const result = upgradeUrl(url);
-    expect(result).toBe('https://media.licdn.com/dms/image/v2/D4E22/photo.jpg');
-    expect(result).not.toContain('shrink_');
-  });
-
-  it('returns the URL unchanged when there is no shrink segment', () => {
-    const url = 'https://media.licdn.com/dms/image/v2/D4E22/photo.jpg';
-    expect(upgradeUrl(url)).toBe(url);
-  });
-
-  it('handles asymmetric width/height in the shrink segment', () => {
-    const url = 'https://media.licdn.com/dms/image/shrink_1280_720/clip.jpg';
-    expect(upgradeUrl(url)).toBe('https://media.licdn.com/dms/image/clip.jpg');
+    expect(validateImageUrl(url)).toBe(url);
   });
 
   it('matches the licdn host regardless of subdomain prefix', () => {
-    const url = 'https://static.media.licdn.com/shrink_200_200/x.png';
-    expect(upgradeUrl(url)).toBe('https://static.media.licdn.com/x.png');
+    const url = 'https://static.media.licdn.com/x.png';
+    expect(validateImageUrl(url)).toBe(url);
   });
 });
 
@@ -82,10 +86,13 @@ describe('buildImageItems', () => {
 
   it('keeps the post photos in document order', () => {
     const { items } = buildImageItems([
-      img(`${CDN}/shrink_800_800/first.jpg`, 500, 800),
-      img(`${CDN}/second.jpg`, 500, 800),
+      img(`${CDN}/feedshare-image-high-res/first.jpg`, 500, 800),
+      img(`${CDN}/feedshare-image-high-res/second.jpg`, 500, 800),
     ]);
-    expect(items.map((i) => i.url)).toEqual([`${CDN}/first.jpg`, `${CDN}/second.jpg`]);
+    expect(items.map((i) => i.url)).toEqual([
+      `${CDN}/feedshare-image-high-res/first.jpg`,
+      `${CDN}/feedshare-image-high-res/second.jpg`,
+    ]);
   });
 
   it('skips the author avatar and company logo by rendition name', () => {
@@ -95,9 +102,9 @@ describe('buildImageItems', () => {
     const { items } = buildImageItems([
       img(`${CDN}/profile-displayphoto-shrink_100_100/avatar.jpg`, 48, 100),
       img(`${CDN}/company-logo_100_100/logo.png`, 32, 100),
-      img(`${CDN}/shrink_800_800/photo.jpg`, 500, 800),
+      img(`${CDN}/feedshare-image-high-res/photo.jpg`, 500, 800),
     ]);
-    expect(items.map((i) => i.url)).toEqual([`${CDN}/photo.jpg`]);
+    expect(items.map((i) => i.url)).toEqual([`${CDN}/feedshare-image-high-res/photo.jpg`]);
   });
 
   it('numbers the post photo first when chrome precedes it in the card', () => {
@@ -105,10 +112,10 @@ describe('buildImageItems', () => {
     // push the photo the user right-clicked to `_2`.
     const { items } = buildImageItems([
       img(`${CDN}/profile-displayphoto-shrink_100_100/avatar.jpg`, 48, 100),
-      img(`${CDN}/shrink_800_800/photo.jpg`, 500, 800),
+      img(`${CDN}/feedshare-image-high-res/photo.jpg`, 500, 800),
     ], '7012345678901234567');
     expect(items).toEqual([{
-      url: `${CDN}/photo.jpg`,
+      url: `${CDN}/feedshare-image-high-res/photo.jpg`,
       type: 'image',
       filename: 'post_7012345678901234567_1',
       meta: { postId: '7012345678901234567' },
@@ -119,25 +126,28 @@ describe('buildImageItems', () => {
     // A reaction icon is stored at the size it renders, so size is what catches it.
     const { items } = buildImageItems([
       img(`${CDN}/reactions/like.png`, 16, 16),
-      img(`${CDN}/shrink_800_800/photo.jpg`, 500, 800),
+      img(`${CDN}/feedshare-image-high-res/photo.jpg`, 500, 800),
     ]);
-    expect(items.map((i) => i.url)).toEqual([`${CDN}/photo.jpg`]);
+    expect(items.map((i) => i.url)).toEqual([`${CDN}/feedshare-image-high-res/photo.jpg`]);
   });
 
   it('keeps an image that has not laid out yet', () => {
     // Below-the-fold images report width 0; dropping them would lose real photos.
-    const { items } = buildImageItems([{ src: `${CDN}/shrink_800_800/photo.jpg`, width: 0 }]);
+    const { items } = buildImageItems([{
+      src: `${CDN}/feedshare-image-high-res/photo.jpg`,
+      width: 0,
+    }]);
     expect(items).toHaveLength(1);
   });
 
-  it('counts two renditions of one photo once', () => {
-    // upgradeUrl normalizes the shrink segment away, so both srcs name one photo.
+  it('counts an exact repeated photo URL once', () => {
+    const url = `${CDN}/feedshare-image-high-res/photo.jpg?e=1788998400&v=beta&t=signed`;
     const { items } = buildImageItems([
-      img(`${CDN}/shrink_400_400/photo.jpg`, 200),
-      img(`${CDN}/shrink_800_800/photo.jpg`, 500),
+      img(url, 200),
+      img(url, 500),
     ], '7012345678901234567');
     expect(items).toEqual([{
-      url: `${CDN}/photo.jpg`,
+      url,
       type: 'image',
       filename: 'post_7012345678901234567_1',
       meta: { postId: '7012345678901234567' },
@@ -237,11 +247,11 @@ describe('resolveSingle', () => {
   it('still tags a post photo with the containing activity id', () => {
     const originalWindow = globalThis.window;
     globalThis.window = { location: { href: 'https://www.linkedin.com/feed/' } };
-    const target = feedCardTarget(`${CDN}/shrink_800_800/photo.jpg`);
+    const target = feedCardTarget(`${CDN}/feedshare-image-high-res/photo.jpg`);
 
     try {
       expect(resolveSingle(target.src, target)).toEqual([{
-        url: `${CDN}/photo.jpg`,
+        url: `${CDN}/feedshare-image-high-res/photo.jpg`,
         type: 'image',
         filename: null,
         meta: { postId: '7012345678901234567' },
@@ -297,5 +307,5 @@ it('filters and deduplicates the video sweep before assigning numbers', () => {
 
 
 it('rejects an insecure CDN source before classifying clicked media', () => {
-  expect(upgradeUrl('http://media.licdn.com/video.mp4')).toBeNull();
+  expect(validateImageUrl('http://media.licdn.com/video.mp4')).toBeNull();
 });

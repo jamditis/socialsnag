@@ -87,7 +87,7 @@ describe('menuUrlPatterns', () => {
   });
 
   it('keeps linkedin out when only the site origin is granted', () => {
-    // A partial grant cannot download: upgradeUrl() produces media.licdn.com
+    // A partial grant cannot download: validateImageUrl() returns only media.licdn.com
     // URLs, so without the CDN origin the menu would resolve and then fail.
     expect(menuUrlPatterns(['*://*.linkedin.com/*'])).not.toContain('*://*.linkedin.com/*');
   });
@@ -1591,7 +1591,7 @@ describe('optional content script registration', () => {
   });
 
   it('treats a partial grant as no grant', () => {
-    // upgradeUrl only ever produces media.licdn.com URLs, so linkedin.com
+    // validateImageUrl only ever returns media.licdn.com URLs, so linkedin.com
     // without licdn.com resolves a post and then fails every download.
     expect(contentScriptRegistrations(['*://*.linkedin.com/*'])).toEqual([]);
   });

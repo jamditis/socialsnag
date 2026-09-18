@@ -46,8 +46,8 @@ describe('ALLOWED_DOMAINS', () => {
     expect(ALLOWED_DOMAINS).toContain('media.licdn.com');
   });
 
-  it('admits the LinkedIn CDN the resolver actually produces', () => {
-    // upgradeUrl() in platforms/linkedin.js only ever returns media.licdn.com
+  it('admits the LinkedIn CDN the resolver accepts', () => {
+    // validateImageUrl() in platforms/linkedin.js only ever returns media.licdn.com
     // URLs, so the allowlist and the resolver have to agree or every LinkedIn
     // download is rejected after the user has already granted site access.
     expect(isAllowedDomain('https://media.licdn.com/dms/image/v2/abc/feedshare.jpg')).toBe(true);

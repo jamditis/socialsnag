@@ -12,17 +12,11 @@ import {
 
 // --- Pure functions (exported for testing) ---
 
-// The host gate for every LinkedIn image, and, on paper, a size upgrade. Read the
-// second half narrowly: every live URL sampled so far is shaped
-// media.licdn.com/dms/image/<id>/feedshare-shrink_2048_1536/0/<ts>?e=..&v=beta&t=<sig>,
-// where the rendition is hyphen-prefixed and the path is covered by a signature. The
-// bare /shrink_<w>_<h>/ segment this strips has not been observed on a real card, so
-// the replace is inert there, and rewriting the prefixed form would likely break `t`.
-// Kept as the host gate, which is load-bearing. socialsnag#67 tracks whether any
-// client-side upgrade exists; it needs a live card, so it belongs on a browser host.
-export function upgradeUrl(url) {
+// The inspected live photo card exposes a signed `feedshare-image-high-res` URL.
+// Keep its path and query intact: changing either can invalidate the CDN signature.
+export function validateImageUrl(url) {
   if (!isHttps(url) || !hostMatches(url, 'media.licdn.com')) return null;
-  return url.replace(/\/shrink_\d+_\d+\//, '/');
+  return url;
 }
 
 export function extractPostId(href) {
@@ -58,10 +52,8 @@ export function isPostImage(url) {
  * Three things get filtered out: the chrome renditions above, anything too small to
  * be worth saving (a reaction icon is served at the size it renders), and repeats.
  *
- * The repeat check is exact-URL only. An earlier note here claimed upgradeUrl
- * normalized two renditions of one photo onto one URL so they would not number `_1`
- * and `_2`; see upgradeUrl for why that does not hold against live URLs. If LinkedIn
- * does serve one photo at two sizes in a card, this will still emit both.
+ * The repeat check is exact-URL only. If LinkedIn serves one photo at two sizes in a
+ * card, this will emit both rather than risk treating distinct signed paths as equal.
  *
  * @param {Array<{src: string, width?: number, naturalWidth?: number}>} images
  * @param {string|null} postId names the files when the page URL carries one
@@ -74,7 +66,7 @@ export function buildImageItems(images, postId = null, metadataPostId = postId) 
   let index = 1;
 
   for (const img of images) {
-    const url = upgradeUrl(img.src);
+    const url = validateImageUrl(img.src);
     if (!url) continue;
     if (!isPostImage(url)) continue;
     if (!isContentSized(img)) continue;
@@ -95,7 +87,7 @@ export function buildImageItems(images, postId = null, metadataPostId = postId) 
 
 export function resolveSingle(srcUrl, target) {
   const postId = linkedinPostIdForTarget(target);
-  const url = upgradeUrl(srcUrl);
+  const url = validateImageUrl(srcUrl);
   if (url) {
     const id = extractPostId(window.location.href);
     return [withItemMeta(
@@ -107,12 +99,12 @@ export function resolveSingle(srcUrl, target) {
   // If the click landed on an overlay, find the nearest media element.
   const nearest = findNearestMedia(target);
   if (nearest?.tagName === 'IMG') {
-    const upgraded = upgradeUrl(nearest.src);
-    if (upgraded) {
+    const validated = validateImageUrl(nearest.src);
+    if (validated) {
       const id = extractPostId(window.location.href);
       return [withItemMeta(
-        { url: upgraded, type: 'image', filename: id ? `post_${id}` : null },
-        isPostImage(upgraded) ? { postId: postId || id } : null,
+        { url: validated, type: 'image', filename: id ? `post_${id}` : null },
+        isPostImage(validated) ? { postId: postId || id } : null,
       )];
     }
   }
