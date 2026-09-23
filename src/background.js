@@ -522,7 +522,32 @@ async function reconcileOptionalContentScripts() {
   if (stale.length > 0) await chrome.scripting.unregisterContentScripts({ ids: stale });
 
   const missing = wanted.filter((s) => !registeredIds.has(s.id));
-  if (missing.length > 0) await chrome.scripting.registerContentScripts(missing);
+  if (missing.length > 0) {
+    await chrome.scripting.registerContentScripts(missing);
+    await injectIntoOpenTabs(missing);
+  }
+}
+
+// A registration only reaches pages loaded after it. A tab that was already
+// open when the grant landed would get the resolver from the on-demand fallback
+// on its first right-click, which is too late: the resolver learns the clicked
+// element from a contextmenu listener it installs at load, so that first click
+// resolves nothing (issue #64). Inject into those tabs now instead.
+//
+// Per tab and best effort. A tab can close, navigate away, or be a page the
+// extension may not script between the query and the injection, and one such
+// tab must not stop the rest or fail the registration that already succeeded.
+async function injectIntoOpenTabs(scripts) {
+  for (const script of scripts) {
+    const tabs = await chrome.tabs.query({ url: script.matches });
+    await Promise.all(tabs.map((tab) => chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      files: script.js,
+    }).catch((err) => {
+      console.warn(`SocialSnag: could not add ${script.id} to open tab ${tab.id}: ${err.message}. `
+        + 'Reloading that tab adds it.');
+    })));
+  }
 }
 
 // Serialise the reconciles. Two of them interleaved would both read the same
@@ -783,9 +808,11 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     }
 
     if (!response || !response.urls || response.urls.length === 0) {
-      const msg = (platform === 'instagram' && igError)
-        ? igError
-        : 'Could not find downloadable media on this element.';
+      let msg = 'Could not find downloadable media on this element.';
+      if (platform === 'instagram' && igError) msg = igError;
+      else if (response?.reason === 'no-target') {
+        msg = 'SocialSnag could not see what you right-clicked. Right-click the post again.';
+      }
       showNotification(msg);
       return;
     }

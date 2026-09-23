@@ -198,7 +198,14 @@ function initContentScript() {
           ? resolveSingle(message.srcUrl, target)
           : resolveAll(target)))
         .then((urls) => {
-          sendResponse({ urls: urls || [], platform: 'linkedin' });
+          const response = { urls: urls || [], platform: 'linkedin' };
+          // No contextmenu event reached this script (for example, it was
+          // injected after the click), so it had no element to walk up from. An empty answer here
+          // would read as "this post has no media". Say what actually happened
+          // so the caller can ask for a second right-click. A single image can
+          // still resolve from srcUrl alone, so only an empty result is flagged.
+          if (!target && response.urls.length === 0) response.reason = 'no-target';
+          sendResponse(response);
         })
         .catch((err) => {
           console.error('SocialSnag linkedin error:', err);
