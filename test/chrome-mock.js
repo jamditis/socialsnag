@@ -78,6 +78,7 @@ globalThis.chrome = {
     create: async (options) => ({ id: nextTabId++, status: 'complete', ...options }),
     get: async (tabId) => ({ id: tabId, status: 'complete' }),
     remove: async () => {},
+    query: async () => [],
     sendMessage: async () => ({}),
     onUpdated: createEventTarget(),
     onRemoved: createEventTarget(),

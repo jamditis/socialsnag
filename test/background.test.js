@@ -589,6 +589,32 @@ describe('resolveInstagramHighlights', () => {
   });
 });
 
+describe('context menu click: resolver saw no right-click', () => {
+  it('asks for a second right-click instead of reporting no media (#64)', async () => {
+    // The LinkedIn resolver sends this when it was injected after the click and
+    // so never saw which element was right-clicked.
+    const origSend = globalThis.chrome.tabs.sendMessage;
+    const origCreate = globalThis.chrome.notifications.create;
+    const origContains = globalThis.chrome.permissions.contains;
+    const notes = [];
+    globalThis.chrome.permissions.contains = async () => true;
+    globalThis.chrome.tabs.sendMessage = async () => ({ urls: [], platform: 'linkedin', reason: 'no-target' });
+    globalThis.chrome.notifications.create = (opts) => { notes.push(opts.message); };
+    try {
+      const handler = globalThis.chrome.contextMenus.onClicked._listeners[0];
+      await handler(
+        { menuItemId: 'socialsnag-download-all', pageUrl: 'https://www.linkedin.com/feed/', srcUrl: '' },
+        { id: 1, url: 'https://www.linkedin.com/feed/' }
+      );
+    } finally {
+      globalThis.chrome.permissions.contains = origContains;
+      globalThis.chrome.tabs.sendMessage = origSend;
+      globalThis.chrome.notifications.create = origCreate;
+    }
+    expect(notes).toEqual(['SocialSnag could not see what you right-clicked. Right-click the post again.']);
+  });
+});
+
 describe('context menu click — Instagram total failure', () => {
   afterEach(() => resetFetch());
 
@@ -1636,6 +1662,53 @@ describe('optional content script registration', () => {
     } finally {
       warn.mockRestore();
     }
+  });
+
+  describe('tabs already open when the grant lands', () => {
+    // Registration only reaches future page loads, so without this the first
+    // right-click in an open LinkedIn tab resolves nothing (issue #64).
+    let query;
+    let executeScript;
+    beforeEach(() => {
+      query = vi.spyOn(globalThis.chrome.tabs, 'query')
+        .mockResolvedValue([{ id: 11 }, { id: 12 }]);
+      executeScript = vi.spyOn(globalThis.chrome.scripting, 'executeScript')
+        .mockResolvedValue([]);
+    });
+    afterEach(() => { query.mockRestore(); executeScript.mockRestore(); });
+
+    it('injects the resolver into each matching tab', async () => {
+      await withGrant(LINKEDIN_ORIGINS, () => fire('onAdded'));
+      expect(query).toHaveBeenCalledWith({ url: ['*://*.linkedin.com/*'] });
+      expect(executeScript.mock.calls.map(([arg]) => arg)).toEqual([
+        { target: { tabId: 11 }, files: ['platforms/linkedin.js'] },
+        { target: { tabId: 12 }, files: ['platforms/linkedin.js'] },
+      ]);
+    });
+
+    it('does not inject again when the script was already registered', async () => {
+      // onStartup reconciles against a registration that persisted, and those
+      // tabs loaded with the script already. A second copy would double every
+      // listener.
+      await withGrant(LINKEDIN_ORIGINS, () => fire('onAdded'));
+      executeScript.mockClear();
+      await withGrant(LINKEDIN_ORIGINS, () => fire('onAdded'));
+      expect(executeScript).not.toHaveBeenCalled();
+    });
+
+    it('keeps going past a tab it cannot script', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        executeScript.mockRejectedValueOnce(new Error('Frame with ID 0 was removed.'));
+        await withGrant(LINKEDIN_ORIGINS, () => fire('onAdded'));
+        expect(executeScript).toHaveBeenCalledTimes(2);
+        expect(registeredIds()).toEqual(['optional-linkedin']);
+        expect(warn).toHaveBeenCalledTimes(1);
+        expect(warn.mock.calls[0][0]).toContain('open tab 11');
+      } finally {
+        warn.mockRestore();
+      }
+    });
   });
 
   it('leaves a registration it does not own alone', async () => {
